@@ -42,7 +42,7 @@ subprojects {
     apply(plugin = "com.lagradost.cloudstream3.gradle")
 
     cloudstream {
-        setRepo(System.getenv("GITHUB_REPOSITORY") ?: "https://github.com/YOUR_USERNAME/AnikotoPlugin")
+        setRepo(System.getenv("GITHUB_REPOSITORY") ?: "https://github.com/KSHITIJ8473/raghav-")
     }
 
     android {

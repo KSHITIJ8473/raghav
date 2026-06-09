@@ -2,7 +2,7 @@ version = 1
 
 cloudstream {
     description = "Anime from Anikoto.cz — Sub & Dub"
-    authors = listOf("YOUR_USERNAME")
+    authors = listOf("KSHITIJ8473")
     status = 1
     tvTypes = listOf("Anime", "AnimeMovie", "OVA")
     language = "en"

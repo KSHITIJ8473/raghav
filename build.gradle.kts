@@ -4,7 +4,6 @@ import org.gradle.api.plugins.JavaPluginExtension
 import org.gradle.kotlin.dsl.register
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 import org.jetbrains.kotlin.gradle.tasks.KotlinJvmCompile
-
 buildscript {
     repositories {
         google()
@@ -12,12 +11,11 @@ buildscript {
         maven("https://jitpack.io")
     }
     dependencies {
-        classpath("com.android.tools.build:gradle:9.1.1")
-        classpath("com.github.recloudstream.gradle:gradle:master-SNAPSHOT")
-        classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:2.4.0")
+        classpath("com.android.tools.build:gradle:8.7.3")
+        classpath("com.github.recloudstream:gradle:-SNAPSHOT")
+        classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:2.3.0")
     }
 }
-
 allprojects {
     repositories {
         google()
@@ -44,12 +42,11 @@ subprojects {
     cloudstream {
         setRepo(System.getenv("GITHUB_REPOSITORY") ?: "https://github.com/KSHITIJ8473/raghav-")
     }
-
-    android {
-        namespace = "com.anikoto"
-        compileSdk = 36
-        defaultConfig { minSdk = 21 }
-        lint { targetSdk = 36 }
+android {
+    namespace = "com.anikoto"
+    compileSdk = 35
+    defaultConfig { minSdk = 21 }
+    lint { targetSdk = 35 }
         compileOptions {
             sourceCompatibility = JavaVersion.VERSION_1_8
             targetCompatibility = JavaVersion.VERSION_1_8

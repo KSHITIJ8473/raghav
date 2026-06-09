@@ -1,11 +1,12 @@
 package com.example
 
-import com.lagradost.cloudstream3.plugins.BasePlugin
+import android.content.Context
 import com.lagradost.cloudstream3.plugins.CloudstreamPlugin
+import com.lagradost.cloudstream3.plugins.Plugin
 
 @CloudstreamPlugin
-class AnikotoPlugin : BasePlugin() {
-    override fun load() {
+class AnikotoPlugin : Plugin() {
+    override fun load(context: Context) {
         registerMainAPI(AnikotoProvider())
     }
 }

@@ -9,7 +9,6 @@ class AnikotoProvider : MainAPI() {
     override var name = "Anikoto"
     override var lang = "en"
     override val hasMainPage = true
-    override val hasSearch = true
     override val supportedTypes = setOf(TvType.Anime, TvType.AnimeMovie, TvType.OVA)
 
     override val mainPage = mainPageOf(

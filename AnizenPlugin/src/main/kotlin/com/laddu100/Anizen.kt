@@ -128,9 +128,10 @@ class Anizen : MainAPI() {
             callback(link)
         }
 
-        response.servers.forEach { server ->
+        response.servers.sortedBy { it.priority() }.forEach { server ->
             val embed = server.embed?.takeIf { it.isNotBlank() } ?: server.iframeUrl?.takeIf { it.isNotBlank() }
             if (embed != null) {
+                if (loadedLinks && server.priority() >= 5) return@forEach
                 val sourceName = listOf(server.serverName, server.type.uppercase())
                     .filter { it.isNotBlank() }
                     .distinct()
@@ -144,6 +145,9 @@ class Anizen : MainAPI() {
                     }
                     embed.contains("megaplay.buzz") -> AnizenMegaPlay(sourceName).getUrl(embed, mainUrl, subtitleCallback, wrappedCallback)
                     embed.contains("vidwish.live") -> AnizenVidWish(sourceName).getUrl(embed, mainUrl, subtitleCallback, wrappedCallback)
+                    embed.contains("playerp2p.live") || embed.contains("gdmirrorbot.") || embed.contains("boosterx.") -> {
+                        AnizenWebView(sourceName, embed.baseUrl()).getUrl(embed, mainUrl, subtitleCallback, wrappedCallback)
+                    }
                     else -> loadExtractor(embed, mainUrl, subtitleCallback, wrappedCallback)
                 }
             }
@@ -227,6 +231,24 @@ class Anizen : MainAPI() {
         val iframeUrl: String? = null,
         @JsonProperty("streamKey") val streamKey: String? = null
     )
+
+    private fun AniServer.priority(): Int {
+        val key = "${serverName.lowercase()} ${type.lowercase()} ${embed.orEmpty().lowercase()} ${iframeUrl.orEmpty().lowercase()}"
+        return when {
+            key.contains("vidstack") -> 0
+            key.contains("playerp2p") || key.contains("streamp2p") -> 0
+            key.contains("megaplay") || key.contains("vidstream") -> 1
+            key.contains("vidwish") || key.contains("vidcloud") -> 2
+            key.contains("ryzex") || key.contains("abyss") -> 3
+            key.contains("boosterx") || key.contains("playerx") -> 4
+            key.contains("gdmirror") || key.contains("mirror") || key.contains("default") -> 5
+            else -> 6
+        }
+    }
+
+    private fun String.baseUrl(): String {
+        return Regex("""https?://[^/]+""").find(this)?.value ?: mainUrl
+    }
 
     private fun String.unescape(): String {
         return replace("\\\"", "\"")

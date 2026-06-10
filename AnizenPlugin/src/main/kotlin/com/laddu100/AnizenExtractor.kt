@@ -9,7 +9,6 @@ import com.lagradost.cloudstream3.newSubtitleFile
 import com.lagradost.cloudstream3.utils.ExtractorApi
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.INFER_TYPE
-import com.lagradost.cloudstream3.utils.JsUnpacker
 import com.lagradost.cloudstream3.utils.M3u8Helper.Companion.generateM3u8
 import com.lagradost.cloudstream3.utils.getQualityFromName
 import com.lagradost.cloudstream3.utils.newExtractorLink
@@ -18,6 +17,51 @@ import okhttp3.RequestBody.Companion.toRequestBody
 
 class AnizenVidWish(sourceName: String = "VidWish") : AnizenMegaPlay(sourceName) {
     override val mainUrl = "https://vidwish.live"
+}
+
+class AnizenWebView(private val sourceName: String, private val baseUrl: String) : ExtractorApi() {
+    override val name = sourceName
+    override val mainUrl = baseUrl
+    override val requiresReferer = true
+
+    override suspend fun getUrl(
+        url: String,
+        referer: String?,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        runCatching {
+            val resolver = WebViewResolver(
+                interceptUrl = Regex("""(?i)\.(m3u8|mp4)(?:\?|$)"""),
+                additionalUrls = listOf(Regex("""(?i)\.(m3u8|mp4)(?:\?|$)""")),
+                script = """document.querySelector('button,[role="button"],.jw-icon-display,.vds-play-button')?.click();""",
+                useOkhttp = false,
+                timeout = 20_000L
+            )
+            val resolved = app.get(url, referer = referer ?: mainUrl, interceptor = resolver).url
+            val headers = mapOf("Referer" to url)
+            when {
+                resolved.contains(".m3u8", ignoreCase = true) -> {
+                    generateM3u8(name, resolved, mainUrl, headers = headers).forEach(callback)
+                }
+                resolved.contains(".mp4", ignoreCase = true) -> {
+                    callback(
+                        newExtractorLink(
+                            source = name,
+                            name = name,
+                            url = resolved,
+                            type = INFER_TYPE
+                        ) {
+                            quality = getQualityFromName(resolved)
+                            this.headers = headers
+                        }
+                    )
+                }
+            }
+        }.onFailure { error ->
+            Log.e(name, "WebView extraction failed: ${error.message}")
+        }
+    }
 }
 
 open class AnizenMegaPlay(private val sourceName: String = "MegaPlay") : ExtractorApi() {

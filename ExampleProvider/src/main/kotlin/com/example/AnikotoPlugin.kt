@@ -8,7 +8,5 @@ import com.lagradost.cloudstream3.plugins.Plugin
 class AnikotoPlugin : Plugin() {
     override fun load(context: Context) {
         registerMainAPI(AnikotoProvider())
-        registerExtractorAPI(MegaPlay())
-        registerExtractorAPI(Vidwish())
     }
 }

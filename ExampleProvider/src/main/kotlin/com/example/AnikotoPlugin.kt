@@ -12,3 +12,4 @@ class AnikotoPlugin : Plugin() {
         registerExtractorAPI(Vidwish())
     }
 }
+   

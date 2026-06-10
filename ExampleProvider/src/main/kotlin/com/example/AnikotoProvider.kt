@@ -131,8 +131,11 @@ class AnikotoProvider : MainAPI() {
                 getEpisodeMeta(referer, serverIds)
             }
 
+            val freshServerIds = refreshServerIds(referer, slug, serverIds)
+            val activeServerIds = freshServerIds ?: serverIds
+
             val serverListJson = app.get(
-                "$mainUrl/ajax/server/list?servers=$serverIds",
+                "$mainUrl/ajax/server/list?servers=$activeServerIds",
                 referer = referer,
                 headers = ajaxHeaders(referer)
             ).text
@@ -214,6 +217,26 @@ class AnikotoProvider : MainAPI() {
         }.getOrNull()
     }
 
+    private suspend fun refreshServerIds(referer: String, slug: String, fallback: String): String? {
+        if (slug.isBlank()) return null
+        return runCatching {
+            val animeId = app.get(referer).document
+                .selectFirst("#watch-main")
+                ?.attr("data-id")
+                .orEmpty()
+            if (animeId.isBlank()) return@runCatching null
+
+            val json = app.get(
+                "$mainUrl/ajax/episode/list/$animeId",
+                referer = referer,
+                headers = ajaxHeaders(referer)
+            ).text
+            val html = jsonResultString(json)
+            val episode = Jsoup.parse(html).selectFirst("a[data-slug=\"$slug\"]") ?: return@runCatching null
+            episode.attr("data-ids").takeIf { it.isNotBlank() }
+        }.getOrNull() ?: fallback.takeIf { it.isNotBlank() }
+    }
+
     private suspend fun getEpisodeMeta(referer: String, serverIds: String): EpisodeMeta? {
         return runCatching {
             val animeDoc = app.get(referer).document
@@ -270,8 +293,14 @@ class AnikotoProvider : MainAPI() {
             else -> url
         }
 
+        var found = false
+        val trackCallback: (ExtractorLink) -> Unit = { link ->
+            found = true
+            callback.invoke(link)
+        }
+
         getHashM3u8(normalizedUrl)?.let { m3u8 ->
-            callback.invoke(
+            trackCallback.invoke(
                 newExtractorLink(name, "Anikoto M3U8", m3u8, type = ExtractorLinkType.M3U8) {
                     this.referer = normalizedUrl
                     this.headers = mapOf("Referer" to normalizedUrl, "Origin" to "https://mewcdn.online")
@@ -280,7 +309,24 @@ class AnikotoProvider : MainAPI() {
             return true
         }
 
-        return loadExtractor(normalizedUrl, referer, subtitleCallback, callback)
+        when {
+            normalizedUrl.contains("megaplay.buzz", ignoreCase = true) -> {
+                MegaPlay.extractMegaPlayUrl(
+                    normalizedUrl, referer, "https://megaplay.buzz", "MegaPlay",
+                    subtitleCallback, trackCallback
+                )
+            }
+            normalizedUrl.contains("vidwish.live", ignoreCase = true) -> {
+                MegaPlay.extractMegaPlayUrl(
+                    normalizedUrl, referer, "https://vidwish.live", "Vidwish",
+                    subtitleCallback, trackCallback
+                )
+            }
+            else -> {
+                loadExtractor(normalizedUrl, referer, subtitleCallback, trackCallback)
+            }
+        }
+        return found
     }
 
     private fun getHashM3u8(url: String): String? {

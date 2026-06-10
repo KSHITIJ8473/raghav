@@ -2,6 +2,8 @@ package com.example
 
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
+import com.google.gson.JsonParser
+import org.jsoup.Jsoup
 import org.jsoup.nodes.Element
 import java.net.URLEncoder
 
@@ -39,23 +41,44 @@ class AnikotoProvider : MainAPI() {
         val genres = doc.select("#w-info a[href*='/genre/']").map { it.text().trim() }
         val isMovie = doc.selectFirst("#w-info a[href*='/type/movie']") != null ||
             doc.selectFirst("#w-info .bmeta")?.text()?.contains("Type: Movie", ignoreCase = true) == true
+        val animeId = doc.selectFirst("#watch-main")?.attr("data-id")
 
-        val episodes = doc.select("a[href*='/ep-']").mapIndexed { i, el ->
-            newEpisode(fixUrl(el.attr("href"))) {
-                this.episode = i + 1
-                this.name = el.text().ifBlank { "Episode ${i + 1}" }
+        val episodes = animeId?.let { id ->
+            val json = app.get(
+                "$mainUrl/ajax/episode/list/$id",
+                referer = url,
+                headers = ajaxHeaders
+            ).text
+            val html = jsonResultString(json)
+            Jsoup.parse(html).select("a[data-ids]").mapNotNull { el ->
+                val serverIds = el.attr("data-ids")
+                val episodeNumber = el.attr("data-num").toIntOrNull()
+                val slug = el.attr("data-slug")
+                if (serverIds.isBlank() || slug.isBlank()) return@mapNotNull null
+
+                newEpisode("anikoto|$url|$serverIds") {
+                    this.episode = episodeNumber
+                    this.name = el.attr("title").ifBlank { "Episode ${episodeNumber ?: slug}" }
+                }
             }
-        }.ifEmpty {
-            val episodeNumber = Regex("""/ep-(\d+)""").find(url)?.groupValues?.getOrNull(1)?.toIntOrNull()
-            if (episodeNumber != null) {
-                listOf(
-                    newEpisode(url) {
-                        this.episode = episodeNumber
-                        this.name = "Episode $episodeNumber"
-                    }
-                )
-            } else {
-                emptyList()
+        }.orEmpty().ifEmpty {
+            doc.select("a[href*='/ep-']").mapIndexed { i, el ->
+                newEpisode(fixUrl(el.attr("href"))) {
+                    this.episode = i + 1
+                    this.name = el.text().ifBlank { "Episode ${i + 1}" }
+                }
+            }.ifEmpty {
+                val episodeNumber = Regex("""/ep-(\d+)""").find(url)?.groupValues?.getOrNull(1)?.toIntOrNull()
+                if (episodeNumber != null) {
+                    listOf(
+                        newEpisode(url) {
+                            this.episode = episodeNumber
+                            this.name = "Episode $episodeNumber"
+                        }
+                    )
+                } else {
+                    emptyList()
+                }
             }
         }
 
@@ -73,6 +96,35 @@ class AnikotoProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
+        if (data.startsWith("anikoto|")) {
+            val parts = data.split("|", limit = 3)
+            val referer = parts.getOrNull(1) ?: mainUrl
+            val serverIds = parts.getOrNull(2).orEmpty()
+            if (serverIds.isBlank()) return false
+
+            val serverListJson = app.get(
+                "$mainUrl/ajax/server/list?servers=$serverIds",
+                referer = referer,
+                headers = ajaxHeaders
+            ).text
+            val serverList = jsonResultString(serverListJson)
+            val serverDoc = Jsoup.parse(serverList)
+            val linkIds = serverDoc.select("li[data-link-id]").map { it.attr("data-link-id") }.distinct()
+
+            linkIds.forEach { linkId ->
+                val serverJson = app.get(
+                    "$mainUrl/ajax/server?get=$linkId",
+                    referer = referer,
+                    headers = ajaxHeaders
+                ).text
+                val url = jsonResultUrl(serverJson)
+                if (!url.isNullOrBlank()) {
+                    loadExtractor(url, referer, subtitleCallback, callback)
+                }
+            }
+            return linkIds.isNotEmpty()
+        }
+
         val doc = app.get(data).document
         doc.selectFirst("iframe#iframe-embed, iframe[src]")?.attr("src")?.let {
             loadExtractor(fixUrl(it), data, subtitleCallback, callback)
@@ -82,6 +134,20 @@ class AnikotoProvider : MainAPI() {
             if (src.isNotBlank()) loadExtractor(fixUrl(src), data, subtitleCallback, callback)
         }
         return true
+    }
+
+    private val ajaxHeaders = mapOf("X-Requested-With" to "XMLHttpRequest")
+
+    private fun jsonResultString(json: String): String {
+        val obj = JsonParser.parseString(json).asJsonObject
+        if (obj["status"]?.asInt != 200) return ""
+        return obj["result"]?.asString.orEmpty()
+    }
+
+    private fun jsonResultUrl(json: String): String? {
+        val obj = JsonParser.parseString(json).asJsonObject
+        if (obj["status"]?.asInt != 200) return null
+        return obj["result"]?.asJsonObject?.get("url")?.asString
     }
 
     private fun Element.toSearchResult(): AnimeSearchResponse? {

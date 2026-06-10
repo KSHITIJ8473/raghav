@@ -49,7 +49,7 @@ subprojects {
     }
 
     android {
-        namespace = "com.example"
+        namespace = "com.laddu100"
         compileSdk = 35
         defaultConfig { minSdk = 21 }
         lint { targetSdk = 35 }

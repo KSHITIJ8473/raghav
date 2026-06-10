@@ -44,43 +44,56 @@ class AnikotoProvider : MainAPI() {
             doc.selectFirst("#w-info .bmeta")?.text()?.contains("Type: Movie", ignoreCase = true) == true
         val animeId = doc.selectFirst("#watch-main")?.attr("data-id")
 
-        val episodes = animeId?.let { id ->
+        val subEpisodes = mutableListOf<Episode>()
+        val dubEpisodes = mutableListOf<Episode>()
+
+        animeId?.let { id ->
             val json = app.get(
                 "$mainUrl/ajax/episode/list/$id",
                 referer = url,
                 headers = ajaxHeaders
             ).text
             val html = jsonResultString(json)
-            Jsoup.parse(html).select("a[data-ids]").mapNotNull { el ->
+            Jsoup.parse(html).select("a[data-ids]").forEach { el ->
                 val serverIds = el.attr("data-ids")
                 val episodeNumber = el.attr("data-num").toIntOrNull()
                 val slug = el.attr("data-slug")
                 val malId = el.attr("data-mal")
                 val timestamp = el.attr("data-timestamp")
-                if (serverIds.isBlank() || slug.isBlank()) return@mapNotNull null
+                val hasSub = el.attr("data-sub") == "1"
+                val hasDub = el.attr("data-dub") == "1"
+                if (serverIds.isBlank() || slug.isBlank()) return@forEach
 
-                newEpisode("anikoto|$url|$serverIds|$malId|$slug|$timestamp") {
-                    this.episode = episodeNumber
-                    this.name = el.attr("title").ifBlank { "Episode ${episodeNumber ?: slug}" }
+                val episodeName = el.attr("title").ifBlank { "Episode ${episodeNumber ?: slug}" }
+                if (hasSub || !hasDub) {
+                    subEpisodes.add(newEpisode("anikoto|$url|$serverIds|$malId|$slug|$timestamp|sub") {
+                        this.episode = episodeNumber
+                        this.name = episodeName
+                    })
+                }
+                if (hasDub) {
+                    dubEpisodes.add(newEpisode("anikoto|$url|$serverIds|$malId|$slug|$timestamp|dub") {
+                        this.episode = episodeNumber
+                        this.name = episodeName
+                    })
                 }
             }
-        }.orEmpty().ifEmpty {
+        }
+
+        if (subEpisodes.isEmpty() && dubEpisodes.isEmpty()) {
             doc.select("a[href*='/ep-']").mapIndexed { i, el ->
-                newEpisode(fixUrl(el.attr("href"))) {
+                subEpisodes.add(newEpisode(fixUrl(el.attr("href"))) {
                     this.episode = i + 1
                     this.name = el.text().ifBlank { "Episode ${i + 1}" }
-                }
-            }.ifEmpty {
+                })
+            }
+            if (subEpisodes.isEmpty()) {
                 val episodeNumber = Regex("""/ep-(\d+)""").find(url)?.groupValues?.getOrNull(1)?.toIntOrNull()
                 if (episodeNumber != null) {
-                    listOf(
-                        newEpisode(url) {
-                            this.episode = episodeNumber
-                            this.name = "Episode $episodeNumber"
-                        }
-                    )
-                } else {
-                    emptyList()
+                    subEpisodes.add(newEpisode(url) {
+                        this.episode = episodeNumber
+                        this.name = "Episode $episodeNumber"
+                    })
                 }
             }
         }
@@ -89,7 +102,8 @@ class AnikotoProvider : MainAPI() {
             this.posterUrl = poster
             this.plot = description
             this.tags = genres
-            addEpisodes(DubStatus.Subbed, episodes)
+            if (subEpisodes.isNotEmpty()) addEpisodes(DubStatus.Subbed, subEpisodes)
+            if (dubEpisodes.isNotEmpty()) addEpisodes(DubStatus.Dubbed, dubEpisodes)
         }
     }
 
@@ -100,12 +114,13 @@ class AnikotoProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         if (data.startsWith("anikoto|")) {
-            val parts = data.split("|", limit = 6)
+            val parts = data.split("|", limit = 7)
             val referer = parts.getOrNull(1) ?: mainUrl
             val serverIds = parts.getOrNull(2).orEmpty()
             val malId = parts.getOrNull(3).orEmpty()
             val slug = parts.getOrNull(4).orEmpty()
             val timestamp = parts.getOrNull(5).orEmpty()
+            val audioType = parts.getOrNull(6).orEmpty().ifBlank { "sub" }
             if (serverIds.isBlank()) return false
             val episodeMeta = if (malId.isNotBlank() && slug.isNotBlank() && timestamp.isNotBlank()) {
                 EpisodeMeta(malId, slug, timestamp)
@@ -120,9 +135,11 @@ class AnikotoProvider : MainAPI() {
             ).text
             val serverList = jsonResultString(serverListJson)
             val serverDoc = Jsoup.parse(serverList)
+            val preferredServers = serverDoc.select("div.type[data-type=$audioType] li[data-link-id]")
+                .ifEmpty { serverDoc.select("li[data-link-id]") }
             val linkIds = (
-                serverDoc.select("li[data-link-id]").map { it.attr("data-link-id") } +
-                    getMappedServerIds(episodeMeta)
+                preferredServers.map { it.attr("data-link-id") } +
+                    getMappedServerIds(episodeMeta, audioType)
                 ).filter { it.isNotBlank() }.distinct()
 
             var found = false
@@ -186,7 +203,7 @@ class AnikotoProvider : MainAPI() {
         }.getOrNull()
     }
 
-    private suspend fun getMappedServerIds(meta: EpisodeMeta?): List<String> {
+    private suspend fun getMappedServerIds(meta: EpisodeMeta?, audioType: String): List<String> {
         val malId = meta?.malId.orEmpty()
         val slug = meta?.slug.orEmpty()
         val timestamp = meta?.timestamp.orEmpty()
@@ -198,10 +215,7 @@ class AnikotoProvider : MainAPI() {
             obj.entrySet().flatMap { (_, value) ->
                 if (!value.isJsonObject) return@flatMap emptyList()
                 val source = value.asJsonObject
-                listOfNotNull(
-                    source["sub"]?.asJsonObject?.get("url")?.asString,
-                    source["dub"]?.asJsonObject?.get("url")?.asString
-                )
+                listOfNotNull(source[audioType]?.asJsonObject?.get("url")?.asString)
             }
         }.getOrDefault(emptyList())
     }
@@ -223,6 +237,7 @@ class AnikotoProvider : MainAPI() {
             callback.invoke(
                 newExtractorLink(name, "Anikoto M3U8", directM3u8, type = ExtractorLinkType.M3U8) {
                     this.referer = url
+                    this.headers = mapOf("Referer" to url, "Origin" to "https://mewcdn.online")
                 }
             )
             return true
@@ -293,8 +308,16 @@ class AnikotoProvider : MainAPI() {
             TvType.Anime
         }
 
+        val metaText = select(".meta, .info, .type, .right").text()
+        val hasDub = selectFirst(".dub, i.dub, .fa-microphone") != null ||
+            metaText.contains("Dub", ignoreCase = true)
+        val hasSub = selectFirst(".sub, i.sub, .fa-closed-captioning") != null ||
+            metaText.contains("Sub", ignoreCase = true) ||
+            !hasDub
+
         return newAnimeSearchResponse(title, fixUrl(href), type) {
             this.posterUrl = poster?.let { fixUrl(it) }
+            addDubStatus(dubExist = hasDub, subExist = hasSub)
         }
     }
 }

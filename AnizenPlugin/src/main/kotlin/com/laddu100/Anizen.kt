@@ -31,7 +31,7 @@ class Anizen : MainAPI() {
     override var lang = "en"
     override val hasMainPage = true
     override val hasDownloadSupport = false
-    override val supportedTypes = setOf(TvType.Anime, TvType.AnimeMovie, TvType.OVA)
+    override val supportedTypes = setOf(TvType.Anime, TvType.AnimeMovie)
 
     override val mainPage = mainPageOf(
         "home" to "Home",
@@ -138,10 +138,7 @@ class Anizen : MainAPI() {
         response.servers.forEach { server ->
             val embed = server.embed?.takeIf { it.isNotBlank() } ?: server.iframeUrl?.takeIf { it.isNotBlank() }
             if (embed != null) {
-                val prefix = server.type.uppercase()
-                loadExtractor(embed, mainUrl, subtitleCallback) { link ->
-                    callback(link.copy(name = "[$prefix] ${server.serverName} - ${link.name}"))
-                }
+                loadExtractor(embed, mainUrl, subtitleCallback, callback)
             }
         }
         return true
@@ -220,12 +217,6 @@ class Anizen : MainAPI() {
             .replace("\\u0026", "&")
             .replace("&quot;", "\"")
             .replace("&amp;", "&")
-    }
-
-    private fun String.toTitleCase(): String {
-        return split(" ").joinToString(" ") { word ->
-            word.replaceFirstChar { if (it.isLowerCase()) it.titlecase() else it.toString() }
-        }
     }
 
     private val headers = mapOf(

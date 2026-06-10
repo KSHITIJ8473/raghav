@@ -1,10 +1,9 @@
 package com.example
 
 import android.util.Base64
+import com.google.gson.JsonParser
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
-import com.lagradost.cloudstream3.extractors.StreamWishExtractor
-import com.google.gson.JsonParser
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Element
 import java.net.URLEncoder
@@ -16,14 +15,6 @@ class AnikotoProvider : MainAPI() {
     override val hasMainPage = true
     override val supportedTypes = setOf(TvType.Anime, TvType.AnimeMovie, TvType.OVA)
 
-    // Standard Browser User-Agent to bypass basic bot protections
-    private val browserUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
-    
-    private val ajaxHeaders = mapOf(
-        "X-Requested-With" to "XMLHttpRequest",
-        "User-Agent" to browserUserAgent
-    )
-
     override val mainPage = mainPageOf(
         "$mainUrl/latest-updated" to "Latest Updated",
         "$mainUrl/most-viewed" to "Most Popular",
@@ -32,19 +23,19 @@ class AnikotoProvider : MainAPI() {
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val doc = app.get("${request.data}?page=$page", headers = mapOf("User-Agent" to browserUserAgent)).document
+        val doc = app.get("${request.data}?page=$page").document
         val items = doc.select("div.ani.items div.item").mapNotNull { it.toSearchResult() }
         return newHomePageResponse(request.name, items)
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
         val encodedQuery = URLEncoder.encode(query, "UTF-8")
-        val doc = app.get("$mainUrl/filter?keyword=$encodedQuery", headers = mapOf("User-Agent" to browserUserAgent)).document
+        val doc = app.get("$mainUrl/filter?keyword=$encodedQuery").document
         return doc.select("div.ani.items div.item").mapNotNull { it.toSearchResult() }
     }
 
     override suspend fun load(url: String): LoadResponse? {
-        val doc = app.get(url, headers = mapOf("User-Agent" to browserUserAgent)).document
+        val doc = app.get(url).document
         val title = doc.selectFirst("#w-info h1.title, h1[itemprop=name]")?.text()?.trim() ?: return null
         val poster = doc.selectFirst("#w-info .poster img, img[itemprop=image]")?.attr("src")
         val description = doc.selectFirst("#w-info .synopsis .content, #w-info .synopsis")?.text()
@@ -57,39 +48,34 @@ class AnikotoProvider : MainAPI() {
         val dubEpisodes = mutableListOf<Episode>()
 
         animeId?.let { id ->
-            val jsonResponse = runCatching {
-                app.get(
-                    "$mainUrl/ajax/episode/list/$id",
-                    referer = url,
-                    headers = ajaxHeaders
-                ).text
-            }.getOrNull()
+            val json = app.get(
+                "$mainUrl/ajax/episode/list/$id",
+                referer = url,
+                headers = ajaxHeaders(url)
+            ).text
+            val html = jsonResultString(json)
+            Jsoup.parse(html).select("a[data-ids]").forEach { el ->
+                val serverIds = el.attr("data-ids")
+                val episodeNumber = el.attr("data-num").toIntOrNull()
+                val slug = el.attr("data-slug")
+                val malId = el.attr("data-mal")
+                val timestamp = el.attr("data-timestamp")
+                val hasSub = el.attr("data-sub") == "1"
+                val hasDub = el.attr("data-dub") == "1"
+                if (serverIds.isBlank() || slug.isBlank()) return@forEach
 
-            if (jsonResponse != null) {
-                val html = jsonResultString(jsonResponse)
-                Jsoup.parse(html).select("a[data-ids]").forEach { el ->
-                    val serverIds = el.attr("data-ids")
-                    val episodeNumber = el.attr("data-num").toIntOrNull()
-                    val slug = el.attr("data-slug")
-                    val malId = el.attr("data-mal")
-                    val timestamp = el.attr("data-timestamp")
-                    val hasSub = el.attr("data-sub") == "1"
-                    val hasDub = el.attr("data-dub") == "1"
-                    if (serverIds.isBlank() || slug.isBlank()) return@forEach
-
-                    val episodeName = el.attr("title").ifBlank { "Episode ${episodeNumber ?: slug}" }
-                    if (hasSub || !hasDub) {
-                        subEpisodes.add(newEpisode("anikoto|$url|$serverIds|$malId|$slug|$timestamp|sub") {
-                            this.episode = episodeNumber
-                            this.name = episodeName
-                        })
-                    }
-                    if (hasDub) {
-                        dubEpisodes.add(newEpisode("anikoto|$url|$serverIds|$malId|$slug|$timestamp|dub") {
-                            this.episode = episodeNumber
-                            this.name = episodeName
-                        })
-                    }
+                val episodeName = el.attr("title").ifBlank { "Episode ${episodeNumber ?: slug}" }
+                if (hasSub || !hasDub) {
+                    subEpisodes.add(newEpisode("anikoto|$url|$serverIds|$malId|$slug|$timestamp|sub") {
+                        this.episode = episodeNumber
+                        this.name = episodeName
+                    })
+                }
+                if (hasDub) {
+                    dubEpisodes.add(newEpisode("anikoto|$url|$serverIds|$malId|$slug|$timestamp|dub") {
+                        this.episode = episodeNumber
+                        this.name = episodeName
+                    })
                 }
             }
         }
@@ -120,177 +106,127 @@ class AnikotoProvider : MainAPI() {
             if (dubEpisodes.isNotEmpty()) addEpisodes(DubStatus.Dubbed, dubEpisodes)
         }
     }
-override suspend fun loadLinks(
+
+    override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val parts = data.split("|")
-        val url = parts[0]
-        val audioType = parts.getOrNull(1) ?: "sub"
+        app.get(mainUrl, headers = browserHeaders)
 
-        val doc = app.get(url).document
+        if (data.startsWith("anikoto|")) {
+            val parts = data.split("|", limit = 7)
+            val referer = parts.getOrNull(1) ?: mainUrl
+            val serverIds = parts.getOrNull(2).orEmpty()
+            val malId = parts.getOrNull(3).orEmpty()
+            val slug = parts.getOrNull(4).orEmpty()
+            val timestamp = parts.getOrNull(5).orEmpty()
+            val audioType = parts.getOrNull(6).orEmpty().ifBlank { "sub" }
+            if (serverIds.isBlank()) return false
 
-        // Locate the servers grid
-        val panels = doc.select(".nv-server-grid")
-        val targetPanels = if (panels.isNotEmpty()) {
-            panels.filter {
-                val dataId = it.attr("data-id").lowercase()
-                if (audioType == "dub") dataId.contains("dub") else !dataId.contains("dub")
+            val episodeMeta = if (malId.isNotBlank() && slug.isNotBlank() && timestamp.isNotBlank()) {
+                EpisodeMeta(malId, slug, timestamp)
+            } else {
+                getEpisodeMeta(referer, serverIds)
             }
-        } else {
-            listOf(doc)
-        }
 
-        var linksFound = false
+            val serverListJson = app.get(
+                "$mainUrl/ajax/server/list?servers=$serverIds",
+                referer = referer,
+                headers = ajaxHeaders(referer)
+            ).text
 
-        targetPanels.forEach { panel ->
-            panel.select(".server-video").forEach { serverBtn ->
-                val videoUrl = serverBtn.attr("data-video") ?: return@forEach
-                if (videoUrl.isBlank()) return@forEach
-                
-                val serverName = serverBtn.ownText().trim()
-                val typeName = serverBtn.selectFirst("span")?.text()
-                val finalUrl = if (videoUrl.startsWith("//")) "https:$videoUrl" else videoUrl
+            val serverListHtml = jsonResultString(serverListJson)
+            if (serverListHtml.isBlank()) return false
 
-                // 1. Extract subtitles embedded inside the video URL data properties
-                val subMatch = Regex("""(?:sub|caption_1|c1_file)=([^&]+)""").find(videoUrl)
-                if (subMatch != null) {
-                    val subUrl = subMatch.groupValues[1]
-                    val subLang = Regex("""(?:sub_1|c1_label)=([^&]+)""").find(videoUrl)?.groupValues?.get(1) ?: "English"
-                    subtitleCallback.invoke(newSubtitleFile(subLang, subUrl))
+            val serverDoc = Jsoup.parse(serverListHtml)
+            val preferredServers = serverDoc.select("div.type[data-type=$audioType] li[data-link-id]")
+                .ifEmpty { serverDoc.select("li[data-link-id]") }
+
+            val linkIds = (
+                preferredServers.map { it.attr("data-link-id") } +
+                    getMappedServerIds(episodeMeta, audioType)
+                ).filter { it.isNotBlank() }.distinct()
+
+            var found = false
+            for (linkId in linkIds) {
+                if (linkId.startsWith("http", ignoreCase = true)) {
+                    if (loadAnikotoLink(linkId, referer, subtitleCallback, callback)) {
+                        found = true
+                    }
+                    continue
                 }
 
-                try {
-                    // Always include a Referer header when requesting the embed document
-                    val embedResponse = app.get(finalUrl, headers = mapOf("Referer" to url))
-                    val embedDoc = embedResponse.text
+                val serverJson = app.get(
+                    "$mainUrl/ajax/server?get=$linkId",
+                    referer = referer,
+                    headers = ajaxHeaders(referer)
+                ).text
 
-                    // 2. Look for raw M3U8 links inside the source scripts
-                    val hlsRegexes = listOf(
-                        Regex("""const\s+src\s*=\s*["'](https?://[^"']+\.m3u8[^"']*)["']""", RegexOption.IGNORE_CASE),
-                        Regex("""file\s*:\s*["'](https?://[^"']+\.m3u8[^"']*)["']""", RegexOption.IGNORE_CASE),
-                        Regex("""["'](https?://[^"']+/master\.m3u8[^"']*)["']""", RegexOption.IGNORE_CASE),
-                        Regex("""["'](https?://[^"']+\.m3u8[^"']*)["']""", RegexOption.IGNORE_CASE)
-                    )
-
-                    var m3u8Url: String? = null
-                    for (regex in hlsRegexes) {
-                        val match = regex.find(embedDoc)
-                        if (match != null) {
-                            m3u8Url = match.groupValues[1]
-                            break
-                        }
-                    }
-
-                    if (m3u8Url != null) {
-                        val sourceName = if (typeName != null) "$serverName - $typeName" else serverName
-                        generateM3u8(sourceName, m3u8Url, finalUrl).forEach { link ->
-                            callback.invoke(link)
-                            linksFound = true
-                        }
-                    } 
-                    // 3. Fallback to StreamWish custom extraction if the server name matches "HD-" or common player structures
-                    else if (serverName.contains("HD-", ignoreCase = true) || finalUrl.contains("wish", ignoreCase = true) || finalUrl.contains("megaplay", ignoreCase = true)) {
-                        val host = Regex("""https?://([^/]+)""").find(finalUrl)?.groupValues?.get(1) ?: ""
-                        val extractor = object : StreamWishExtractor() {
-                            override var mainUrl = "https://$host"
-                            override var name = serverName
-                        }
-                        extractor.getUrl(finalUrl, url, subtitleCallback) { link ->
-                            val newLink = newExtractorLink(
-                                source = link.source,
-                                name = link.name + if (typeName != null) " - $typeName" else "",
-                                url = link.url,
-                                type = if (link.isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                            ) {
-                                this.quality = link.quality
-                                this.headers = link.headers
-                                this.extractorData = link.extractorData
-                            }
-                            callback.invoke(newLink)
-                            linksFound = true
-                        }
-                    } 
-                    // 4. Default global core extractor library
-                    else {
-                        loadExtractor(finalUrl, url, subtitleCallback) { link ->
-                            val newLink = newExtractorLink(
-                                source = link.source,
-                                name = link.name + if (typeName != null) " - $typeName" else "",
-                                url = link.url,
-                                type = if (link.isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                            ) {
-                                this.quality = link.quality
-                                this.headers = link.headers
-                                this.extractorData = link.extractorData
-                            }
-                            callback.invoke(newLink)
-                            linksFound = true
-                        }
-                    }
-                } catch (e: Exception) {
-                    // Log errors silently to ensure other working servers continue parsing
-                    e.printStackTrace()
+                val embedUrl = jsonResultUrl(serverJson) ?: continue
+                if (loadAnikotoLink(embedUrl, referer, subtitleCallback, callback)) {
+                    found = true
                 }
             }
+            return found
         }
 
-        return linksFound
-    }
-
-        // Fallbacks for non-API links
-        runCatching {
-            val doc = app.get(data, headers = mapOf("User-Agent" to browserUserAgent)).document
-            doc.selectFirst("iframe#iframe-embed, iframe[src]")?.attr("src")?.let {
-                loadAnikotoLink(fixUrl(it), data, subtitleCallback, callback)
-            }
-            doc.select("li.nav-item a[data-src], ul.nav li a[data-id]").forEach { el ->
-                val src = el.attr("data-src").ifBlank { el.attr("data-id") }
-                if (src.isNotBlank()) loadAnikotoLink(fixUrl(src), data, subtitleCallback, callback)
+        val doc = app.get(data, headers = browserHeaders).document
+        var found = false
+        doc.selectFirst("iframe#iframe-embed, iframe[src]")?.attr("src")?.let {
+            found = loadAnikotoLink(fixUrl(it), data, subtitleCallback, callback) || found
+        }
+        doc.select("li.nav-item a[data-src], ul.nav li a[data-id]").forEach { el ->
+            val src = el.attr("data-src").ifBlank { el.attr("data-id") }
+            if (src.isNotBlank()) {
+                found = loadAnikotoLink(fixUrl(src), data, subtitleCallback, callback) || found
             }
         }
-        return true
+        return found
     }
+
+    private fun ajaxHeaders(referer: String) = mapOf(
+        "X-Requested-With" to "XMLHttpRequest",
+        "Accept" to "application/json, text/javascript, */*; q=0.01",
+        "Referer" to referer,
+    )
+
+    private val browserHeaders = mapOf(
+        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language" to "en-US,en;q=0.5",
+    )
 
     private fun jsonResultString(json: String): String {
         return runCatching {
             val obj = JsonParser.parseString(json).asJsonObject
-            if (obj["status"]?.asInt != 200) return@runCatching ""
-            obj["result"]?.asString ?: obj["html"]?.asString ?: ""
+            if (obj.get("status")?.asInt != 200) return ""
+            obj.get("result")?.asString.orEmpty()
         }.getOrDefault("")
     }
 
     private fun jsonResultUrl(json: String): String? {
         return runCatching {
             val obj = JsonParser.parseString(json).asJsonObject
-            if (obj["status"]?.asInt != 200) return@runCatching null
-            
-            // Handles both {"result": {"url": "..."}} and {"result": "..."} configurations
-            val result = obj.get("result")
-            if (result?.isJsonObject == true) {
-                result.asJsonObject.get("url")?.asString
-            } else {
-                result?.asString ?: obj.get("url")?.asString ?: obj.get("link")?.asString
-            }
+            if (obj.get("status")?.asInt != 200) return null
+            obj.get("result")?.asJsonObject?.get("url")?.asString
         }.getOrNull()
     }
 
     private suspend fun getEpisodeMeta(referer: String, serverIds: String): EpisodeMeta? {
         return runCatching {
-            val animeDoc = app.get(referer, headers = mapOf("User-Agent" to browserUserAgent)).document
+            val animeDoc = app.get(referer).document
             val animeId = animeDoc.selectFirst("#watch-main")?.attr("data-id").orEmpty()
             if (animeId.isBlank()) return@runCatching null
 
             val json = app.get(
                 "$mainUrl/ajax/episode/list/$animeId",
                 referer = referer,
-                headers = mapOf("Referer" to referer) + ajaxHeaders
+                headers = ajaxHeaders(referer)
             ).text
             val html = jsonResultString(json)
             val episode = Jsoup.parse(html).selectFirst("a[data-ids=\"$serverIds\"]") ?: return@runCatching null
-            
             EpisodeMeta(
                 episode.attr("data-mal"),
                 episode.attr("data-slug"),
@@ -319,7 +255,7 @@ override suspend fun loadLinks(
     private data class EpisodeMeta(
         val malId: String,
         val slug: String,
-        val timestamp: String
+        val timestamp: String,
     )
 
     private suspend fun loadAnikotoLink(
@@ -328,31 +264,23 @@ override suspend fun loadLinks(
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        return runCatching {
-            val directM3u8 = getHashM3u8(url)
-            if (directM3u8 != null) {
-                callback.invoke(
-                    newExtractorLink(name, "Anikoto M3U8", directM3u8, type = ExtractorLinkType.M3U8) {
-                        this.referer = url
-                        this.headers = mapOf("Referer" to url, "Origin" to "https://mewcdn.online")
-                    }
-                )
-                return@runCatching true
-            }
+        val normalizedUrl = when {
+            url.startsWith("//") -> "https:$url"
+            url.startsWith("/") -> "$mainUrl$url"
+            else -> url
+        }
 
-            // Streamwish proxy explicit bypass
-            if (url.contains("megaplay") || url.contains("vibeplayer")) {
-                val host = Regex("""https?://([^/]+)""").find(url)?.groupValues?.get(1) ?: return@runCatching false
-                val extractor = object : StreamWishExtractor() {
-                    override var mainUrl = "https://$host"
-                    override var name = "Server"
+        getHashM3u8(normalizedUrl)?.let { m3u8 ->
+            callback.invoke(
+                newExtractorLink(name, "Anikoto M3U8", m3u8, type = ExtractorLinkType.M3U8) {
+                    this.referer = normalizedUrl
+                    this.headers = mapOf("Referer" to normalizedUrl, "Origin" to "https://mewcdn.online")
                 }
-                extractor.getUrl(url, referer, subtitleCallback, callback)
-                return@runCatching true
-            }
+            )
+            return true
+        }
 
-            loadExtractor(url, referer, subtitleCallback, callback)
-        }.getOrDefault(false)
+        return loadExtractor(normalizedUrl, referer, subtitleCallback, callback)
     }
 
     private fun getHashM3u8(url: String): String? {

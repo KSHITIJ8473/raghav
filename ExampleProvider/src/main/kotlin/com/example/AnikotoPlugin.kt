@@ -10,3 +10,4 @@ class AnikotoPlugin : Plugin() {
         registerMainAPI(AnikotoProvider())
     }
 }
+

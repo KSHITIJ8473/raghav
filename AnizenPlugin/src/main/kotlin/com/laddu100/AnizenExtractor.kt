@@ -4,7 +4,6 @@ import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.api.Log
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.app
-import com.lagradost.cloudstream3.extractors.Filesim
 import com.lagradost.cloudstream3.network.WebViewResolver
 import com.lagradost.cloudstream3.newSubtitleFile
 import com.lagradost.cloudstream3.utils.ExtractorApi
@@ -17,14 +16,12 @@ import com.lagradost.cloudstream3.utils.newExtractorLink
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
 
-class AnizenVidWish : Filesim() {
-    override val name = "VidWish"
-    override var mainUrl = "https://vidwish.live"
-    override val requiresReferer = true
+class AnizenVidWish(sourceName: String = "VidWish") : AnizenMegaPlay(sourceName) {
+    override val mainUrl = "https://vidwish.live"
 }
 
-open class AnizenMegaPlay : ExtractorApi() {
-    override val name = "MegaPlay"
+open class AnizenMegaPlay(private val sourceName: String = "MegaPlay") : ExtractorApi() {
+    override val name = sourceName
     override val mainUrl = "https://megaplay.buzz"
     override val requiresReferer = false
 
@@ -42,8 +39,13 @@ open class AnizenMegaPlay : ExtractorApi() {
         )
 
         runCatching {
-            val iframe = app.get(url, headers = headers).document.selectFirst("iframe.s5-embed")?.attr("src")
-            val id = Regex("""/stream/s-\d+/(\d+)/""").find(iframe.orEmpty())?.groupValues?.get(1) ?: return@runCatching
+            val document = app.get(url, headers = headers).document
+            val id = Regex("""/stream/s-\d+/(\d+)""").find(url)?.groupValues?.get(1)
+                ?: document.selectFirst("#megaplay-player")?.attr("data-realid")?.takeIf { it.isNotBlank() }
+                ?: document.selectFirst("#megaplay-player")?.attr("data-id")?.takeIf { it.isNotBlank() }
+                ?: Regex("""data-realid=["'](\d+)""").find(document.html())?.groupValues?.get(1)
+                ?: Regex("""data-id=["'](\d+)""").find(document.html())?.groupValues?.get(1)
+                ?: return@runCatching
             val response = app.get("$mainUrl/stream/getSources?id=$id", headers = headers).parsedSafe<Response>()
                 ?: return@runCatching
             val m3u8 = response.sources?.file ?: return@runCatching

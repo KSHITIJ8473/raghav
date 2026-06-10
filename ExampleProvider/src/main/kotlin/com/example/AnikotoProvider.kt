@@ -1,5 +1,6 @@
 package com.example
 
+import android.util.Base64
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import com.google.gson.JsonParser
@@ -54,9 +55,11 @@ class AnikotoProvider : MainAPI() {
                 val serverIds = el.attr("data-ids")
                 val episodeNumber = el.attr("data-num").toIntOrNull()
                 val slug = el.attr("data-slug")
+                val malId = el.attr("data-mal")
+                val timestamp = el.attr("data-timestamp")
                 if (serverIds.isBlank() || slug.isBlank()) return@mapNotNull null
 
-                newEpisode("anikoto|$url|$serverIds") {
+                newEpisode("anikoto|$url|$serverIds|$malId|$slug|$timestamp") {
                     this.episode = episodeNumber
                     this.name = el.attr("title").ifBlank { "Episode ${episodeNumber ?: slug}" }
                 }
@@ -97,9 +100,12 @@ class AnikotoProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         if (data.startsWith("anikoto|")) {
-            val parts = data.split("|", limit = 3)
+            val parts = data.split("|", limit = 6)
             val referer = parts.getOrNull(1) ?: mainUrl
             val serverIds = parts.getOrNull(2).orEmpty()
+            val malId = parts.getOrNull(3).orEmpty()
+            val slug = parts.getOrNull(4).orEmpty()
+            val timestamp = parts.getOrNull(5).orEmpty()
             if (serverIds.isBlank()) return false
 
             val serverListJson = app.get(
@@ -109,8 +115,12 @@ class AnikotoProvider : MainAPI() {
             ).text
             val serverList = jsonResultString(serverListJson)
             val serverDoc = Jsoup.parse(serverList)
-            val linkIds = serverDoc.select("li[data-link-id]").map { it.attr("data-link-id") }.distinct()
+            val linkIds = (
+                serverDoc.select("li[data-link-id]").map { it.attr("data-link-id") } +
+                    getMappedServerIds(malId, slug, timestamp)
+                ).filter { it.isNotBlank() }.distinct()
 
+            var found = false
             linkIds.forEach { linkId ->
                 val serverJson = app.get(
                     "$mainUrl/ajax/server?get=$linkId",
@@ -119,19 +129,19 @@ class AnikotoProvider : MainAPI() {
                 ).text
                 val url = jsonResultUrl(serverJson)
                 if (!url.isNullOrBlank()) {
-                    loadExtractor(url, referer, subtitleCallback, callback)
+                    found = loadAnikotoLink(url, referer, subtitleCallback, callback) || found
                 }
             }
-            return linkIds.isNotEmpty()
+            return found
         }
 
         val doc = app.get(data).document
         doc.selectFirst("iframe#iframe-embed, iframe[src]")?.attr("src")?.let {
-            loadExtractor(fixUrl(it), data, subtitleCallback, callback)
+            loadAnikotoLink(fixUrl(it), data, subtitleCallback, callback)
         }
         doc.select("li.nav-item a[data-src], ul.nav li a[data-id]").forEach { el ->
             val src = el.attr("data-src").ifBlank { el.attr("data-id") }
-            if (src.isNotBlank()) loadExtractor(fixUrl(src), data, subtitleCallback, callback)
+            if (src.isNotBlank()) loadAnikotoLink(fixUrl(src), data, subtitleCallback, callback)
         }
         return true
     }
@@ -148,6 +158,50 @@ class AnikotoProvider : MainAPI() {
         val obj = JsonParser.parseString(json).asJsonObject
         if (obj["status"]?.asInt != 200) return null
         return obj["result"]?.asJsonObject?.get("url")?.asString
+    }
+
+    private suspend fun getMappedServerIds(malId: String, slug: String, timestamp: String): List<String> {
+        if (malId.isBlank() || slug.isBlank() || timestamp.isBlank()) return emptyList()
+
+        return runCatching {
+            val json = app.get("https://mapper.nekostream.site/api/mal/$malId/$slug/$timestamp").text
+            val obj = JsonParser.parseString(json).asJsonObject
+            obj.entrySet().flatMap { (_, value) ->
+                if (!value.isJsonObject) return@flatMap emptyList()
+                val source = value.asJsonObject
+                listOfNotNull(
+                    source["sub"]?.asJsonObject?.get("url")?.asString,
+                    source["dub"]?.asJsonObject?.get("url")?.asString
+                )
+            }
+        }.getOrDefault(emptyList())
+    }
+
+    private suspend fun loadAnikotoLink(
+        url: String,
+        referer: String,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
+        val directM3u8 = getHashM3u8(url)
+        if (directM3u8 != null) {
+            M3u8Helper.generateM3u8(name, directM3u8, url).forEach(callback)
+            return true
+        }
+
+        return loadExtractor(url, referer, subtitleCallback, callback)
+    }
+
+    private fun getHashM3u8(url: String): String? {
+        return url.substringAfter("#", "")
+            .substringBefore("#")
+            .takeIf { it.isNotBlank() }
+            ?.let { encoded ->
+                runCatching {
+                    String(Base64.decode(encoded, Base64.DEFAULT))
+                }.getOrNull()
+            }
+            ?.takeIf { it.startsWith("http") && it.contains(".m3u8") }
     }
 
     private fun Element.toSearchResult(): AnimeSearchResponse? {

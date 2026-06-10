@@ -122,20 +122,33 @@ class Anizen : MainAPI() {
             headers = headers
         ).parsedSafe<ServerResponse>() ?: return false
 
+        var loadedLinks = false
+        val wrappedCallback: (ExtractorLink) -> Unit = { link ->
+            loadedLinks = true
+            callback(link)
+        }
+
         response.servers.forEach { server ->
             val embed = server.embed?.takeIf { it.isNotBlank() } ?: server.iframeUrl?.takeIf { it.isNotBlank() }
             if (embed != null) {
+                val sourceName = listOf(server.serverName, server.type.uppercase())
+                    .filter { it.isNotBlank() }
+                    .distinct()
+                    .joinToString(" ")
                 when {
-                    embed.contains("ryzex.top") -> AnizenRyzex().getUrl(embed, mainUrl, subtitleCallback, callback)
-                    embed.contains("abyssplayer.com") || embed.contains("abyss.to") -> {
-                        AnizenAbyss().getUrl(embed, mainUrl, subtitleCallback, callback)
+                    embed.contains("ryzex.top") -> {
+                        AnizenRyzex().apply { name = sourceName }.getUrl(embed, mainUrl, subtitleCallback, wrappedCallback)
                     }
-                    embed.contains("megaplay.buzz") -> AnizenMegaPlay().getUrl(embed, mainUrl, subtitleCallback, callback)
-                    else -> loadExtractor(embed, mainUrl, subtitleCallback, callback)
+                    embed.contains("abyssplayer.com") || embed.contains("abyss.to") -> {
+                        AnizenAbyss().apply { name = sourceName }.getUrl(embed, mainUrl, subtitleCallback, wrappedCallback)
+                    }
+                    embed.contains("megaplay.buzz") -> AnizenMegaPlay(sourceName).getUrl(embed, mainUrl, subtitleCallback, wrappedCallback)
+                    embed.contains("vidwish.live") -> AnizenVidWish(sourceName).getUrl(embed, mainUrl, subtitleCallback, wrappedCallback)
+                    else -> loadExtractor(embed, mainUrl, subtitleCallback, wrappedCallback)
                 }
             }
         }
-        return true
+        return loadedLinks
     }
 
     private suspend fun fetchEpisodes(dataId: String, fallbackCount: Int): List<Episode> {
@@ -176,7 +189,17 @@ class Anizen : MainAPI() {
         companion object {
             fun fromString(data: String): EpisodeData? {
                 val split = data.split("|")
-                return EpisodeData(split.getOrNull(0) ?: return null, split.getOrNull(1)?.toIntOrNull() ?: 1)
+                val rawDataId = split.getOrNull(0)?.trim()?.takeIf { it.isNotBlank() } ?: return null
+                val cleanDataId = rawDataId
+                    .substringBefore("?")
+                    .substringBefore("#")
+                    .substringAfterLast("/")
+                    .let { path ->
+                        if (rawDataId.contains("/watch/")) path.substringAfterLast("-") else path
+                    }
+                    .takeIf { it.isNotBlank() }
+                    ?: return null
+                return EpisodeData(cleanDataId, split.getOrNull(1)?.toIntOrNull() ?: 1)
             }
         }
     }

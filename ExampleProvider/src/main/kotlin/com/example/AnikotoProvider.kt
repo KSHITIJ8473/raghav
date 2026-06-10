@@ -3,7 +3,7 @@ package com.example
 import android.util.Base64
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
-import com.lagradost.cloudstream3.utils.M3u8Helper
+import com.lagradost.cloudstream3.extractors.StreamWishExtractor
 import com.google.gson.JsonParser
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Element
@@ -81,6 +81,7 @@ class AnikotoProvider : MainAPI() {
             }
         }
 
+        // Fallback episode gathering
         if (subEpisodes.isEmpty() && dubEpisodes.isEmpty()) {
             doc.select("a[href*='/ep-']").mapIndexed { i, el ->
                 subEpisodes.add(newEpisode(fixUrl(el.attr("href"))) {
@@ -122,11 +123,13 @@ class AnikotoProvider : MainAPI() {
             if (serverList.isBlank()) return false
 
             val serverDoc = Jsoup.parse(serverList)
-            val servers = serverDoc.select("div.type[data-type=$audioType] li[data-link-id]")
-                .ifEmpty { serverDoc.select("li[data-link-id]") }
+            
+            // Broadened selector to ensure we don't miss servers if DOM uses div instead of li
+            val servers = serverDoc.select("[data-type=$audioType] [data-link-id]")
+                .ifEmpty { serverDoc.select("[data-link-id]") }
 
-            servers.forEach { li ->
-                val linkId = li.attr("data-link-id")
+            servers.forEach { element ->
+                val linkId = element.attr("data-link-id")
                 if (linkId.isBlank()) return@forEach
 
                 runCatching {
@@ -144,13 +147,26 @@ class AnikotoProvider : MainAPI() {
                             ?: obj["url"]?.asString
                     }.getOrNull() ?: return@runCatching
 
-                    val finalUrl = if (embedUrl.startsWith("//")) "https:$embedUrl" else embedUrl
-                    val serverName = li.text().trim().ifBlank { "Server" }
+                    // Ensure final URL is properly structured
+                    val finalUrl = when {
+                        embedUrl.startsWith("//") -> "https:$embedUrl"
+                        embedUrl.startsWith("/") -> "$mainUrl$embedUrl"
+                        else -> embedUrl
+                    }
+                    
+                    val serverName = element.text().trim().ifBlank { "Server" }
 
                     when {
-                        finalUrl.contains("megaplay.buzz") -> {
-                            extractMegaplay(finalUrl, serverName, subtitleCallback, callback)
+                        // Dynamically use StreamWishExtractor for StreamWish clones
+                        finalUrl.contains("megaplay") || finalUrl.contains("vibeplayer") -> {
+                            val host = Regex("""https?://([^/]+)""").find(finalUrl)?.groupValues?.get(1) ?: return@runCatching
+                            val extractor = object : StreamWishExtractor() {
+                                override var mainUrl = "https://$host"
+                                override var name = serverName
+                            }
+                            extractor.getUrl(finalUrl, referer, subtitleCallback, callback)
                         }
+                        // Base64 hash handler
                         getHashM3u8(finalUrl) != null -> {
                             val m3u8 = getHashM3u8(finalUrl)!!
                             callback.invoke(
@@ -160,8 +176,9 @@ class AnikotoProvider : MainAPI() {
                                 ) { this.referer = finalUrl }
                             )
                         }
+                        // Default Fallback
                         else -> {
-                            loadExtractor(finalUrl, "$mainUrl/", subtitleCallback, callback)
+                            loadExtractor(finalUrl, referer, subtitleCallback, callback)
                         }
                     }
                 }
@@ -175,68 +192,6 @@ class AnikotoProvider : MainAPI() {
             loadExtractor(fixUrl(it), data, subtitleCallback, callback)
         }
         return true
-    }
-
-    private suspend fun extractMegaplay(
-        embedUrl: String,
-        serverName: String,
-        subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Unit
-    ) {
-        val embedHtml = runCatching {
-            app.get(
-                embedUrl,
-                headers = mapOf(
-                    "Referer" to "$mainUrl/",
-                    "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-                )
-            ).text
-        }.getOrNull() ?: return
-
-        // Extract data-id from the embed page
-        val dataId = Regex("""data-id=["'](\d+)["']""")
-            .find(embedHtml)?.groupValues?.get(1) ?: return
-
-        // Call getSources API - this is the key API that returns the m3u8
-       val sourcesJson = runCatching {
-    app.get(
-        "https://megaplay.buzz/stream/getSources?id=$dataId&id=$dataId",
-        headers = mapOf(
-            "Referer" to embedUrl,
-            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:151.0) Gecko/20100101 Firefox/151.0",
-            "X-Requested-With" to "XMLHttpRequest",
-            "Accept" to "application/json, text/javascript, */*; q=0.01",
-            "Accept-Language" to "en-US,en;q=0.9"
-        )
-    ).text
-}.getOrNull() ?: return
-
-        val obj = runCatching {
-            JsonParser.parseString(sourcesJson).asJsonObject
-        }.getOrNull() ?: return
-
-        // Extract m3u8 URL from sources.file
-        val m3u8Url = obj["sources"]?.asJsonObject?.get("file")?.asString ?: return
-
-        // Extract subtitles if available
-        obj["tracks"]?.asJsonArray?.forEach { track ->
-            runCatching {
-                val trackObj = track.asJsonObject
-                val file = trackObj["file"]?.asString ?: return@forEach
-                val label = trackObj["label"]?.asString ?: "Unknown"
-                val kind = trackObj["kind"]?.asString ?: ""
-                if (kind == "captions" || kind == "subtitles") {
-                    subtitleCallback.invoke(SubtitleFile(label, file))
-                }
-            }
-        }
-
-        // Generate M3U8 links with proper referer
-        M3u8Helper.generateM3u8(
-            serverName,
-            m3u8Url,
-            embedUrl
-        ).forEach(callback)
     }
 
     private val ajaxHeaders = mapOf("X-Requested-With" to "XMLHttpRequest")

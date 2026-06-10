@@ -8,11 +8,9 @@ cloudstream {
     status = 3
     tvTypes = listOf(
         "Anime",
-        "AnimeMovie",
-        "OVA"
+        "AnimeMovie"
     )
 
     iconUrl = "https://www.google.com/s2/favicons?domain=anizen.tr&sz=%size%"
     isCrossPlatform = false
 }
-

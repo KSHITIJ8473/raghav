@@ -68,40 +68,27 @@ class Anizen : MainAPI() {
         val html = document.html()
         val title = document.selectFirst("meta[property=og:title]")?.attr("content")
             ?.let { Regex("""Watch\s+(.+?)\s+Anime Online""").find(it)?.groupValues?.get(1) }
-            ?: Regex("""\\"title\\":\\"([^"\\]+)"""").find(html)?.groupValues?.get(1)?.unescape()
+            ?: html.findJsonString("title")
             ?: Regex("""<title>Watch\s+(.+?)\s+Anime Online""").find(document.toString())?.groupValues?.get(1)
             ?: throw ErrorLoadingException("Unable to find title")
 
         val poster = fixUrlNull(document.selectFirst("meta[property=og:image]")?.attr("content"))
-            ?: Regex("""\\"cover\\":\\"([^"\\]+)"""").find(html)?.groupValues?.get(1)?.unescape()
+            ?: html.findJsonString("cover")
         val description = document.selectFirst("meta[name=description]")?.attr("content")
-            ?: Regex("""\\"description\\":\\"([^"\\]*)"""").find(html)?.groupValues?.get(1)?.unescape()
+            ?: html.findJsonString("description")
         val genres = Regex("""\\"genres\\":\[(.*?)]""").find(html)?.groupValues?.get(1)
             ?.let { Regex("""\\"([^"\\]+)\\"""").findAll(it).map { tag -> tag.groupValues[1].unescape() }.toList() }
             ?: emptyList()
-        val year = Regex("""\\"premiered\\":\\"[^0-9]*(\d{4})""").find(html)?.groupValues?.get(1)?.toIntOrNull()
-        val dataId = Regex("""\\"dataId\\":\\"([^"\\]+)"""").find(html)?.groupValues?.get(1)?.unescape()
+        val year = html.findJsonString("premiered")?.let { Regex("""\d{4}""").find(it)?.value?.toIntOrNull() }
+        val dataId = html.findJsonString("dataId")
             ?: url.substringAfterLast("-")
-        val totalEpisodes = Regex("""\\"totalEpisodes\\":(\d+)""").find(html)?.groupValues?.get(1)?.toIntOrNull()
-            ?: Regex("""\\"totalEpisodes\\":\\"(\d+)"""").find(html)?.groupValues?.get(1)?.toIntOrNull()
+        val totalEpisodes = html.findJsonInt("totalEpisodes")
             ?: document.selectFirst("meta[property=og:title]")?.attr("content")
                 ?.let { Regex("""\((\d+)\s+episodes""").find(it)?.groupValues?.get(1)?.toIntOrNull() }
             ?: 1
         val tvType = if (totalEpisodes <= 1 || url.contains("movie", ignoreCase = true)) TvType.AnimeMovie else TvType.Anime
 
-        val recommendations = Regex("""\\"recommended\\":\[(.*?)]}""").find(html)?.groupValues?.get(1)
-            ?.let { Regex("""\{\\"id\\":\\"([^"\\]+).*?\\"title\\":\\"([^"\\]+).*?\\"cover\\":\\"([^"\\]+)""")
-                .findAll(it)
-                .map { match ->
-                    newMovieSearchResponse(
-                        match.groupValues[2].unescape(),
-                        fixUrl("/watch/${match.groupValues[1].unescape()}"),
-                        TvType.Anime
-                    ) {
-                        posterUrl = match.groupValues[3].unescape()
-                    }
-                }.toList()
-            } ?: emptyList()
+        val recommendations = emptyList<SearchResponse>()
 
         return if (tvType == TvType.AnimeMovie) {
             newMovieLoadResponse(title, url, TvType.AnimeMovie, EpisodeData(dataId, 1).toString()) {
@@ -138,7 +125,14 @@ class Anizen : MainAPI() {
         response.servers.forEach { server ->
             val embed = server.embed?.takeIf { it.isNotBlank() } ?: server.iframeUrl?.takeIf { it.isNotBlank() }
             if (embed != null) {
-                loadExtractor(embed, mainUrl, subtitleCallback, callback)
+                when {
+                    embed.contains("ryzex.top") -> AnizenRyzex().getUrl(embed, mainUrl, subtitleCallback, callback)
+                    embed.contains("abyssplayer.com") || embed.contains("abyss.to") -> {
+                        AnizenAbyss().getUrl(embed, mainUrl, subtitleCallback, callback)
+                    }
+                    embed.contains("megaplay.buzz") -> AnizenMegaPlay().getUrl(embed, mainUrl, subtitleCallback, callback)
+                    else -> loadExtractor(embed, mainUrl, subtitleCallback, callback)
+                }
             }
         }
         return true
@@ -217,6 +211,18 @@ class Anizen : MainAPI() {
             .replace("\\u0026", "&")
             .replace("&quot;", "\"")
             .replace("&amp;", "&")
+    }
+
+    private fun String.findJsonString(key: String): String? {
+        return Regex("""\\"$key\\":\\"([^"\\]*)"""").find(this)?.groupValues?.get(1)?.unescape()
+            ?: Regex(""""$key"\s*:\s*"([^"]*)"""").find(this)?.groupValues?.get(1)?.unescape()
+    }
+
+    private fun String.findJsonInt(key: String): Int? {
+        return Regex("""\\"$key\\":(\d+)""").find(this)?.groupValues?.get(1)?.toIntOrNull()
+            ?: Regex("""\\"$key\\":\\"(\d+)"""").find(this)?.groupValues?.get(1)?.toIntOrNull()
+            ?: Regex(""""$key"\s*:\s*(\d+)""").find(this)?.groupValues?.get(1)?.toIntOrNull()
+            ?: Regex(""""$key"\s*:\s*"(\d+)"""").find(this)?.groupValues?.get(1)?.toIntOrNull()
     }
 
     private val headers = mapOf(

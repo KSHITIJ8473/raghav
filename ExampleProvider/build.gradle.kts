@@ -1,11 +1,15 @@
 version = 1
 
 cloudstream {
-    description = "Anime from Anikoto.cz — Sub & Dub"
+    language = "en"
+    description = "Anikoto anime provider"
     authors = listOf("KSHITIJ8473")
     status = 1
-    tvTypes = listOf("Anime", "AnimeMovie", "OVA")
-    language = "en"
-    iconUrl = "https://anikoto.cz/AnikotoTheme/assets/images/logo.png"
+    tvTypes = listOf(
+        "Anime",
+        "AnimeMovie",
+        "OVA"
+    )
+    requiresResources = false
+    iconUrl = "https://anikoto.cz/AnikotoTheme/assets/images/favicon.png"
 }
-  

@@ -198,17 +198,18 @@ class AnikotoProvider : MainAPI() {
             .find(embedHtml)?.groupValues?.get(1) ?: return
 
         // Call getSources API - this is the key API that returns the m3u8
-        val sourcesJson = runCatching {
-            app.get(
-                "https://megaplay.buzz/getSources?id=$dataId&id=$dataId",
-                headers = mapOf(
-                    "Referer" to embedUrl,
-                    "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                    "X-Requested-With" to "XMLHttpRequest",
-                    "Accept" to "application/json, text/plain, */*"
-                )
-            ).text
-        }.getOrNull() ?: return
+       val sourcesJson = runCatching {
+    app.get(
+        "https://megaplay.buzz/stream/getSources?id=$dataId&id=$dataId",
+        headers = mapOf(
+            "Referer" to embedUrl,
+            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:151.0) Gecko/20100101 Firefox/151.0",
+            "X-Requested-With" to "XMLHttpRequest",
+            "Accept" to "application/json, text/javascript, */*; q=0.01",
+            "Accept-Language" to "en-US,en;q=0.9"
+        )
+    ).text
+}.getOrNull() ?: return
 
         val obj = runCatching {
             JsonParser.parseString(sourcesJson).asJsonObject

@@ -8,3 +8,4 @@ cloudstream {
     language = "en"
     iconUrl = "https://anikoto.cz/AnikotoTheme/assets/images/logo.png"
 }
+  

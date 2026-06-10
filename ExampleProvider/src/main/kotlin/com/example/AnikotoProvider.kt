@@ -3,6 +3,7 @@ package com.example
 import android.util.Base64
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
+import com.lagradost.cloudstream3.utils.M3u8Helper
 import com.google.gson.JsonParser
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Element
@@ -87,15 +88,6 @@ class AnikotoProvider : MainAPI() {
                     this.name = el.text().ifBlank { "Episode ${i + 1}" }
                 })
             }
-            if (subEpisodes.isEmpty()) {
-                val episodeNumber = Regex("""/ep-(\d+)""").find(url)?.groupValues?.getOrNull(1)?.toIntOrNull()
-                if (episodeNumber != null) {
-                    subEpisodes.add(newEpisode(url) {
-                        this.episode = episodeNumber
-                        this.name = "Episode $episodeNumber"
-                    })
-                }
-            }
         }
 
         return newAnimeLoadResponse(title, url, if (isMovie) TvType.AnimeMovie else TvType.Anime) {
@@ -117,53 +109,88 @@ class AnikotoProvider : MainAPI() {
             val parts = data.split("|", limit = 7)
             val referer = parts.getOrNull(1) ?: mainUrl
             val serverIds = parts.getOrNull(2).orEmpty()
-            val malId = parts.getOrNull(3).orEmpty()
-            val slug = parts.getOrNull(4).orEmpty()
-            val timestamp = parts.getOrNull(5).orEmpty()
             val audioType = parts.getOrNull(6).orEmpty().ifBlank { "sub" }
             if (serverIds.isBlank()) return false
-            val episodeMeta = if (malId.isNotBlank() && slug.isNotBlank() && timestamp.isNotBlank()) {
-                EpisodeMeta(malId, slug, timestamp)
-            } else {
-                getEpisodeMeta(referer, serverIds)
-            }
 
             val serverListJson = app.get(
                 "$mainUrl/ajax/server/list?servers=$serverIds",
                 referer = referer,
                 headers = ajaxHeaders
             ).text
-            val serverList = jsonResultString(serverListJson)
-            val serverDoc = Jsoup.parse(serverList)
-            val preferredServers = serverDoc.select("div.type[data-type=$audioType] li[data-link-id]")
-                .ifEmpty { serverDoc.select("li[data-link-id]") }
-            val linkIds = (
-                preferredServers.map { it.attr("data-link-id") } +
-                    getMappedServerIds(episodeMeta, audioType)
-                ).filter { it.isNotBlank() }.distinct()
 
-            var found = false
-            linkIds.forEach { linkId ->
-                val serverJson = app.get(
-                    "$mainUrl/ajax/server?get=$linkId",
-                    referer = referer,
-                    headers = ajaxHeaders
-                ).text
-                val url = jsonResultUrl(serverJson)
-                if (!url.isNullOrBlank()) {
-                    found = loadAnikotoLink(url, referer, subtitleCallback, callback) || found
+            val serverList = jsonResultString(serverListJson)
+            if (serverList.isBlank()) return false
+
+            val serverDoc = Jsoup.parse(serverList)
+            val servers = serverDoc.select("div.type[data-type=$audioType] li[data-link-id]")
+                .ifEmpty { serverDoc.select("li[data-link-id]") }
+
+            servers.forEach { li ->
+                val linkId = li.attr("data-link-id")
+                if (linkId.isBlank()) return@forEach
+
+                runCatching {
+                    val serverJson = app.get(
+                        "$mainUrl/ajax/server?get=$linkId",
+                        referer = referer,
+                        headers = ajaxHeaders
+                    ).text
+
+                    val embedUrl = runCatching {
+                        val obj = JsonParser.parseString(serverJson).asJsonObject
+                        obj["result"]?.asJsonObject?.get("url")?.asString
+                            ?: obj["result"]?.asString
+                            ?: obj["link"]?.asString
+                            ?: obj["url"]?.asString
+                    }.getOrNull()
+
+                    if (!embedUrl.isNullOrBlank()) {
+                        val m3u8 = getHashM3u8(embedUrl)
+                        if (m3u8 != null) {
+                            callback.invoke(
+                                newExtractorLink(
+                                    name,
+                                    li.text().trim().ifBlank { "Server" },
+                                    m3u8,
+                                    type = ExtractorLinkType.M3U8
+                                ) {
+                                    this.referer = embedUrl
+                                }
+                            )
+                        } else {
+                            val embedHtml = app.get(
+                                embedUrl,
+                                referer = "$mainUrl/",
+                                headers = mapOf("Referer" to "$mainUrl/")
+                            ).text
+
+                            val m3u8Direct = listOf(
+                                Regex("""file\s*:\s*["'](https?://[^"']+\.m3u8[^"']*)["']"""),
+                                Regex("""src\s*:\s*["'](https?://[^"']+\.m3u8[^"']*)["']"""),
+                                Regex("""["'](https?://[^"']+/master\.m3u8[^"']*)["']"""),
+                                Regex("""["'](https?://[^"']+\.m3u8[^"']*)["']""")
+                            ).firstNotNullOfOrNull { it.find(embedHtml)?.groupValues?.get(1) }
+
+                            if (m3u8Direct != null) {
+                                M3u8Helper.generateM3u8(
+                                    li.text().trim().ifBlank { name },
+                                    m3u8Direct,
+                                    embedUrl
+                                ).forEach(callback)
+                            } else {
+                                loadExtractor(embedUrl, "$mainUrl/", subtitleCallback, callback)
+                            }
+                        }
+                    }
                 }
             }
-            return found
+            return true
         }
 
+        // Fallback for direct URLs
         val doc = app.get(data).document
         doc.selectFirst("iframe#iframe-embed, iframe[src]")?.attr("src")?.let {
-            loadAnikotoLink(fixUrl(it), data, subtitleCallback, callback)
-        }
-        doc.select("li.nav-item a[data-src], ul.nav li a[data-id]").forEach { el ->
-            val src = el.attr("data-src").ifBlank { el.attr("data-id") }
-            if (src.isNotBlank()) loadAnikotoLink(fixUrl(src), data, subtitleCallback, callback)
+            loadExtractor(fixUrl(it), data, subtitleCallback, callback)
         }
         return true
     }
@@ -171,79 +198,11 @@ class AnikotoProvider : MainAPI() {
     private val ajaxHeaders = mapOf("X-Requested-With" to "XMLHttpRequest")
 
     private fun jsonResultString(json: String): String {
-        val obj = JsonParser.parseString(json).asJsonObject
-        if (obj["status"]?.asInt != 200) return ""
-        return obj["result"]?.asString.orEmpty()
-    }
-
-    private fun jsonResultUrl(json: String): String? {
-        val obj = JsonParser.parseString(json).asJsonObject
-        if (obj["status"]?.asInt != 200) return null
-        return obj["result"]?.asJsonObject?.get("url")?.asString
-    }
-
-    private suspend fun getEpisodeMeta(referer: String, serverIds: String): EpisodeMeta? {
         return runCatching {
-            val animeDoc = app.get(referer).document
-            val animeId = animeDoc.selectFirst("#watch-main")?.attr("data-id").orEmpty()
-            if (animeId.isBlank()) return@runCatching null
-
-            val json = app.get(
-                "$mainUrl/ajax/episode/list/$animeId",
-                referer = referer,
-                headers = ajaxHeaders
-            ).text
-            val html = jsonResultString(json)
-            val episode = Jsoup.parse(html).selectFirst("a[data-ids=\"$serverIds\"]") ?: return@runCatching null
-            EpisodeMeta(
-                episode.attr("data-mal"),
-                episode.attr("data-slug"),
-                episode.attr("data-timestamp")
-            )
-        }.getOrNull()
-    }
-
-    private suspend fun getMappedServerIds(meta: EpisodeMeta?, audioType: String): List<String> {
-        val malId = meta?.malId.orEmpty()
-        val slug = meta?.slug.orEmpty()
-        val timestamp = meta?.timestamp.orEmpty()
-        if (malId.isBlank() || slug.isBlank() || timestamp.isBlank()) return emptyList()
-
-        return runCatching {
-            val json = app.get("https://mapper.nekostream.site/api/mal/$malId/$slug/$timestamp").text
             val obj = JsonParser.parseString(json).asJsonObject
-            obj.entrySet().flatMap { (_, value) ->
-                if (!value.isJsonObject) return@flatMap emptyList()
-                val source = value.asJsonObject
-                listOfNotNull(source[audioType]?.asJsonObject?.get("url")?.asString)
-            }
-        }.getOrDefault(emptyList())
-    }
-
-    private data class EpisodeMeta(
-        val malId: String,
-        val slug: String,
-        val timestamp: String
-    )
-
-    private suspend fun loadAnikotoLink(
-        url: String,
-        referer: String,
-        subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Unit
-    ): Boolean {
-        val directM3u8 = getHashM3u8(url)
-        if (directM3u8 != null) {
-            callback.invoke(
-                newExtractorLink(name, "Anikoto M3U8", directM3u8, type = ExtractorLinkType.M3U8) {
-                    this.referer = url
-                    this.headers = mapOf("Referer" to url, "Origin" to "https://mewcdn.online")
-                }
-            )
-            return true
-        }
-
-        return loadExtractor(url, referer, subtitleCallback, callback)
+            if (obj["status"]?.asInt != 200) return ""
+            obj["result"]?.asString.orEmpty()
+        }.getOrDefault("")
     }
 
     private fun getHashM3u8(url: String): String? {
@@ -267,26 +226,6 @@ class AnikotoProvider : MainAPI() {
             .replace("vault-03.uwucdn.top", "uwu3.bigdreamsmalldih.site")
             .replace("vault-04.uwucdn.top", "uwu4.bigdreamsmalldih.site")
             .replace("vault-05.uwucdn.top", "uwu5.bigdreamsmalldih.site")
-            .replace("vault-06.uwucdn.top", "uwu6.bigdreamsmalldih.site")
-            .replace("vault-07.uwucdn.top", "uwu7.bigdreamsmalldih.site")
-            .replace("vault-08.uwucdn.top", "uwu8.bigdreamsmalldih.site")
-            .replace("vault-09.uwucdn.top", "uwu9.bigdreamsmalldih.site")
-            .replace("vault-10.uwucdn.top", "uwu10.bigdreamsmalldih.site")
-            .replace("vault-11.uwucdn.top", "uwu11.bigdreamsmalldih.site")
-            .replace("vault-12.uwucdn.top", "uwu12.bigdreamsmalldih.site")
-            .replace("vault-13.uwucdn.top", "uwu13.bigdreamsmalldih.site")
-            .replace("vault-14.uwucdn.top", "uwu14.bigdreamsmalldih.site")
-            .replace("vault-15.uwucdn.top", "uwu15.bigdreamsmalldih.site")
-            .replace("vault-16.uwucdn.top", "uwu16.bigdreamsmalldih.site")
-            .replace("vault-99.uwucdn.top", "uwu17.bigdreamsmalldih.site")
-            .replace("vault-10.owocdn.top", "10.bigdreamsmalldih.site")
-            .replace("vault-11.owocdn.top", "11.bigdreamsmalldih.site")
-            .replace("vault-12.owocdn.top", "12.bigdreamsmalldih.site")
-            .replace("vault-13.owocdn.top", "13.bigdreamsmalldih.site")
-            .replace("vault-14.owocdn.top", "14.bigdreamsmalldih.site")
-            .replace("vault-15.owocdn.top", "15.bigdreamsmalldih.site")
-            .replace("vault-16.owocdn.top", "16.bigdreamsmalldih.site")
-            .replace("vault-99.owocdn.top", "99.bigdreamsmalldih.site")
     }
 
     private fun Element.toSearchResult(): AnimeSearchResponse? {
@@ -302,18 +241,15 @@ class AnikotoProvider : MainAPI() {
         val poster = selectFirst("div.poster img, img")?.let {
             it.attr("data-src").ifBlank { it.attr("src") }
         }
-        val type = if (selectFirst(".type, .right")?.text()?.contains("Movie", ignoreCase = true) == true) {
+        val type = if (selectFirst(".type, .right")?.text()
+                ?.contains("Movie", ignoreCase = true) == true) {
             TvType.AnimeMovie
         } else {
             TvType.Anime
         }
 
-        val metaText = select(".meta, .info, .type, .right").text()
-        val hasDub = selectFirst(".dub, i.dub, .fa-microphone") != null ||
-            metaText.contains("Dub", ignoreCase = true)
-        val hasSub = selectFirst(".sub, i.sub, .fa-closed-captioning") != null ||
-            metaText.contains("Sub", ignoreCase = true) ||
-            !hasDub
+        val hasDub = selectFirst(".dub, i.dub, .fa-microphone") != null
+        val hasSub = selectFirst(".sub, i.sub, .fa-closed-captioning") != null || !hasDub
 
         return newAnimeSearchResponse(title, fixUrl(href), type) {
             this.posterUrl = poster?.let { fixUrl(it) }

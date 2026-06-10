@@ -1,0 +1,9 @@
+{
+  "name": "Raghav Repo",
+  "iconUrl": "https://static0.gamerantimages.com/wordpress/wp-content/uploads/2025/10/luffy-new-power-up.png?w=1200&h=628&fit=crop",
+  "description": "Raghav CloudStream extensions",
+  "manifestVersion": 1,
+  "pluginLists": [
+    "https://raw.githubusercontent.com/KSHITIJ8473/raghav/builds/plugins.json"
+  ]
+}

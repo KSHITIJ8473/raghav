@@ -1,0 +1,68 @@
+[
+    {
+        "iconUrl": "https://www.google.com/s2/favicons?domain=animesalt.ac&sz=%size%",
+        "fileHash": "sha256-a1f89ddd5fd77fe3c4f51b15d0722f7ce07dc0ab3b738c79ca6c55754cfb51a3",
+        "apiVersion": 1,
+        "repositoryUrl": "https://github.com/KSHITIJ8473/raghav",
+        "fileSize": 41728,
+        "status": 1,
+        "language": "hi",
+        "authors": [
+            "laddu100"
+        ],
+        "tvTypes": [
+            "AnimeMovie",
+            "Anime",
+            "Cartoon"
+        ],
+        "version": 8,
+        "internalName": "AniSaltPlugin",
+        "description": "Anime/Cartoon in Hindi",
+        "url": "https://raw.githubusercontent.com/KSHITIJ8473/raghav/builds/AniSaltPlugin.cs3",
+        "name": "AniSaltPlugin"
+    },
+    {
+        "iconUrl": "https://www.google.com/s2/favicons?domain=anizen.tr&sz=%size%",
+        "fileHash": "sha256-3eaa982b956d49ed4388693373b2c42164052a2bf6a8ea2f92dcb28f1cee605c",
+        "apiVersion": 1,
+        "repositoryUrl": "https://github.com/KSHITIJ8473/raghav",
+        "fileSize": 41809,
+        "status": 3,
+        "language": "en",
+        "authors": [
+            "KSHITIJ8473",
+            "Codex"
+        ],
+        "tvTypes": [
+            "Anime",
+            "AnimeMovie"
+        ],
+        "version": 1,
+        "internalName": "AnizenPlugin",
+        "description": "AniZen anime with English sub, English dub, and Hindi servers",
+        "url": "https://raw.githubusercontent.com/KSHITIJ8473/raghav/builds/AnizenPlugin.cs3",
+        "name": "AnizenPlugin"
+    },
+    {
+        "iconUrl": "https://anikoto.cz/AnikotoTheme/assets/images/logo.png",
+        "fileHash": "sha256-8159d07f1f62a39fac540a4503a5f9e80385c4ffca7e930b2722677497303f7a",
+        "apiVersion": 1,
+        "repositoryUrl": "https://github.com/KSHITIJ8473/raghav",
+        "fileSize": 34686,
+        "status": 1,
+        "language": "en",
+        "authors": [
+            "KSHITIJ8473"
+        ],
+        "tvTypes": [
+            "Anime",
+            "AnimeMovie",
+            "OVA"
+        ],
+        "version": 1,
+        "internalName": "ExampleProvider",
+        "description": "Anime from Anikoto.cz \u2014 Sub & Dub",
+        "url": "https://raw.githubusercontent.com/KSHITIJ8473/raghav/builds/ExampleProvider.cs3",
+        "name": "ExampleProvider"
+    }
+]

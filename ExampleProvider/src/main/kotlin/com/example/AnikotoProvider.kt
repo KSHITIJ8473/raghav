@@ -15,7 +15,7 @@ class AnikotoProvider : MainAPI() {
         "$mainUrl/latest-updated?page=" to "Latest Updated",
         "$mainUrl/most-viewed?page=" to "Most Popular",
         "$mainUrl/status/currently-airing?page=" to "Ongoing",
-        "$mainUrl/type/movie?page=" to "Movies"
+        "$mainUrl/type/movie?page=" to "Movies"  
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {

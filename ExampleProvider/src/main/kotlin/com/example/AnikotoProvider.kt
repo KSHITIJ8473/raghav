@@ -107,6 +107,11 @@ class AnikotoProvider : MainAPI() {
             val slug = parts.getOrNull(4).orEmpty()
             val timestamp = parts.getOrNull(5).orEmpty()
             if (serverIds.isBlank()) return false
+            val episodeMeta = if (malId.isNotBlank() && slug.isNotBlank() && timestamp.isNotBlank()) {
+                EpisodeMeta(malId, slug, timestamp)
+            } else {
+                getEpisodeMeta(referer, serverIds)
+            }
 
             val serverListJson = app.get(
                 "$mainUrl/ajax/server/list?servers=$serverIds",
@@ -117,7 +122,7 @@ class AnikotoProvider : MainAPI() {
             val serverDoc = Jsoup.parse(serverList)
             val linkIds = (
                 serverDoc.select("li[data-link-id]").map { it.attr("data-link-id") } +
-                    getMappedServerIds(malId, slug, timestamp)
+                    getMappedServerIds(episodeMeta)
                 ).filter { it.isNotBlank() }.distinct()
 
             var found = false
@@ -160,7 +165,31 @@ class AnikotoProvider : MainAPI() {
         return obj["result"]?.asJsonObject?.get("url")?.asString
     }
 
-    private suspend fun getMappedServerIds(malId: String, slug: String, timestamp: String): List<String> {
+    private suspend fun getEpisodeMeta(referer: String, serverIds: String): EpisodeMeta? {
+        return runCatching {
+            val animeDoc = app.get(referer).document
+            val animeId = animeDoc.selectFirst("#watch-main")?.attr("data-id").orEmpty()
+            if (animeId.isBlank()) return@runCatching null
+
+            val json = app.get(
+                "$mainUrl/ajax/episode/list/$animeId",
+                referer = referer,
+                headers = ajaxHeaders
+            ).text
+            val html = jsonResultString(json)
+            val episode = Jsoup.parse(html).selectFirst("a[data-ids=\"$serverIds\"]") ?: return@runCatching null
+            EpisodeMeta(
+                episode.attr("data-mal"),
+                episode.attr("data-slug"),
+                episode.attr("data-timestamp")
+            )
+        }.getOrNull()
+    }
+
+    private suspend fun getMappedServerIds(meta: EpisodeMeta?): List<String> {
+        val malId = meta?.malId.orEmpty()
+        val slug = meta?.slug.orEmpty()
+        val timestamp = meta?.timestamp.orEmpty()
         if (malId.isBlank() || slug.isBlank() || timestamp.isBlank()) return emptyList()
 
         return runCatching {
@@ -177,6 +206,12 @@ class AnikotoProvider : MainAPI() {
         }.getOrDefault(emptyList())
     }
 
+    private data class EpisodeMeta(
+        val malId: String,
+        val slug: String,
+        val timestamp: String
+    )
+
     private suspend fun loadAnikotoLink(
         url: String,
         referer: String,
@@ -185,7 +220,11 @@ class AnikotoProvider : MainAPI() {
     ): Boolean {
         val directM3u8 = getHashM3u8(url)
         if (directM3u8 != null) {
-            M3u8Helper.generateM3u8(name, directM3u8, url).forEach(callback)
+            callback.invoke(
+                newExtractorLink(name, "Anikoto M3U8", directM3u8, type = ExtractorLinkType.M3U8) {
+                    this.referer = url
+                }
+            )
             return true
         }
 
@@ -201,7 +240,38 @@ class AnikotoProvider : MainAPI() {
                     String(Base64.decode(encoded, Base64.DEFAULT))
                 }.getOrNull()
             }
+            ?.let { proxyPlayerHost(it) }
             ?.takeIf { it.startsWith("http") && it.contains(".m3u8") }
+    }
+
+    private fun proxyPlayerHost(url: String): String {
+        return url
+            .replace("vibeplayer.site", "nanobyte.bigdreamsmalldih.site")
+            .replace("vault-01.uwucdn.top", "uwu1.bigdreamsmalldih.site")
+            .replace("vault-02.uwucdn.top", "uwu2.bigdreamsmalldih.site")
+            .replace("vault-03.uwucdn.top", "uwu3.bigdreamsmalldih.site")
+            .replace("vault-04.uwucdn.top", "uwu4.bigdreamsmalldih.site")
+            .replace("vault-05.uwucdn.top", "uwu5.bigdreamsmalldih.site")
+            .replace("vault-06.uwucdn.top", "uwu6.bigdreamsmalldih.site")
+            .replace("vault-07.uwucdn.top", "uwu7.bigdreamsmalldih.site")
+            .replace("vault-08.uwucdn.top", "uwu8.bigdreamsmalldih.site")
+            .replace("vault-09.uwucdn.top", "uwu9.bigdreamsmalldih.site")
+            .replace("vault-10.uwucdn.top", "uwu10.bigdreamsmalldih.site")
+            .replace("vault-11.uwucdn.top", "uwu11.bigdreamsmalldih.site")
+            .replace("vault-12.uwucdn.top", "uwu12.bigdreamsmalldih.site")
+            .replace("vault-13.uwucdn.top", "uwu13.bigdreamsmalldih.site")
+            .replace("vault-14.uwucdn.top", "uwu14.bigdreamsmalldih.site")
+            .replace("vault-15.uwucdn.top", "uwu15.bigdreamsmalldih.site")
+            .replace("vault-16.uwucdn.top", "uwu16.bigdreamsmalldih.site")
+            .replace("vault-99.uwucdn.top", "uwu17.bigdreamsmalldih.site")
+            .replace("vault-10.owocdn.top", "10.bigdreamsmalldih.site")
+            .replace("vault-11.owocdn.top", "11.bigdreamsmalldih.site")
+            .replace("vault-12.owocdn.top", "12.bigdreamsmalldih.site")
+            .replace("vault-13.owocdn.top", "13.bigdreamsmalldih.site")
+            .replace("vault-14.owocdn.top", "14.bigdreamsmalldih.site")
+            .replace("vault-15.owocdn.top", "15.bigdreamsmalldih.site")
+            .replace("vault-16.owocdn.top", "16.bigdreamsmalldih.site")
+            .replace("vault-99.owocdn.top", "99.bigdreamsmalldih.site")
     }
 
     private fun Element.toSearchResult(): AnimeSearchResponse? {

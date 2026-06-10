@@ -1,100 +1,230 @@
-package com.example
+// ==========================================
+// AninekoPlugin.kt
+// ==========================================
+package com.anineko
 
-import android.util.Base64
-import com.lagradost.cloudstream3.*
-import com.lagradost.cloudstream3.utils.*
+import com.lagradost.cloudstream3.plugins.BasePlugin
+import com.lagradost.cloudstream3.plugins.CloudstreamPlugin
+
+@CloudstreamPlugin
+class AninekoPlugin : BasePlugin() {
+    override fun load() {
+        registerMainAPI(Anineko())
+        registerExtractorAPI(StreamwishHG())
+        registerExtractorAPI(Playmogo())
+        registerExtractorAPI(VibePlayer())
+        registerExtractorAPI(Earnvids())
+        registerExtractorAPI(Bibiemb())
+    }
+}
+
+// ==========================================
+// Anineko.kt
+// ==========================================
+package com.anineko
+
+import com.lagradost.cloudstream3.DubStatus
+import com.lagradost.cloudstream3.Episode
+import com.lagradost.cloudstream3.HomePageResponse
+import com.lagradost.cloudstream3.LoadResponse
+import com.lagradost.cloudstream3.MainAPI
+import com.lagradost.cloudstream3.MainPageRequest
+import com.lagradost.cloudstream3.TvType
+import com.lagradost.cloudstream3.mainPageOf
+import com.lagradost.cloudstream3.newAnimeLoadResponse
+import com.lagradost.cloudstream3.newAnimeSearchResponse
+import com.lagradost.cloudstream3.newEpisode
+import com.lagradost.cloudstream3.newHomePageResponse
+import com.lagradost.cloudstream3.addEpisodes
+import com.lagradost.cloudstream3.app
+import com.lagradost.cloudstream3.ShowStatus
+import com.lagradost.cloudstream3.SubtitleFile
+import com.lagradost.cloudstream3.LoadResponse.Companion.addAniListId
+import com.lagradost.cloudstream3.newSubtitleFile
+import com.lagradost.cloudstream3.utils.ExtractorLink
+import com.lagradost.cloudstream3.utils.M3u8Helper.Companion.generateM3u8
+import com.lagradost.cloudstream3.utils.loadExtractor
+import com.lagradost.cloudstream3.addDubStatus
+import com.lagradost.cloudstream3.SearchResponse
+import com.lagradost.cloudstream3.utils.newExtractorLink
 import com.lagradost.cloudstream3.extractors.StreamWishExtractor
-import com.google.gson.JsonParser
-import org.jsoup.Jsoup
-import org.jsoup.nodes.Element
-import java.net.URLEncoder
+import com.lagradost.cloudstream3.addDate
+import com.lagradost.cloudstream3.utils.ExtractorLinkType
 
-class AnikotoProvider : MainAPI() {
-    override var mainUrl = "https://anikoto.cz"
-    override var name = "Anikoto"
-    override var lang = "en"
+class Anineko : MainAPI() {
+    override var mainUrl = "https://anineko.to"
+    override var name = "Anineko"
     override val hasMainPage = true
-    override val supportedTypes = setOf(TvType.Anime, TvType.AnimeMovie, TvType.OVA)
-
-    override val mainPage = mainPageOf(
-        "$mainUrl/latest-updated" to "Latest Updated",
-        "$mainUrl/most-viewed" to "Most Popular",
-        "$mainUrl/status/currently-airing" to "Ongoing",
-        "$mainUrl/type/movie" to "Movies"
+    override var lang = "en"
+    override val hasDownloadSupport = true
+    override val supportedTypes = setOf(
+        TvType.Anime,
+        TvType.AnimeMovie,
+        TvType.OVA
     )
 
-    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val doc = app.get("${request.data}?page=$page").document
-        val items = doc.select("div.ani.items div.item").mapNotNull { it.toSearchResult() }
-        return newHomePageResponse(request.name, items)
+    override val mainPage = mainPageOf(
+        "/new-releases" to "New Releases",
+        "/updates" to "Latest Updates",
+        "/ongoing" to "Ongoing",
+    )
+
+    override suspend fun getMainPage(
+        page: Int,
+        request: MainPageRequest
+    ): HomePageResponse {
+        val url = "$mainUrl${request.data}?page=$page"
+        val doc = app.get(url).document
+        
+        val list = doc.select(".nv-anime-card").mapNotNull { element ->
+            val href = element.selectFirst("a.nv-anime-thumb")?.attr("href") ?: return@mapNotNull null
+            val title = element.selectFirst("h3.nv-anime-title a")?.text() 
+                ?: element.selectFirst("img")?.attr("alt") 
+                ?: return@mapNotNull null
+            val posterUrl = element.selectFirst("img")?.attr("src")
+            
+            val subCount = element.selectFirst(".nv-stat-cc")?.text()?.replace(Regex("[^0-9]"), "")?.toIntOrNull()
+            val dubCount = element.selectFirst(".nv-stat-dub span")?.text()?.replace(Regex("[^0-9]"), "")?.toIntOrNull()
+
+            newAnimeSearchResponse(title, "$mainUrl$href", TvType.Anime) {
+                this.posterUrl = posterUrl
+                addDubStatus(
+                    dubExist = dubCount != null,
+                    subExist = subCount != null,
+                    dubEpisodes = dubCount,
+                    subEpisodes = subCount
+                )
+            }
+        }
+        
+        return newHomePageResponse(request.name, list)
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
-        val encodedQuery = URLEncoder.encode(query, "UTF-8")
-        val doc = app.get("$mainUrl/filter?keyword=$encodedQuery").document
-        return doc.select("div.ani.items div.item").mapNotNull { it.toSearchResult() }
+        val url = "$mainUrl/browser?keyword=${query}"
+        val doc = app.get(url).document
+        
+        return doc.select(".nv-anime-card").mapNotNull { element ->
+            val href = element.selectFirst("a.nv-anime-thumb")?.attr("href") ?: return@mapNotNull null
+            val title = element.selectFirst("h3.nv-anime-title a")?.text() 
+                ?: element.selectFirst("img")?.attr("alt") 
+                ?: return@mapNotNull null
+            val posterUrl = element.selectFirst("img")?.attr("src")
+            
+            val subCount = element.selectFirst(".nv-stat-cc")?.text()?.replace(Regex("[^0-9]"), "")?.toIntOrNull()
+            val dubCount = element.selectFirst(".nv-stat-dub span")?.text()?.replace(Regex("[^0-9]"), "")?.toIntOrNull()
+
+            newAnimeSearchResponse(title, "$mainUrl$href", TvType.Anime) {
+                this.posterUrl = posterUrl
+                addDubStatus(
+                    dubExist = dubCount != null,
+                    subExist = subCount != null,
+                    dubEpisodes = dubCount,
+                    subEpisodes = subCount
+                )
+            }
+        }
     }
 
     override suspend fun load(url: String): LoadResponse? {
         val doc = app.get(url).document
-        val title = doc.selectFirst("#w-info h1.title, h1[itemprop=name]")?.text()?.trim() ?: return null
-        val poster = doc.selectFirst("#w-info .poster img, img[itemprop=image]")?.attr("src")
-        val description = doc.selectFirst("#w-info .synopsis .content, #w-info .synopsis")?.text()
-        val genres = doc.select("#w-info a[href*='/genre/']").map { it.text().trim() }
-        val isMovie = doc.selectFirst("#w-info a[href*='/type/movie']") != null ||
-            doc.selectFirst("#w-info .bmeta")?.text()?.contains("Type: Movie", ignoreCase = true) == true
-        val animeId = doc.selectFirst("#watch-main")?.attr("data-id")
+
+        val title = doc.selectFirst("h1")?.text() ?: return null
+        val altTitle = doc.selectFirst(".nv-info-alt-title")?.text()
+        val poster = doc.selectFirst("aside.nv-info-poster img")?.attr("src")
+        
+        val bgStyle = doc.selectFirst(".nv-info-bg")?.attr("style")
+        val background = bgStyle?.let { Regex("""url\(['"]?(.*?)['"]?\)""").find(it)?.groupValues?.get(1) }
+        
+        val plot = doc.selectFirst("p.nv-info-desc")?.text()
+
+        val tags = doc.select(".nv-info-tags span").map { it.text() }
+        val year = doc.selectFirst(".nv-info-stats div:contains(Release) strong")?.text()?.toIntOrNull()
+        val typeText = doc.selectFirst(".nv-info-stats div:contains(Type) strong")?.text()
+
+        val tvType = when {
+            typeText?.contains("Movie", true) == true -> TvType.AnimeMovie
+            typeText?.contains("OVA", true) == true -> TvType.OVA
+            else -> TvType.Anime
+        }
+
+        val statusText = doc.selectFirst(".nv-info-stats div:contains(Status) strong")?.text()
+        val showStatus = when {
+            statusText?.contains("Currently Airing", true) == true -> ShowStatus.Ongoing
+            statusText?.contains("Completed", true) == true -> ShowStatus.Completed
+            else -> null
+        }
+
+        val searchTitle = altTitle ?: title
+        val anilistId = getAnilistId(searchTitle)
+        var animeMetaData: MetaAnimeData? = null
+        if (anilistId != null) {
+            val aniZipUrl = "https://api.ani.zip/mappings?anilist_id=$anilistId"
+            val aniZipResponse = app.get(aniZipUrl).text
+            animeMetaData = parseAnimeData(aniZipResponse)
+        }
 
         val subEpisodes = mutableListOf<Episode>()
         val dubEpisodes = mutableListOf<Episode>()
 
-        animeId?.let { id ->
-            val json = app.get(
-                "$mainUrl/ajax/episode/list/$id",
-                referer = url,
-                headers = ajaxHeaders
-            ).text
-            val html = jsonResultString(json)
-            Jsoup.parse(html).select("a[data-ids]").forEach { el ->
-                val serverIds = el.attr("data-ids")
-                val episodeNumber = el.attr("data-num").toIntOrNull()
-                val slug = el.attr("data-slug")
-                val malId = el.attr("data-mal")
-                val timestamp = el.attr("data-timestamp")
-                val hasSub = el.attr("data-sub") == "1"
-                val hasDub = el.attr("data-dub") == "1"
-                if (serverIds.isBlank() || slug.isBlank()) return@forEach
+        doc.select(".nv-info-episode-item").forEach { ep ->
+            val epHref = ep.selectFirst("a.nv-info-episode-main")?.attr("href") ?: return@forEach
+            val epName = ep.selectFirst("a.nv-info-episode-main strong")?.text()
+            val epNum = epName?.replace(Regex("[^0-9]"), "")?.toIntOrNull()
 
-                val episodeName = el.attr("title").ifBlank { "Episode ${episodeNumber ?: slug}" }
-                if (hasSub || !hasDub) {
-                    subEpisodes.add(newEpisode("anikoto|$url|$serverIds|$malId|$slug|$timestamp|sub") {
-                        this.episode = episodeNumber
-                        this.name = episodeName
-                    })
-                }
-                if (hasDub) {
-                    dubEpisodes.add(newEpisode("anikoto|$url|$serverIds|$malId|$slug|$timestamp|dub") {
-                        this.episode = episodeNumber
-                        this.name = episodeName
-                    })
-                }
+            val metaEp = animeMetaData?.episodes?.get(epNum?.toString())
+            val finalName = metaEp?.title?.get("en") 
+                ?: metaEp?.title?.get("x-jat") 
+                ?: metaEp?.title?.get("ja") 
+                ?: animeMetaData?.titles?.get("en")
+                ?: animeMetaData?.titles?.get("x-jat")
+                ?: epName
+            val description = metaEp?.overview ?: "No summary available"
+            val thumbnail = metaEp?.image ?: animeMetaData?.images?.firstOrNull()?.url ?: ""
+            val rating = metaEp?.rating
+            val runtime = metaEp?.runtime
+            val airDate = metaEp?.airDateUtc
+
+            val badges = ep.select(".nv-info-episode-badges span").map { it.text().lowercase() }
+            val hasSub = badges.contains("sub") || badges.contains("hsub") || badges.contains("hardsub")
+            val hasDub = badges.contains("dub")
+
+            if (hasSub || (!hasDub)) {
+                subEpisodes.add(newEpisode("$mainUrl$epHref|sub") {
+                    this.name = finalName
+                    this.episode = epNum
+                    this.description = description
+                    this.posterUrl = thumbnail
+                    this.score = com.lagradost.cloudstream3.Score.from10(rating)
+                    this.runTime = runtime
+                    addDate(airDate)
+                })
             }
-        }
-
-        // Fallback episode gathering
-        if (subEpisodes.isEmpty() && dubEpisodes.isEmpty()) {
-            doc.select("a[href*='/ep-']").mapIndexed { i, el ->
-                subEpisodes.add(newEpisode(fixUrl(el.attr("href"))) {
-                    this.episode = i + 1
-                    this.name = el.text().ifBlank { "Episode ${i + 1}" }
+            if (hasDub) {
+                dubEpisodes.add(newEpisode("$mainUrl$epHref|dub") {
+                    this.name = finalName
+                    this.episode = epNum
+                    this.description = description
+                    this.posterUrl = thumbnail
+                    this.score = com.lagradost.cloudstream3.Score.from10(rating)
+                    this.runTime = runtime
+                    addDate(airDate)
                 })
             }
         }
 
-        return newAnimeLoadResponse(title, url, if (isMovie) TvType.AnimeMovie else TvType.Anime) {
+        val fanartUrl = animeMetaData?.images?.firstOrNull { it.coverType == "Fanart" }?.url ?: background
+
+        return newAnimeLoadResponse(title, url, tvType) {
             this.posterUrl = poster
-            this.plot = description
-            this.tags = genres
+            this.backgroundPosterUrl = fanartUrl
+            this.year = year
+            this.plot = plot
+            this.tags = tags
+            this.showStatus = showStatus
+            if (anilistId != null) {
+                addAniListId(anilistId)
+            }
             if (subEpisodes.isNotEmpty()) addEpisodes(DubStatus.Subbed, subEpisodes)
             if (dubEpisodes.isNotEmpty()) addEpisodes(DubStatus.Dubbed, dubEpisodes)
         }
@@ -106,153 +236,226 @@ class AnikotoProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        if (data.startsWith("anikoto|")) {
-            val parts = data.split("|", limit = 7)
-            val referer = parts.getOrNull(1) ?: mainUrl
-            val serverIds = parts.getOrNull(2).orEmpty()
-            val audioType = parts.getOrNull(6).orEmpty().ifBlank { "sub" }
-            if (serverIds.isBlank()) return false
+        val parts = data.split("|")
+        val url = parts[0]
+        val audioType = parts.getOrNull(1) ?: "sub"
 
-            val serverListJson = app.get(
-                "$mainUrl/ajax/server/list?servers=$serverIds",
-                referer = referer,
-                headers = ajaxHeaders
-            ).text
+        val doc = app.get(url).document
 
-            val serverList = jsonResultString(serverListJson)
-            if (serverList.isBlank()) return false
+        val panels = doc.select(".nv-server-grid")
+        val targetPanels = if (panels.isNotEmpty()) {
+            panels.filter {
+                val dataId = it.attr("data-id").lowercase()
+                if (audioType == "dub") dataId.contains("dub") else !dataId.contains("dub")
+            }
+        } else {
+            listOf(doc)
+        }
 
-            val serverDoc = Jsoup.parse(serverList)
-            
-            // Broadened selector to ensure we don't miss servers if DOM uses div instead of li
-            val servers = serverDoc.select("[data-type=$audioType] [data-link-id]")
-                .ifEmpty { serverDoc.select("[data-link-id]") }
+        targetPanels.forEach { panel ->
+            panel.select(".server-video").forEach { serverBtn ->
+                val videoUrl = serverBtn.attr("data-video")
+                val serverName = serverBtn.ownText().trim()
+                val typeName = serverBtn.selectFirst("span")?.text()
 
-            servers.forEach { element ->
-                val linkId = element.attr("data-link-id")
-                if (linkId.isBlank()) return@forEach
+                val subMatch = Regex("""(?:sub|caption_1|c1_file)=([^&]+)""").find(videoUrl)
+                if (subMatch != null) {
+                    val subUrl = subMatch.groupValues[1]
+                    val subLang = Regex("""(?:sub_1|c1_label)=([^&]+)""").find(videoUrl)?.groupValues?.get(1) ?: "English"
+                    subtitleCallback.invoke(newSubtitleFile(subLang, subUrl))
+                }
 
-                runCatching {
-                    val serverJson = app.get(
-                        "$mainUrl/ajax/server?get=$linkId",
-                        referer = referer,
-                        headers = ajaxHeaders
-                    ).text
+            val finalUrl = if (videoUrl.startsWith("//")) "https:$videoUrl" else videoUrl
+            val embedDoc = app.get(finalUrl, headers = mapOf("Referer" to "$mainUrl/")).text
 
-                    val embedUrl = runCatching {
-                        val obj = JsonParser.parseString(serverJson).asJsonObject
-                        obj["result"]?.asJsonObject?.get("url")?.asString
-                            ?: obj["result"]?.asString
-                            ?: obj["link"]?.asString
-                            ?: obj["url"]?.asString
-                    }.getOrNull() ?: return@runCatching
+            val hlsRegexes = listOf(
+                Regex("""const\s+src\s*=\s*["'](https?://[^"']+\.m3u8[^"']*)["']""", RegexOption.IGNORE_CASE),
+                Regex("""file\s*:\s*["'](https?://[^"']+\.m3u8[^"']*)["']""", RegexOption.IGNORE_CASE),
+                Regex("""["'](https?://[^"']+/master\.m3u8[^"']*)["']""", RegexOption.IGNORE_CASE),
+                Regex("""["'](https?://[^"']+\.m3u8[^"']*)["']""", RegexOption.IGNORE_CASE)
+            )
 
-                    // Ensure final URL is properly structured
-                    val finalUrl = when {
-                        embedUrl.startsWith("//") -> "https:$embedUrl"
-                        embedUrl.startsWith("/") -> "$mainUrl$embedUrl"
-                        else -> embedUrl
+            var m3u8Url: String? = null
+            for (regex in hlsRegexes) {
+                val match = regex.find(embedDoc)
+                if (match != null) {
+                    m3u8Url = match.groupValues[1]
+                    break
+                }
+            }
+
+                if (m3u8Url != null) {
+                    val sourceName = if (typeName != null) "$serverName - $typeName" else serverName
+                    generateM3u8(
+                        sourceName,
+                        m3u8Url,
+                        finalUrl
+                    ).forEach(callback)
+                } else if (serverName.contains("HD-")) {
+                    val host = Regex("""https?://([^/]+)""").find(finalUrl)?.groupValues?.get(1) ?: ""
+                    val extractor = object : StreamWishExtractor() {
+                        override var mainUrl = "https://$host"
+                        override var name = serverName
                     }
-                    
-                    val serverName = element.text().trim().ifBlank { "Server" }
-
-                    when {
-                        // Dynamically use StreamWishExtractor for StreamWish clones
-                        finalUrl.contains("megaplay") || finalUrl.contains("vibeplayer") -> {
-                            val host = Regex("""https?://([^/]+)""").find(finalUrl)?.groupValues?.get(1) ?: return@runCatching
-                            val extractor = object : StreamWishExtractor() {
-                                override var mainUrl = "https://$host"
-                                override var name = serverName
-                            }
-                            extractor.getUrl(finalUrl, referer, subtitleCallback, callback)
+                    val links = mutableListOf<ExtractorLink>()
+                    extractor.getUrl(finalUrl, "$mainUrl/", subtitleCallback) { link ->
+                        links.add(link)
+                    }
+                    links.forEach { link ->
+                        val newLink = newExtractorLink(
+                            source = link.source,
+                            name = link.name + if (typeName != null) " - $typeName" else "",
+                            url = link.url,
+                            type = if (link.isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                        ) {
+                            this.quality = link.quality
+                            this.headers = link.headers
+                            this.extractorData = link.extractorData
                         }
-                        // Base64 hash handler
-                        getHashM3u8(finalUrl) != null -> {
-                            val m3u8 = getHashM3u8(finalUrl)!!
-                            callback.invoke(
-                                newExtractorLink(
-                                    name, serverName, m3u8,
-                                    type = ExtractorLinkType.M3U8
-                                ) { this.referer = finalUrl }
-                            )
+                        callback.invoke(newLink)
+                    }
+                } else {
+                    val links = mutableListOf<ExtractorLink>()
+                    loadExtractor(finalUrl, "$mainUrl/", subtitleCallback) { link ->
+                        links.add(link)
+                    }
+                    links.forEach { link ->
+                        val newLink = newExtractorLink(
+                            source = link.source,
+                            name = link.name + if (typeName != null) " - $typeName" else "",
+                            url = link.url,
+                            type = if (link.isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                        ) {
+                            this.quality = link.quality
+                            this.headers = link.headers
+                            this.extractorData = link.extractorData
                         }
-                        // Default Fallback
-                        else -> {
-                            loadExtractor(finalUrl, referer, subtitleCallback, callback)
-                        }
+                        callback.invoke(newLink)
                     }
                 }
             }
-            return true
         }
 
-        // Fallback for direct URLs
-        val doc = app.get(data).document
-        doc.selectFirst("iframe#iframe-embed, iframe[src]")?.attr("src")?.let {
-            loadExtractor(fixUrl(it), data, subtitleCallback, callback)
-        }
         return true
     }
+}
 
-    private val ajaxHeaders = mapOf("X-Requested-With" to "XMLHttpRequest")
+// ==========================================
+// AninekoExtractors.kt
+// ==========================================
+package com.anineko
 
-    private fun jsonResultString(json: String): String {
-        return runCatching {
-            val obj = JsonParser.parseString(json).asJsonObject
-            if (obj["status"]?.asInt != 200) return ""
-            obj["result"]?.asString.orEmpty()
-        }.getOrDefault("")
-    }
+import com.lagradost.cloudstream3.extractors.StreamWishExtractor
+import com.lagradost.cloudstream3.extractors.DoodLaExtractor
 
-    private fun getHashM3u8(url: String): String? {
-        return url.substringAfter("#", "")
-            .substringBefore("#")
-            .takeIf { it.isNotBlank() }
-            ?.let { encoded ->
-                runCatching {
-                    String(Base64.decode(encoded, Base64.DEFAULT))
-                }.getOrNull()
+class StreamwishHG : StreamWishExtractor() {
+    override var mainUrl = "https://otakuhg.site"
+    override var name = "Streamwish"
+}
+
+class Playmogo : DoodLaExtractor() {
+    override var mainUrl = "https://playmogo.com"
+    override var name = "Doodstream"
+}
+
+class VibePlayer : StreamWishExtractor() {
+    override var mainUrl = "https://vibeplayer.site"
+    override var name = "HD-1"
+}
+
+class Bibiemb : StreamWishExtractor() {
+    override var mainUrl = "https://bibiemb.xyz"
+    override var name = "HD-2"
+}
+
+class Earnvids : StreamWishExtractor() {
+    override var mainUrl = "https://otakuvid.online"
+    override var name = "Earnvids"
+}
+
+// ==========================================
+// AninekoUtils.kt
+// ==========================================
+package com.anineko
+
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties
+import com.fasterxml.jackson.annotation.JsonProperty
+import com.lagradost.cloudstream3.app
+import com.lagradost.cloudstream3.utils.AppUtils.parseJson
+import com.lagradost.cloudstream3.utils.AppUtils.toJson
+import com.lagradost.nicehttp.RequestBodyTypes
+import okhttp3.MediaType.Companion.toMediaTypeOrNull
+import okhttp3.RequestBody.Companion.toRequestBody
+
+@JsonIgnoreProperties(ignoreUnknown = true)
+data class AniListSearchResponse(@param:JsonProperty("data") val data: AniListData? = null)
+
+@JsonIgnoreProperties(ignoreUnknown = true)
+data class AniListData(@param:JsonProperty("Media") val Media: AniListMedia? = null)
+
+@JsonIgnoreProperties(ignoreUnknown = true)
+data class AniListMedia(@param:JsonProperty("id") val id: Int? = null)
+
+suspend fun getAnilistId(title: String): Int? {
+    return try {
+        val query = """
+            query(${'$'}search: String) {
+                Media(search: ${'$'}search, type: ANIME) {
+                    id
+                }
             }
-            ?.let { proxyPlayerHost(it) }
-            ?.takeIf { it.startsWith("http") && it.contains(".m3u8") }
-    }
+        """.trimIndent()
 
-    private fun proxyPlayerHost(url: String): String {
-        return url
-            .replace("vibeplayer.site", "nanobyte.bigdreamsmalldih.site")
-            .replace("vault-01.uwucdn.top", "uwu1.bigdreamsmalldih.site")
-            .replace("vault-02.uwucdn.top", "uwu2.bigdreamsmalldih.site")
-            .replace("vault-03.uwucdn.top", "uwu3.bigdreamsmalldih.site")
-            .replace("vault-04.uwucdn.top", "uwu4.bigdreamsmalldih.site")
-            .replace("vault-05.uwucdn.top", "uwu5.bigdreamsmalldih.site")
-    }
+        val requestData = mapOf(
+            "query" to query,
+            "variables" to mapOf("search" to title)
+        ).toJson().toRequestBody(RequestBodyTypes.JSON.toMediaTypeOrNull())
 
-    private fun Element.toSearchResult(): AnimeSearchResponse? {
-        val titleElement = selectFirst("a.name.d-title") ?: selectFirst("a[title]") ?: return null
-        val href = titleElement.attr("href").ifBlank {
-            selectFirst("div.poster a, a")?.attr("href").orEmpty()
-        }
-        val title = titleElement.text().trim().ifBlank {
-            titleElement.attr("title").trim()
-        }
-        if (href.isBlank() || title.isBlank()) return null
+        val headers = mapOf("Accept" to "application/json", "Content-Type" to "application/json")
 
-        val poster = selectFirst("div.poster img, img")?.let {
-            it.attr("data-src").ifBlank { it.attr("src") }
-        }
-        val type = if (selectFirst(".type, .right")?.text()
-                ?.contains("Movie", ignoreCase = true) == true) {
-            TvType.AnimeMovie
-        } else {
-            TvType.Anime
-        }
+        val res = app.post(
+            "https://graphql.anilist.co",
+            headers = headers,
+            requestBody = requestData
+        ).parsedSafe<AniListSearchResponse>()
 
-        val hasDub = selectFirst(".dub, i.dub, .fa-microphone") != null
-        val hasSub = selectFirst(".sub, i.sub, .fa-closed-captioning") != null || !hasDub
-
-        return newAnimeSearchResponse(title, fixUrl(href), type) {
-            this.posterUrl = poster?.let { fixUrl(it) }
-            addDubStatus(dubExist = hasDub, subExist = hasSub)
-        }
+        res?.data?.Media?.id
+    } catch (e: Exception) {
+        null
     }
 }
+
+fun parseAnimeData(jsonString: String): MetaAnimeData? {
+    return try {
+        parseJson<MetaAnimeData>(jsonString)
+    } catch (_: Exception) {
+        null
+    }
+}
+
+@JsonIgnoreProperties(ignoreUnknown = true)
+data class ImageData(
+    @param:JsonProperty("coverType") val coverType: String? = null,
+    @param:JsonProperty("url") val url: String? = null
+)
+
+@JsonIgnoreProperties(ignoreUnknown = true)
+data class MetaEpisode(
+    @param:JsonProperty("episode") val episode: String? = null,
+    @param:JsonProperty("airdate") val airdate: String? = null,
+    @param:JsonProperty("airDateUtc") val airDateUtc: String? = null,
+    @param:JsonProperty("length") val length: Int? = null,
+    @param:JsonProperty("runtime") val runtime: Int? = null,
+    @param:JsonProperty("image") val image: String? = null,
+    @param:JsonProperty("title") val title: Map<String, String?>? = null,
+    @param:JsonProperty("overview") val overview: String? = null,
+    @param:JsonProperty("rating") val rating: String? = null,
+    @param:JsonProperty("finaleType") val finaleType: String? = null
+)
+
+@JsonIgnoreProperties(ignoreUnknown = true)
+data class MetaAnimeData(
+    @param:JsonProperty("titles") val titles: Map<String, String?>? = null,
+    @param:JsonProperty("images") val images: List<ImageData>? = null,
+    @param:JsonProperty("episodes") val episodes: Map<String, MetaEpisode>? = null,
+)

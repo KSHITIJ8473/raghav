@@ -120,72 +120,125 @@ class AnikotoProvider : MainAPI() {
             if (dubEpisodes.isNotEmpty()) addEpisodes(DubStatus.Dubbed, dubEpisodes)
         }
     }
-
-    override suspend fun loadLinks(
+override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        // Force an initial connection to the main page to set session cookies
-        runCatching {
-            app.get("$mainUrl/", headers = mapOf("User-Agent" to browserUserAgent))
+        val parts = data.split("|")
+        val url = parts[0]
+        val audioType = parts.getOrNull(1) ?: "sub"
+
+        val doc = app.get(url).document
+
+        // Locate the servers grid
+        val panels = doc.select(".nv-server-grid")
+        val targetPanels = if (panels.isNotEmpty()) {
+            panels.filter {
+                val dataId = it.attr("data-id").lowercase()
+                if (audioType == "dub") dataId.contains("dub") else !dataId.contains("dub")
+            }
+        } else {
+            listOf(doc)
         }
 
-        if (data.startsWith("anikoto|")) {
-            val parts = data.split("|", limit = 7)
-            val referer = parts.getOrNull(1) ?: mainUrl
-            val serverIds = parts.getOrNull(2).orEmpty()
-            val malId = parts.getOrNull(3).orEmpty()
-            val slug = parts.getOrNull(4).orEmpty()
-            val timestamp = parts.getOrNull(5).orEmpty()
-            val audioType = parts.getOrNull(6).orEmpty().ifBlank { "sub" }
-            
-            if (serverIds.isBlank()) return false
-            
-            val episodeMeta = if (malId.isNotBlank() && slug.isNotBlank() && timestamp.isNotBlank()) {
-                EpisodeMeta(malId, slug, timestamp)
-            } else {
-                getEpisodeMeta(referer, serverIds)
-            }
+        var linksFound = false
 
-            val serverListJson = runCatching {
-                app.get(
-                    "$mainUrl/ajax/server/list?servers=$serverIds",
-                    referer = referer,
-                    headers = mapOf("Referer" to referer) + ajaxHeaders
-                ).text
-            }.getOrNull() ?: return false
-
-            val serverList = jsonResultString(serverListJson)
-            val serverDoc = Jsoup.parse(serverList)
-            
-            val preferredServers = serverDoc.select("div.type[data-type=$audioType] li[data-link-id]")
-                .ifEmpty { serverDoc.select("li[data-link-id]") }
+        targetPanels.forEach { panel ->
+            panel.select(".server-video").forEach { serverBtn ->
+                val videoUrl = serverBtn.attr("data-video") ?: return@forEach
+                if (videoUrl.isBlank()) return@forEach
                 
-            val linkIds = (
-                preferredServers.map { it.attr("data-link-id") } +
-                    getMappedServerIds(episodeMeta, audioType)
-                ).filter { it.isNotBlank() }.distinct()
+                val serverName = serverBtn.ownText().trim()
+                val typeName = serverBtn.selectFirst("span")?.text()
+                val finalUrl = if (videoUrl.startsWith("//")) "https:$videoUrl" else videoUrl
 
-            var found = false
-            linkIds.forEach { linkId ->
-                // Wrap in runCatching so 410 Gone errors don't crash the loop
-                runCatching {
-                    val serverJson = app.get(
-                        "$mainUrl/ajax/server?get=$linkId",
-                        referer = referer,
-                        headers = mapOf("Referer" to referer) + ajaxHeaders
-                    ).text
-                    
-                    val url = jsonResultUrl(serverJson)
-                    if (!url.isNullOrBlank()) {
-                        found = loadAnikotoLink(url, referer, subtitleCallback, callback) || found
+                // 1. Extract subtitles embedded inside the video URL data properties
+                val subMatch = Regex("""(?:sub|caption_1|c1_file)=([^&]+)""").find(videoUrl)
+                if (subMatch != null) {
+                    val subUrl = subMatch.groupValues[1]
+                    val subLang = Regex("""(?:sub_1|c1_label)=([^&]+)""").find(videoUrl)?.groupValues?.get(1) ?: "English"
+                    subtitleCallback.invoke(newSubtitleFile(subLang, subUrl))
+                }
+
+                try {
+                    // Always include a Referer header when requesting the embed document
+                    val embedResponse = app.get(finalUrl, headers = mapOf("Referer" to url))
+                    val embedDoc = embedResponse.text
+
+                    // 2. Look for raw M3U8 links inside the source scripts
+                    val hlsRegexes = listOf(
+                        Regex("""const\s+src\s*=\s*["'](https?://[^"']+\.m3u8[^"']*)["']""", RegexOption.IGNORE_CASE),
+                        Regex("""file\s*:\s*["'](https?://[^"']+\.m3u8[^"']*)["']""", RegexOption.IGNORE_CASE),
+                        Regex("""["'](https?://[^"']+/master\.m3u8[^"']*)["']""", RegexOption.IGNORE_CASE),
+                        Regex("""["'](https?://[^"']+\.m3u8[^"']*)["']""", RegexOption.IGNORE_CASE)
+                    )
+
+                    var m3u8Url: String? = null
+                    for (regex in hlsRegexes) {
+                        val match = regex.find(embedDoc)
+                        if (match != null) {
+                            m3u8Url = match.groupValues[1]
+                            break
+                        }
                     }
+
+                    if (m3u8Url != null) {
+                        val sourceName = if (typeName != null) "$serverName - $typeName" else serverName
+                        generateM3u8(sourceName, m3u8Url, finalUrl).forEach { link ->
+                            callback.invoke(link)
+                            linksFound = true
+                        }
+                    } 
+                    // 3. Fallback to StreamWish custom extraction if the server name matches "HD-" or common player structures
+                    else if (serverName.contains("HD-", ignoreCase = true) || finalUrl.contains("wish", ignoreCase = true) || finalUrl.contains("megaplay", ignoreCase = true)) {
+                        val host = Regex("""https?://([^/]+)""").find(finalUrl)?.groupValues?.get(1) ?: ""
+                        val extractor = object : StreamWishExtractor() {
+                            override var mainUrl = "https://$host"
+                            override var name = serverName
+                        }
+                        extractor.getUrl(finalUrl, url, subtitleCallback) { link ->
+                            val newLink = newExtractorLink(
+                                source = link.source,
+                                name = link.name + if (typeName != null) " - $typeName" else "",
+                                url = link.url,
+                                type = if (link.isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                            ) {
+                                this.quality = link.quality
+                                this.headers = link.headers
+                                this.extractorData = link.extractorData
+                            }
+                            callback.invoke(newLink)
+                            linksFound = true
+                        }
+                    } 
+                    // 4. Default global core extractor library
+                    else {
+                        loadExtractor(finalUrl, url, subtitleCallback) { link ->
+                            val newLink = newExtractorLink(
+                                source = link.source,
+                                name = link.name + if (typeName != null) " - $typeName" else "",
+                                url = link.url,
+                                type = if (link.isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                            ) {
+                                this.quality = link.quality
+                                this.headers = link.headers
+                                this.extractorData = link.extractorData
+                            }
+                            callback.invoke(newLink)
+                            linksFound = true
+                        }
+                    }
+                } catch (e: Exception) {
+                    // Log errors silently to ensure other working servers continue parsing
+                    e.printStackTrace()
                 }
             }
-            return found
         }
+
+        return linksFound
+    }
 
         // Fallbacks for non-API links
         runCatching {

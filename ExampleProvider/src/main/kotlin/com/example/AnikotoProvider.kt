@@ -142,44 +142,29 @@ class AnikotoProvider : MainAPI() {
                             ?: obj["result"]?.asString
                             ?: obj["link"]?.asString
                             ?: obj["url"]?.asString
-                    }.getOrNull()
+                    }.getOrNull() ?: return@runCatching
 
-                    if (!embedUrl.isNullOrBlank()) {
-                        val m3u8 = getHashM3u8(embedUrl)
-                        if (m3u8 != null) {
+                    val finalUrl = if (embedUrl.startsWith("//")) "https:$embedUrl" else embedUrl
+                    val serverName = li.text().trim().ifBlank { "Server" }
+
+                    when {
+                        // Handle megaplay.buzz
+                        finalUrl.contains("megaplay.buzz") -> {
+                            extractMegaplay(finalUrl, serverName, subtitleCallback, callback)
+                        }
+                        // Handle hash-based M3U8
+                        getHashM3u8(finalUrl) != null -> {
+                            val m3u8 = getHashM3u8(finalUrl)!!
                             callback.invoke(
                                 newExtractorLink(
-                                    name,
-                                    li.text().trim().ifBlank { "Server" },
-                                    m3u8,
+                                    name, serverName, m3u8,
                                     type = ExtractorLinkType.M3U8
-                                ) {
-                                    this.referer = embedUrl
-                                }
+                                ) { this.referer = finalUrl }
                             )
-                        } else {
-                            val embedHtml = app.get(
-                                embedUrl,
-                                referer = "$mainUrl/",
-                                headers = mapOf("Referer" to "$mainUrl/")
-                            ).text
-
-                            val m3u8Direct = listOf(
-                                Regex("""file\s*:\s*["'](https?://[^"']+\.m3u8[^"']*)["']"""),
-                                Regex("""src\s*:\s*["'](https?://[^"']+\.m3u8[^"']*)["']"""),
-                                Regex("""["'](https?://[^"']+/master\.m3u8[^"']*)["']"""),
-                                Regex("""["'](https?://[^"']+\.m3u8[^"']*)["']""")
-                            ).firstNotNullOfOrNull { it.find(embedHtml)?.groupValues?.get(1) }
-
-                            if (m3u8Direct != null) {
-                                M3u8Helper.generateM3u8(
-                                    li.text().trim().ifBlank { name },
-                                    m3u8Direct,
-                                    embedUrl
-                                ).forEach(callback)
-                            } else {
-                                loadExtractor(embedUrl, "$mainUrl/", subtitleCallback, callback)
-                            }
+                        }
+                        // Generic extractor fallback
+                        else -> {
+                            loadExtractor(finalUrl, "$mainUrl/", subtitleCallback, callback)
                         }
                     }
                 }
@@ -193,6 +178,55 @@ class AnikotoProvider : MainAPI() {
             loadExtractor(fixUrl(it), data, subtitleCallback, callback)
         }
         return true
+    }
+
+    private suspend fun extractMegaplay(
+        embedUrl: String,
+        serverName: String,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        val embedHtml = runCatching {
+            app.get(
+                embedUrl,
+                headers = mapOf(
+                    "Referer" to "$mainUrl/",
+                    "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                    "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+                )
+            ).text
+        }.getOrNull() ?: return
+
+        // Try all common m3u8 patterns
+        val m3u8Url = listOf(
+            Regex("""file\s*:\s*["'](https?://[^"']+\.m3u8[^"']*)["']"""),
+            Regex("""source\s*:\s*["'](https?://[^"']+\.m3u8[^"']*)["']"""),
+            Regex("""src\s*:\s*["'](https?://[^"']+\.m3u8[^"']*)["']"""),
+            Regex("""["'](https?://[^"']+/master\.m3u8[^"']*)["']"""),
+            Regex("""["'](https?://[^"']+\.m3u8[^"']*)["']"""),
+            Regex("""hlsUrl\s*=\s*["'](https?://[^"']+)["']"""),
+            Regex("""videoUrl\s*=\s*["'](https?://[^"']+)["']""")
+        ).firstNotNullOfOrNull { it.find(embedHtml)?.groupValues?.get(1) }
+
+        if (m3u8Url != null) {
+            M3u8Helper.generateM3u8(
+                serverName,
+                m3u8Url,
+                embedUrl
+            ).forEach(callback)
+            return
+        }
+
+        // Try to find iframe src inside megaplay page
+        val innerIframe = Regex("""<iframe[^>]+src=["'](https?://[^"']+)["']""")
+            .find(embedHtml)?.groupValues?.get(1)
+        if (innerIframe != null) {
+            loadExtractor(innerIframe, embedUrl, subtitleCallback, callback)
+            return
+        }
+
+        // Last resort — try loadExtractor directly
+        loadExtractor(embedUrl, "$mainUrl/", subtitleCallback, callback)
     }
 
     private val ajaxHeaders = mapOf("X-Requested-With" to "XMLHttpRequest")

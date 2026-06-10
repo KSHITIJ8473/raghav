@@ -1,6 +1,6 @@
 package com.example
 
-import com.fasterxml.jackson.annotation.JsonProperty
+import com.google.gson.JsonParser
 import com.lagradost.api.Log
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.USER_AGENT
@@ -9,7 +9,6 @@ import com.lagradost.cloudstream3.newSubtitleFile
 import com.lagradost.cloudstream3.utils.ExtractorApi
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.M3u8Helper
-import com.lagradost.cloudstream3.utils.parsedSafe
 
 class Vidwish : MegaPlay() {
     override val name = "Vidwish"
@@ -42,7 +41,6 @@ open class MegaPlay : ExtractorApi() {
             "Referer" to "$mainUrl/",
         )
 
-        // URL from anikoto looks like: https://megaplay.buzz/stream/s-2/2143/sub
         val streamId = Regex("""/stream/s-\d+/(\d+)/""").find(url)?.groupValues?.get(1)
             ?: app.get(url, referer = referer ?: mainUrl).document
                 .selectFirst("#megaplay-player")
@@ -50,15 +48,22 @@ open class MegaPlay : ExtractorApi() {
                 ?.takeIf { it.isNotBlank() }
             ?: return
 
-        val response = runCatching {
+        val jsonText = runCatching {
             app.get(
                 "$mainUrl/stream/getSources?id=$streamId",
                 headers = ajaxHeaders,
                 referer = referer ?: mainUrl
-            ).parsedSafe<MegaPlayResponse>()
+            ).text
         }.getOrNull() ?: return
 
-        val m3u8 = response.sources?.file
+        val m3u8 = runCatching {
+            JsonParser.parseString(jsonText)
+                .asJsonObject
+                .getAsJsonObject("sources")
+                ?.get("file")
+                ?.asString
+        }.getOrNull()
+
         if (m3u8.isNullOrBlank()) {
             Log.e("MegaPlay", "No m3u8 for id=$streamId")
             return
@@ -66,29 +71,24 @@ open class MegaPlay : ExtractorApi() {
 
         M3u8Helper.generateM3u8(name, m3u8, mainUrl, headers = playbackHeaders).forEach(callback)
 
-        response.tracks?.forEach { track ->
-            if (track.kind != "captions" && track.kind != "subtitles") return@forEach
-            val file = track.file ?: return@forEach
-            subtitleCallback(
-                newSubtitleFile(track.label ?: "Unknown", file) {
-                    this.headers = playbackHeaders
-                }
-            )
+        runCatching {
+            val tracks = JsonParser.parseString(jsonText)
+                .asJsonObject
+                .getAsJsonArray("tracks")
+                ?: return@runCatching
+
+            for (element in tracks) {
+                val track = element.asJsonObject
+                val kind = track.get("kind")?.asString ?: continue
+                if (kind != "captions" && kind != "subtitles") continue
+                val file = track.get("file")?.asString ?: continue
+                val label = track.get("label")?.asString ?: "Unknown"
+                subtitleCallback(
+                    newSubtitleFile(label, file) {
+                        this.headers = playbackHeaders
+                    }
+                )
+            }
         }
     }
-
-    data class MegaPlayResponse(
-        @JsonProperty("sources") val sources: Sources? = null,
-        @JsonProperty("tracks") val tracks: List<Track>? = null,
-    )
-
-    data class Sources(
-        @JsonProperty("file") val file: String? = null,
-    )
-
-    data class Track(
-        @JsonProperty("file") val file: String? = null,
-        @JsonProperty("label") val label: String? = null,
-        @JsonProperty("kind") val kind: String? = null,
-    )
 }

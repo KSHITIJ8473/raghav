@@ -105,6 +105,9 @@ class AnikotoProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
+        // Force an initial connection to the main page to set cookies/session
+        app.get("$mainUrl/", headers = mapOf("User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"))
+
         if (data.startsWith("anikoto|")) {
             val parts = data.split("|", limit = 7)
             val referer = parts.getOrNull(1) ?: mainUrl

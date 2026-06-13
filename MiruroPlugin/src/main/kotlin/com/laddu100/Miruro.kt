@@ -23,6 +23,7 @@ import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.newExtractorLink
+import com.lagradost.cloudstream3.utils.loadExtractor
 import com.lagradost.cloudstream3.Score
 
 class Miruro : MainAPI() {
@@ -37,8 +38,7 @@ class Miruro : MainAPI() {
         TvType.OVA
     )
 
-    // bonk/bee confirmed working for dub, kiwi best for sub HLS
-    private val providerOrder = listOf("bonk", "bee", "kiwi", "ally", "hop", "pewe", "moo")
+    private val providerOrder = listOf("kiwi", "pewe", "bonk", "bee", "ally", "hop", "moo")
 
     override val mainPage = mainPageOf(
         "TRENDING" to "Trending",
@@ -46,19 +46,13 @@ class Miruro : MainAPI() {
         "RECENT" to "Recently Updated",
     )
 
-    // ─── Home Page ──────────────────────────────────────────────────────────
-
-    override suspend fun getMainPage(
-        page: Int,
-        request: MainPageRequest
-    ): HomePageResponse {
+    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val query = when (request.data) {
             "TRENDING" -> TRENDING_QUERY
             "POPULAR" -> POPULAR_QUERY
             "RECENT" -> RECENT_QUERY
             else -> TRENDING_QUERY
         }
-
         val variables = mapOf("page" to page, "perPage" to 20)
         val responseText = anilistQuery(query, variables)
         val response = parseJson<AniListResponse>(responseText)
@@ -68,23 +62,13 @@ class Miruro : MainAPI() {
             val id = media.id ?: return@mapNotNull null
             val title = media.title?.english ?: media.title?.romaji ?: return@mapNotNull null
             val posterUrl = media.coverImage?.extraLarge ?: media.coverImage?.large
-            val url = "$mainUrl/info/$id/${toSlug(title)}"
-
-            newAnimeSearchResponse(title, url, TvType.Anime) {
+            newAnimeSearchResponse(title, "$mainUrl/info/$id/${toSlug(title)}", TvType.Anime) {
                 this.posterUrl = posterUrl
-                addDubStatus(
-                    dubExist = true,
-                    subExist = true,
-                    dubEpisodes = media.episodes,
-                    subEpisodes = media.episodes
-                )
+                addDubStatus(dubExist = true, subExist = true, dubEpisodes = media.episodes, subEpisodes = media.episodes)
             }
         }
-
         return newHomePageResponse(request.name, home)
     }
-
-    // ─── Search ─────────────────────────────────────────────────────────────
 
     override suspend fun search(query: String): List<SearchResponse> {
         val variables = mapOf<String, Any?>("search" to query, "page" to 1, "perPage" to 20)
@@ -96,25 +80,15 @@ class Miruro : MainAPI() {
             val id = media.id ?: return@mapNotNull null
             val title = media.title?.english ?: media.title?.romaji ?: return@mapNotNull null
             val posterUrl = media.coverImage?.extraLarge ?: media.coverImage?.large
-            val url = "$mainUrl/info/$id/${toSlug(title)}"
-
-            newAnimeSearchResponse(title, url, TvType.Anime) {
+            newAnimeSearchResponse(title, "$mainUrl/info/$id/${toSlug(title)}", TvType.Anime) {
                 this.posterUrl = posterUrl
-                addDubStatus(
-                    dubExist = true,
-                    subExist = true,
-                    dubEpisodes = media.episodes,
-                    subEpisodes = media.episodes
-                )
+                addDubStatus(dubExist = true, subExist = true, dubEpisodes = media.episodes, subEpisodes = media.episodes)
             }
         }
     }
 
-    // ─── Load (Anime Details + Episodes) ────────────────────────────────────
-
     override suspend fun load(url: String): LoadResponse? {
-        val anilistId = Regex("""/info/(\d+)""").find(url)?.groupValues?.get(1)?.toIntOrNull()
-            ?: return null
+        val anilistId = Regex("""/info/(\d+)""").find(url)?.groupValues?.get(1)?.toIntOrNull() ?: return null
 
         val infoText = anilistQuery(INFO_QUERY, mapOf("id" to anilistId))
         val infoResponse = parseJson<AniListResponse>(infoText)
@@ -133,7 +107,6 @@ class Miruro : MainAPI() {
             "OVA", "ONA" -> TvType.OVA
             else -> TvType.Anime
         }
-
         val showStatus = when (media.status) {
             "RELEASING" -> ShowStatus.Ongoing
             "FINISHED" -> ShowStatus.Completed
@@ -148,40 +121,25 @@ class Miruro : MainAPI() {
             val episodesData = parseJson<MiruroEpisodesResponse>(episodesJson)
             val providers = episodesData.providers ?: emptyMap()
 
-            // Collect episode IDs from ALL providers for each episode number
-            // This way loadLinks can try multiple providers without re-fetching
-
             // ── Sub episodes ──
-            // Find the provider with the most sub episodes for display
             var bestSubProvider: String? = null
             var bestSubCount = 0
             for (provName in providerOrder) {
                 val count = providers[provName]?.episodes?.sub?.size ?: 0
-                if (count > bestSubCount) {
-                    bestSubCount = count
-                    bestSubProvider = provName
-                }
+                if (count > bestSubCount) { bestSubCount = count; bestSubProvider = provName }
             }
-
             if (bestSubProvider != null) {
                 val subList = providers[bestSubProvider]!!.episodes!!.sub!!
                 subList.forEach { ep ->
                     val epNum = ep.number ?: return@forEach
-                    val epId = ep.id ?: return@forEach
-
-                    // Collect this episode's ID from every provider that has it
-                    // Format: prov1:id1,prov2:id2,prov3:id3
-                    val allIds = mutableListOf<String>()
+                    // Format: sub|anilistId|prov1:id1|prov2:id2|prov3:id3
+                    val parts = mutableListOf("sub", anilistId.toString())
                     for (provName in providerOrder) {
                         val provEps = providers[provName]?.episodes?.sub ?: continue
-                        val matchingEp = provEps.firstOrNull { it.number == epNum }
-                        if (matchingEp?.id != null) {
-                            allIds.add("$provName:${matchingEp.id}")
-                        }
+                        val match = provEps.firstOrNull { it.number == epNum }
+                        if (match?.id != null) parts.add("$provName:${match.id}")
                     }
-                    val data = allIds.joinToString(",")
-
-                    subEpisodes.add(newEpisode(data) {
+                    subEpisodes.add(newEpisode(parts.joinToString("|")) {
                         this.name = ep.title ?: "Episode $epNum"
                         this.episode = epNum
                         this.description = ep.description
@@ -195,30 +153,20 @@ class Miruro : MainAPI() {
             var bestDubCount = 0
             for (provName in providerOrder) {
                 val count = providers[provName]?.episodes?.dub?.size ?: 0
-                if (count > bestDubCount) {
-                    bestDubCount = count
-                    bestDubProvider = provName
-                }
+                if (count > bestDubCount) { bestDubCount = count; bestDubProvider = provName }
             }
-
             if (bestDubProvider != null) {
                 val dubList = providers[bestDubProvider]!!.episodes!!.dub!!
                 dubList.forEach { ep ->
                     val epNum = ep.number ?: return@forEach
-                    val epId = ep.id ?: return@forEach
-
-                    val allIds = mutableListOf<String>()
+                    // Format: dub|anilistId|prov1:id1|prov2:id2|prov3:id3
+                    val parts = mutableListOf("dub", anilistId.toString())
                     for (provName in providerOrder) {
                         val provEps = providers[provName]?.episodes?.dub ?: continue
-                        val matchingEp = provEps.firstOrNull { it.number == epNum }
-                        if (matchingEp?.id != null) {
-                            allIds.add("$provName:${matchingEp.id}")
-                        }
+                        val match = provEps.firstOrNull { it.number == epNum }
+                        if (match?.id != null) parts.add("$provName:${match.id}")
                     }
-                    // Prefix with dub~ so loadLinks passes category=dub to the API
-                    val data = "dub~" + allIds.joinToString(",")
-
-                    dubEpisodes.add(newEpisode(data) {
+                    dubEpisodes.add(newEpisode(parts.joinToString("|")) {
                         this.name = ep.title ?: "Episode $epNum"
                         this.episode = epNum
                         this.description = ep.description
@@ -226,10 +174,7 @@ class Miruro : MainAPI() {
                     })
                 }
             }
-
-        } catch (e: Exception) {
-            // Fallback: no episodes if pipe fails
-        }
+        } catch (_: Exception) {}
 
         return newAnimeLoadResponse(title, url, tvType) {
             this.posterUrl = posterUrl
@@ -245,50 +190,53 @@ class Miruro : MainAPI() {
         }
     }
 
-    // ─── Load Links (Get Streaming URLs) ────────────────────────────────────
-
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        // Data format: [dub~]prov1:epId1,prov2:epId2,prov3:epId3
-        // dub~ prefix means pass category=dub to get dubbed audio streams
-        val isDub = data.startsWith("dub~")
-        val cleanData = if (isDub) data.removePrefix("dub~") else data
-        val entries = cleanData.split(",")
-        if (entries.isEmpty()) return false
+        // Data format: sub|anilistId|prov1:id1|prov2:id2  OR  dub|anilistId|prov1:id1|prov2:id2
+        val parts = data.split("|")
+        if (parts.size < 3) return false
 
-        // Try each provider in order until one returns sources
-        for (entry in entries) {
+        val category = parts[0]  // "sub" or "dub"
+        val anilistId = parts[1].toIntOrNull()
+        val providerEntries = parts.drop(2)  // ["prov1:id1", "prov2:id2", ...]
+
+        for (entry in providerEntries) {
             val colonIdx = entry.indexOf(':')
             if (colonIdx < 0) continue
-
             val provider = entry.substring(0, colonIdx)
             val episodeId = entry.substring(colonIdx + 1)
             if (provider.isEmpty() || episodeId.isEmpty()) continue
 
             try {
-                // Build query - add category=dub for dubbed audio
-                val query = mutableMapOf<String, Any>(
+                // Determine query category param
+                val queryCategory = if (category == "dub") "dub" else {
+                    if (provider in listOf("bee", "hop", "bonk")) "ssub" else "sub"
+                }
+
+                val queryMap = mutableMapOf<String, Any>(
                     "episodeId" to episodeId,
-                    "provider" to provider
+                    "provider" to provider,
+                    "category" to queryCategory
                 )
-                if (isDub) query["category"] = "dub"
+                if (anilistId != null) {
+                    queryMap["anilistId"] = anilistId
+                }
 
                 val sourcesJson = miruroPipeRequest(
                     mainUrl,
                     "sources",
-                    query
+                    queryMap
                 )
                 val sourcesData = parseJson<MiruroSourcesResponse>(sourcesJson)
                 val streams = sourcesData.streams ?: continue
                 var foundSources = false
 
-                // Add HLS streams
-                val hlsStreams = streams.filter { it.type == "hls" && !it.url.isNullOrEmpty() }
-                for (stream in hlsStreams) {
+                // HLS streams
+                for (stream in streams.filter { it.type == "hls" && !it.url.isNullOrEmpty() }) {
                     val m3u8Url = stream.url ?: continue
                     val referer = stream.referer ?: "$mainUrl/"
                     val quality = qualityFromString(stream.quality)
@@ -312,22 +260,18 @@ class Miruro : MainAPI() {
                     foundSources = true
                 }
 
-                // Add MP4 streams as fallback
-                val mp4Streams = streams.filter { it.type == "mp4" && !it.url.isNullOrEmpty() }
-                for (stream in mp4Streams) {
+                // MP4 fallback
+                for (stream in streams.filter { it.type == "mp4" && !it.url.isNullOrEmpty() }) {
                     val mp4Url = stream.url ?: continue
                     val referer = stream.referer ?: "$mainUrl/"
-                    val quality = qualityFromString(stream.quality)
-                    val qualityLabel = stream.quality ?: "MP4"
-
                     callback.invoke(
                         newExtractorLink(
                             source = "Miruro",
-                            name = "Miruro $provider (MP4) - $qualityLabel",
+                            name = "Miruro $provider (MP4)",
                             url = mp4Url,
                             type = ExtractorLinkType.VIDEO
                         ) {
-                            this.quality = quality
+                            this.quality = qualityFromString(stream.quality)
                             this.headers = mapOf(
                                 "Referer" to referer,
                                 "User-Agent" to "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
@@ -337,27 +281,30 @@ class Miruro : MainAPI() {
                     foundSources = true
                 }
 
-                // Add subtitles
+                // Embed streams
+                for (stream in streams.filter { it.type == "embed" && !it.url.isNullOrEmpty() }) {
+                    val embedUrl = stream.url ?: continue
+                    val referer = stream.referer ?: "$mainUrl/"
+                    try {
+                        loadExtractor(embedUrl, referer, subtitleCallback, callback)
+                        foundSources = true
+                    } catch (_: Exception) {}
+                }
+
+                // Subtitles
                 sourcesData.subtitles?.forEach { sub ->
                     if (!sub.url.isNullOrEmpty()) {
-                        subtitleCallback.invoke(
-                            SubtitleFile(sub.lang ?: "English", sub.url)
-                        )
+                        subtitleCallback.invoke(SubtitleFile(sub.lang ?: "English", sub.url))
                     }
                 }
 
                 if (foundSources) return true
-
-            } catch (e: Exception) {
-                // This provider failed, try next one
+            } catch (_: Exception) {
                 continue
             }
         }
-
         return false
     }
-
-    // ─── Helper ─────────────────────────────────────────────────────────────
 
     private fun toSlug(title: String): String {
         return title.lowercase()

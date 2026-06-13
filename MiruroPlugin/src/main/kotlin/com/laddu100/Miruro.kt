@@ -207,7 +207,18 @@ class Miruro : MainAPI() {
         val suffix = if (category == "dub") "Dub" else "Sub"
         val wrappedCallback = { link: ExtractorLink ->
             val newName = if (link.name.contains(suffix)) link.name else "${link.name} ($suffix)"
-            callback.invoke(link.copy(name = newName))
+            callback.invoke(
+                newExtractorLink(
+                    source = link.source,
+                    name = newName,
+                    url = link.url,
+                    referer = link.referer,
+                    type = link.type
+                ) {
+                    this.quality = link.quality
+                    this.headers = link.headers
+                }
+            )
         }
 
         for (entry in providerEntries) {

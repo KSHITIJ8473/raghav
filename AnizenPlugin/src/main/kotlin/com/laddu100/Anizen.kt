@@ -80,8 +80,20 @@ class Anizen : MainAPI() {
             ?.let { Regex("""\\"([^"\\]+)\\"""").findAll(it).map { tag -> tag.groupValues[1].unescape() }.toList() }
             ?: emptyList()
         val year = html.findJsonString("premiered")?.let { Regex("""\d{4}""").find(it)?.value?.toIntOrNull() }
-        val dataId = html.findJsonString("dataId")
-            ?: url.substringAfterLast("-")
+
+        // FIX 1: Extract the dataId reliably from the URL slug (the short alphanumeric suffix
+        // after the last dash, e.g. "odmau" from "one-piece-odmau").
+        // We do NOT use findJsonString("dataId") as the first choice because the JSON in the
+        // page may contain a numeric internal ID that maps to a different anime on the server API,
+        // causing the wrong anime to be served.
+        val dataId = extractDataIdFromUrl(url)
+            ?: html.findJsonString("dataId")?.let { raw ->
+                // If the JSON dataId looks like a URL or contains slashes, extract the slug from it
+                if (raw.contains("/")) raw.substringAfterLast("/").substringAfterLast("-")
+                else raw
+            }
+            ?: url.substringAfterLast("-").substringBefore("?").substringBefore("#")
+
         val totalEpisodes = html.findJsonInt("totalEpisodes")
             ?: document.selectFirst("meta[property=og:title]")?.attr("content")
                 ?.let { Regex("""\((\d+)\s+episodes""").find(it)?.groupValues?.get(1)?.toIntOrNull() }
@@ -128,25 +140,43 @@ class Anizen : MainAPI() {
             callback(link)
         }
 
-        response.servers.sortedBy { it.priority() }.forEach { server ->
-            val embed = server.embed?.takeIf { it.isNotBlank() } ?: server.iframeUrl?.takeIf { it.isNotBlank() }
-            if (embed != null) {
-                if (loadedLinks && server.priority() >= 5) return@forEach
-                val sourceName = listOf(server.serverName, server.type.uppercase())
-                    .filter { it.isNotBlank() }
-                    .distinct()
-                    .joinToString(" ")
+        // FIX 2: Stop after the first server that successfully delivers a link.
+        // Sort by priority and break out once we have a working link from a high-priority server.
+        // We try all priority-0 and priority-1 servers (fast CDNs), then stop.
+        // Only fall through to lower-priority servers if nothing worked.
+        val sortedServers = response.servers.sortedBy { it.priority() }
+
+        for (server in sortedServers) {
+            val embed = server.embed?.takeIf { it.isNotBlank() }
+                ?: server.iframeUrl?.takeIf { it.isNotBlank() }
+                ?: continue
+
+            // FIX 2 (continued): If we already have a working link from a server with
+            // priority <= 2 (fast servers), skip all remaining lower-priority servers.
+            if (loadedLinks && server.priority() >= 3) break
+
+            val sourceName = listOf(server.serverName, server.type.uppercase())
+                .filter { it.isNotBlank() }
+                .distinct()
+                .joinToString(" ")
+
+            runCatching {
                 when {
                     embed.contains("ryzex.top") -> {
-                        AnizenRyzex().apply { name = sourceName }.getUrl(embed, mainUrl, subtitleCallback, wrappedCallback)
+                        AnizenRyzex().apply { name = sourceName }
+                            .getUrl(embed, mainUrl, subtitleCallback, wrappedCallback)
                     }
                     embed.contains("abyssplayer.com") || embed.contains("abyss.to") -> {
-                        AnizenAbyss().apply { name = sourceName }.getUrl(embed, mainUrl, subtitleCallback, wrappedCallback)
+                        AnizenAbyss().apply { name = sourceName }
+                            .getUrl(embed, mainUrl, subtitleCallback, wrappedCallback)
                     }
-                    embed.contains("megaplay.buzz") -> AnizenMegaPlay(sourceName).getUrl(embed, mainUrl, subtitleCallback, wrappedCallback)
-                    embed.contains("vidwish.live") -> AnizenVidWish(sourceName).getUrl(embed, mainUrl, subtitleCallback, wrappedCallback)
+                    embed.contains("megaplay.buzz") ->
+                        AnizenMegaPlay(sourceName).getUrl(embed, mainUrl, subtitleCallback, wrappedCallback)
+                    embed.contains("vidwish.live") ->
+                        AnizenVidWish(sourceName).getUrl(embed, mainUrl, subtitleCallback, wrappedCallback)
                     embed.contains("playerp2p.live") || embed.contains("gdmirrorbot.") || embed.contains("boosterx.") -> {
-                        AnizenWebView(sourceName, embed.baseUrl()).getUrl(embed, mainUrl, subtitleCallback, wrappedCallback)
+                        AnizenWebView(sourceName, embed.baseUrl())
+                            .getUrl(embed, mainUrl, subtitleCallback, wrappedCallback)
                     }
                     else -> loadExtractor(embed, mainUrl, subtitleCallback, wrappedCallback)
                 }
@@ -187,6 +217,24 @@ class Anizen : MainAPI() {
         }
     }
 
+    /**
+     * Extracts the short alphanumeric slug from the end of an AniZen watch URL.
+     * URLs are structured as: /watch/<full-title-slug>-<ID>
+     * e.g. /watch/one-piece-odmau  →  "odmau"
+     *      /watch/naruto-shippuden-c8gov  →  "c8gov"
+     * The ID is always the last hyphen-separated segment and is alphanumeric (no pure numbers).
+     */
+    private fun extractDataIdFromUrl(url: String): String? {
+        val path = url.substringBefore("?").substringBefore("#")
+        if (!path.contains("/watch/")) return null
+        val slug = path.substringAfterLast("/watch/").substringAfterLast("/")
+        val candidate = slug.substringAfterLast("-")
+        // Validate: must be non-empty, alphanumeric, and not a pure number
+        return if (candidate.isNotBlank() && candidate.all { it.isLetterOrDigit() } && candidate.any { it.isLetter() }) {
+            candidate
+        } else null
+    }
+
     private data class EpisodeData(val dataId: String, val episode: Int) {
         override fun toString(): String = "$dataId|$episode"
 
@@ -194,15 +242,18 @@ class Anizen : MainAPI() {
             fun fromString(data: String): EpisodeData? {
                 val split = data.split("|")
                 val rawDataId = split.getOrNull(0)?.trim()?.takeIf { it.isNotBlank() } ?: return null
-                val cleanDataId = rawDataId
-                    .substringBefore("?")
-                    .substringBefore("#")
-                    .substringAfterLast("/")
-                    .let { path ->
-                        if (rawDataId.contains("/watch/")) path.substringAfterLast("-") else path
+                // The stored dataId is already the clean slug (e.g. "odmau"), stored directly.
+                // We only strip URL parts if the raw value somehow still contains a full URL.
+                val cleanDataId = when {
+                    rawDataId.startsWith("http") -> {
+                        // Full URL stored — extract slug from it
+                        val path = rawDataId.substringBefore("?").substringBefore("#")
+                        val slug = path.substringAfterLast("/")
+                        if (path.contains("/watch/")) slug.substringAfterLast("-") else slug
                     }
-                    .takeIf { it.isNotBlank() }
-                    ?: return null
+                    rawDataId.contains("/") -> rawDataId.substringAfterLast("/").substringAfterLast("-")
+                    else -> rawDataId  // Already a clean slug like "odmau"
+                }.takeIf { it.isNotBlank() } ?: return null
                 return EpisodeData(cleanDataId, split.getOrNull(1)?.toIntOrNull() ?: 1)
             }
         }
@@ -216,7 +267,7 @@ class Anizen : MainAPI() {
     data class AniEpisode(
         val no: Int? = null,
         val title: String? = null,
-        val episodeId: String? = null
+        @JsonProperty("episodeId") val episodeId: String? = null
     )
 
     data class ServerResponse(
@@ -225,10 +276,10 @@ class Anizen : MainAPI() {
     )
 
     data class AniServer(
-        val type: String = "sub",
-        val serverName: String = "Server",
-        val embed: String? = null,
-        val iframeUrl: String? = null,
+        @JsonProperty("type") val type: String = "sub",
+        @JsonProperty("serverName") val serverName: String = "Server",
+        @JsonProperty("embed") val embed: String? = null,
+        @JsonProperty("iframeUrl") val iframeUrl: String? = null,
         @JsonProperty("streamKey") val streamKey: String? = null
     )
 

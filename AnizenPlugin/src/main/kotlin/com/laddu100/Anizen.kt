@@ -80,16 +80,8 @@ class Anizen : MainAPI() {
             ?.let { Regex("""\\"([^"\\]+)\\"""").findAll(it).map { tag -> tag.groupValues[1].unescape() }.toList() }
             ?: emptyList()
         val year = html.findJsonString("premiered")?.let { Regex("""\d{4}""").find(it)?.value?.toIntOrNull() }
-
-        // The dataId is the short alphanumeric suffix after the last "-" in the watch URL.
-        // Confirmed: /watch/one-piece-odmau -> dataId = "odmau"
-        // Confirmed by console: fetch('/ajax/servers/odmau?ep=1') returns correct data.
-        // For URLs with no hash suffix (e.g. /watch/smoking-behind-the-supermarket-with-you),
-        // fall back to the full slug.
-        val dataId = extractDataId(url)
-            ?: html.findJsonString("dataId")
-            ?: url.substringAfterLast("-").substringBefore("?").substringBefore("#")
-
+        val dataId = html.findJsonString("dataId")
+            ?: url.substringAfterLast("-")
         val totalEpisodes = html.findJsonInt("totalEpisodes")
             ?: document.selectFirst("meta[property=og:title]")?.attr("content")
                 ?.let { Regex("""\((\d+)\s+episodes""").find(it)?.groupValues?.get(1)?.toIntOrNull() }
@@ -182,26 +174,6 @@ class Anizen : MainAPI() {
         }
     }
 
-    // Extracts the short hash-style ID from the end of a /watch/ URL.
-    // e.g. /watch/one-piece-odmau -> "odmau"
-    //      /watch/bleach-yaa9n -> "yaa9n"
-    //      /watch/smoking-behind-the-supermarket-with-you -> null (no digit = not a hash)
-    private fun extractDataId(url: String): String? {
-        val cleanUrl = url.substringBefore("?").substringBefore("#")
-        if (!cleanUrl.contains("/watch/")) return null
-        val slug = cleanUrl.substringAfterLast("/watch/").substringAfterLast("/")
-        if (slug.isBlank()) return null
-        val lastSegment = slug.substringAfterLast("-")
-        return if (lastSegment.length in 3..8
-            && lastSegment.all { it.isLetterOrDigit() }
-            && lastSegment.any { it.isDigit() }
-        ) {
-            lastSegment
-        } else {
-            slug
-        }
-    }
-
     private fun Element.toSearchResult(): SearchResponse? {
         val href = fixUrl(attr("href").takeIf { it.isNotBlank() } ?: return null)
         val title = selectFirst("img[alt]")?.attr("alt")?.trim()
@@ -221,38 +193,43 @@ class Anizen : MainAPI() {
         companion object {
             fun fromString(data: String): EpisodeData? {
                 val split = data.split("|")
-                val dataId = split.getOrNull(0)?.trim()?.takeIf { it.isNotBlank() } ?: return null
-                val episode = split.getOrNull(1)?.toIntOrNull() ?: 1
-                return EpisodeData(dataId, episode)
+                val rawDataId = split.getOrNull(0)?.trim()?.takeIf { it.isNotBlank() } ?: return null
+                val cleanDataId = rawDataId
+                    .substringBefore("?")
+                    .substringBefore("#")
+                    .substringAfterLast("/")
+                    .let { path ->
+                        if (rawDataId.contains("/watch/")) path.substringAfterLast("-") else path
+                    }
+                    .takeIf { it.isNotBlank() }
+                    ?: return null
+                return EpisodeData(cleanDataId, split.getOrNull(1)?.toIntOrNull() ?: 1)
             }
         }
     }
 
     data class EpisodeResponse(
-        @JsonProperty("ok") val ok: Boolean? = null,
-        @JsonProperty("episodes") val episodes: List<AniEpisode> = emptyList()
+        val ok: Boolean? = null,
+        val episodes: List<AniEpisode> = emptyList()
     )
 
     data class AniEpisode(
-        @JsonProperty("no") val no: Int? = null,
-        @JsonProperty("title") val title: String? = null,
-        @JsonProperty("episodeId") val episodeId: String? = null
+        val no: Int? = null,
+        val title: String? = null,
+        val episodeId: String? = null
     )
 
     data class ServerResponse(
-        @JsonProperty("ok") val ok: Boolean? = null,
-        @JsonProperty("servers") val servers: List<AniServer> = emptyList()
+        val ok: Boolean? = null,
+        val servers: List<AniServer> = emptyList()
     )
 
-    // IMPORTANT: The API response has a "dataId" field inside each server object too.
-    // We rename it to "serverDataId" to avoid any confusion, and map it with @JsonProperty.
     data class AniServer(
-        @JsonProperty("type") val type: String = "sub",
-        @JsonProperty("serverName") val serverName: String = "Server",
-        @JsonProperty("embed") val embed: String? = null,
-        @JsonProperty("iframeUrl") val iframeUrl: String? = null,
-        @JsonProperty("streamKey") val streamKey: String? = null,
-        @JsonProperty("dataId") val serverDataId: String? = null
+        val type: String = "sub",
+        val serverName: String = "Server",
+        val embed: String? = null,
+        val iframeUrl: String? = null,
+        @JsonProperty("streamKey") val streamKey: String? = null
     )
 
     private fun AniServer.priority(): Int {

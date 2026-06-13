@@ -76,13 +76,20 @@ class Anizen : MainAPI() {
             ?: html.findJsonString("cover")
         val description = document.selectFirst("meta[name=description]")?.attr("content")
             ?: html.findJsonString("description")
-        val genres = Regex("""\\"genres\\":\[(.*?)]""").find(html)?.groupValues?.get(1)
-            ?.let { Regex("""\\"([^"\\]+)\\"""").findAll(it).map { tag -> tag.groupValues[1].unescape() }.toList() }
+        val genres = document.select("span")
+            .firstOrNull { it.text().trim() == "Genres:" }
+            ?.nextElementSibling()?.text()
+            ?.split(",")?.map { it.trim() }
             ?: emptyList()
-        val year = html.findJsonString("premiered")?.let { Regex("""\d{4}""").find(it)?.value?.toIntOrNull() }
-        val dataId = html.findJsonString("dataId")
-            ?: url.substringAfterLast("-")
-        val totalEpisodes = html.findJsonInt("totalEpisodes")
+        val year = document.select("span")
+            .firstOrNull { it.text().trim() in listOf("Premiered:", "Date aired:") }
+            ?.nextElementSibling()?.text()
+            ?.let { Regex("""\d{4}""").find(it)?.value?.toIntOrNull() }
+        val dataId = document.selectFirst("div[data-data-id]")?.attr("data-data-id")?.takeIf { it.isNotBlank() }
+            ?: url.substringBefore("?").substringBefore("#").removeSuffix("/").substringAfterLast("-")
+        val totalEpisodes = document.select("span")
+            .firstOrNull { it.text().trim() == "Episodes:" }
+            ?.nextElementSibling()?.text()?.trim()?.toIntOrNull()
             ?: document.selectFirst("meta[property=og:title]")?.attr("content")
                 ?.let { Regex("""\((\d+)\s+episodes""").find(it)?.groupValues?.get(1)?.toIntOrNull() }
             ?: 1
@@ -235,13 +242,12 @@ class Anizen : MainAPI() {
     private fun AniServer.priority(): Int {
         val key = "${serverName.lowercase()} ${type.lowercase()} ${embed.orEmpty().lowercase()} ${iframeUrl.orEmpty().lowercase()}"
         return when {
-            key.contains("vidstack") -> 0
-            key.contains("playerp2p") || key.contains("streamp2p") -> 0
-            key.contains("megaplay") || key.contains("vidstream") -> 1
-            key.contains("vidwish") || key.contains("vidcloud") -> 2
-            key.contains("ryzex") || key.contains("abyss") -> 3
+            key.contains("gdmirror") || key.contains("mirror") || key.contains("default") -> 0
+            key.contains("ryzex") || key.contains("abyss") -> 1
+            key.contains("megaplay") || key.contains("vidstream") -> 2
+            key.contains("vidwish") || key.contains("vidcloud") -> 3
             key.contains("boosterx") || key.contains("playerx") -> 4
-            key.contains("gdmirror") || key.contains("mirror") || key.contains("default") -> 5
+            key.contains("vidstack") || key.contains("playerp2p") || key.contains("streamp2p") -> 5
             else -> 6
         }
     }

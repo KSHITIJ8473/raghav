@@ -84,11 +84,11 @@ open class AnizenMegaPlay(private val sourceName: String = "MegaPlay") : Extract
 
         runCatching {
             val document = app.get(url, headers = headers).document
-            val id = Regex("""/stream/s-\d+/(\d+)""").find(url)?.groupValues?.get(1)
-                ?: document.selectFirst("#megaplay-player")?.attr("data-realid")?.takeIf { it.isNotBlank() }
-                ?: document.selectFirst("#megaplay-player")?.attr("data-id")?.takeIf { it.isNotBlank() }
-                ?: Regex("""data-realid=["'](\d+)""").find(document.html())?.groupValues?.get(1)
+            val id = document.selectFirst("#megaplay-player")?.attr("data-id")?.takeIf { it.isNotBlank() }
                 ?: Regex("""data-id=["'](\d+)""").find(document.html())?.groupValues?.get(1)
+                ?: document.selectFirst("#megaplay-player")?.attr("data-realid")?.takeIf { it.isNotBlank() }
+                ?: Regex("""data-realid=["'](\d+)""").find(document.html())?.groupValues?.get(1)
+                ?: Regex("""/stream/s-\d+/(\d+)""").find(url)?.groupValues?.get(1)
                 ?: return@runCatching
             val response = app.get("$mainUrl/stream/getSources?id=$id", headers = headers).parsedSafe<Response>()
                 ?: return@runCatching

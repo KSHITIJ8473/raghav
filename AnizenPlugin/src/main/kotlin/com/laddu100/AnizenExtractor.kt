@@ -75,7 +75,10 @@ open class AnizenMegaPlay(private val sourceName: String = "MegaPlay") : Extract
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        val headers = mapOf(
+        // Confirmed embed URL format: https://megaplay.buzz/stream/s-2/2142/dub
+        // The numeric ID is the 3rd path segment after /stream/: 2142
+        // getSources confirmed working at: megaplay.buzz/stream/getSources?id=2142
+        val megaHeaders = mapOf(
             "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:140.0) Gecko/20100101 Firefox/140.0",
             "Accept" to "*/*",
             "X-Requested-With" to "XMLHttpRequest",
@@ -83,36 +86,30 @@ open class AnizenMegaPlay(private val sourceName: String = "MegaPlay") : Extract
         )
 
         runCatching {
-            val document = app.get(url, headers = headers).document
-            val pageHtml = document.html()
-
-            // Try to get the numeric ID used by getSources.
-            // The network tab shows getSources?id=363382 so the id is numeric.
-            // Try multiple locations in order of reliability:
-            val id =
-                // 1. From URL path like /stream/s-1/363382
-                Regex("""/stream/[^/]+/(\d+)""").find(url)?.groupValues?.get(1)
-                // 2. From URL query param like ?id=363382
-                ?: Regex("""[?&]id=(\d+)""").find(url)?.groupValues?.get(1)
-                // 3. data-realid attribute on player element
-                ?: document.selectFirst("[data-realid]")?.attr("data-realid")?.takeIf { it.isNotBlank() }
-                // 4. data-id attribute on player element
-                ?: document.selectFirst("#megaplay-player,[data-id]")?.attr("data-id")?.takeIf { it.matches(Regex("""\d+""")) }
-                // 5. Regex scan of raw HTML for data-realid="..."
-                ?: Regex("""data-realid=["'](\d+)["']""").find(pageHtml)?.groupValues?.get(1)
-                // 6. Regex scan of raw HTML for data-id="<numeric>"
-                ?: Regex("""data-id=["'](\d+)["']""").find(pageHtml)?.groupValues?.get(1)
-                // 7. JavaScript variable like var id = 363382 or const id=363382
-                ?: Regex("""(?:var|let|const)\s+id\s*=\s*["']?(\d+)["']?""").find(pageHtml)?.groupValues?.get(1)
-                // 8. getSources URL already present in page source (sometimes injected)
-                ?: Regex("""getSources\?id=(\d+)""").find(pageHtml)?.groupValues?.get(1)
+            // Extract ID directly from the embed URL path — most reliable
+            // URL: https://megaplay.buzz/stream/s-2/2142/dub  -> captures "2142"
+            val id = Regex("""/stream/[^/]+/(\d+)""").find(url)?.groupValues?.get(1)
+                ?: run {
+                    // Fallback: load the page and search for the ID in the HTML
+                    val document = app.get(url, headers = megaHeaders).document
+                    val pageHtml = document.html()
+                    document.selectFirst("[data-realid]")?.attr("data-realid")?.takeIf { it.isNotBlank() }
+                        ?: document.selectFirst("[data-id]")?.attr("data-id")?.takeIf { it.matches(Regex("""\d+""")) }
+                        ?: Regex("""data-realid=["'](\d+)["']""").find(pageHtml)?.groupValues?.get(1)
+                        ?: Regex("""data-id=["'](\d+)["']""").find(pageHtml)?.groupValues?.get(1)
+                        ?: Regex("""getSources\?id=(\d+)""").find(pageHtml)?.groupValues?.get(1)
+                }
                 ?: return@runCatching
 
-            val response = app.get("$mainUrl/stream/getSources?id=$id", headers = headers).parsedSafe<Response>()
-                ?: return@runCatching
+            // Confirmed network call: GET megaplay.buzz/stream/getSources?id=2142
+            val response = app.get(
+                "$mainUrl/stream/getSources?id=$id",
+                headers = megaHeaders
+            ).parsedSafe<Response>() ?: return@runCatching
+
             val m3u8 = response.sources?.file ?: return@runCatching
+            generateM3u8(name, m3u8, mainUrl, headers = megaHeaders).forEach(callback)
 
-            generateM3u8(name, m3u8, mainUrl, headers = headers).forEach(callback)
             response.tracks.forEach { track ->
                 val file = track.file ?: return@forEach
                 if (track.kind == "captions" || track.kind == "subtitles") {
@@ -122,27 +119,33 @@ open class AnizenMegaPlay(private val sourceName: String = "MegaPlay") : Extract
                 }
             }
         }.onFailure { error ->
-            Log.e(name, "API extraction failed, trying WebView: ${error.message}")
-            val resolver = WebViewResolver(
-                interceptUrl = Regex("""\.m3u8"""),
-                additionalUrls = listOf(Regex("""\.m3u8""")),
-                script = """document.querySelector('.jw-icon-display')?.click();""",
-                useOkhttp = false,
-                timeout = 15_000L
-            )
-            val m3u8 = app.get(url, referer = mainUrl, interceptor = resolver).url
-            if (m3u8.contains(".m3u8")) {
-                generateM3u8(name, m3u8, mainUrl, headers = headers).forEach(callback)
+            Log.e(name, "MegaPlay API extraction failed, trying WebView: ${error.message}")
+            runCatching {
+                val resolver = WebViewResolver(
+                    interceptUrl = Regex("""\.m3u8"""),
+                    additionalUrls = listOf(Regex("""\.m3u8""")),
+                    script = """document.querySelector('.jw-icon-display')?.click();""",
+                    useOkhttp = false,
+                    timeout = 15_000L
+                )
+                val m3u8 = app.get(url, referer = mainUrl, interceptor = resolver).url
+                if (m3u8.contains(".m3u8")) {
+                    generateM3u8(name, m3u8, mainUrl, headers = megaHeaders).forEach(callback)
+                }
             }
         }
     }
 
+    // Confirmed response structure:
+    // {"sources":{"file":"https://...master.m3u8"},"tracks":[{"file":"...","label":"English","kind":"captions"}],...}
     data class Response(
         @JsonProperty("sources") val sources: Sources? = null,
         @JsonProperty("tracks") val tracks: List<Track> = emptyList()
     )
 
-    data class Sources(@JsonProperty("file") val file: String? = null)
+    data class Sources(
+        @JsonProperty("file") val file: String? = null
+    )
 
     data class Track(
         @JsonProperty("file") val file: String? = null,

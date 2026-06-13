@@ -7,7 +7,7 @@ import com.lagradost.cloudstream3.plugins.CloudstreamPlugin
 class MiruroPlugin : BasePlugin() {
     override fun load() {
         registerMainAPI(Miruro())
-        registerExtractor(MiruroMegaPlay())
-        registerExtractor(MiruroVidWish())
+        registerExtractorAPI(MiruroMegaPlay())
+        registerExtractorAPI(MiruroVidWish())
     }
 }

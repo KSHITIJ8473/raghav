@@ -66,7 +66,6 @@ class Anizen : MainAPI() {
     override suspend fun load(url: String): LoadResponse {
         val document = app.get(url, headers = headers).document
         val html = document.html()
-
         val title = document.selectFirst("meta[property=og:title]")?.attr("content")
             ?.let { Regex("""Watch\s+(.+?)\s+Anime Online""").find(it)?.groupValues?.get(1) }
             ?: html.findJsonString("title")
@@ -82,14 +81,12 @@ class Anizen : MainAPI() {
             ?: emptyList()
         val year = html.findJsonString("premiered")?.let { Regex("""\d{4}""").find(it)?.value?.toIntOrNull() }
 
-        // FIX: Extract dataId from the watch page element attributes first (most reliable),
-        // then fall back to JSON, then fall back to URL slug.
-        // The site puts data-anime-id and data-data-id on anchor elements in search/home pages.
-        // On the watch page itself the same attributes appear on the player/info container.
-        val dataId = document.selectFirst("[data-data-id]")?.attr("data-data-id")?.trim()?.takeIf { it.isNotBlank() }
-            ?: document.selectFirst("[data-anime-id]")?.attr("data-anime-id")?.trim()?.takeIf { it.isNotBlank() }
+        // Extract dataId: use the URL slug directly since we confirmed data-data-id="odmau"
+        // for URL ending in "-odmau". The slug suffix IS the dataId.
+        // Special case: if the URL slug has no recognisable hash suffix (no digit in last segment),
+        // use the full path slug as dataId instead of just the last word.
+        val dataId = extractDataId(url)
             ?: html.findJsonString("dataId")
-            ?: extractSlugFromWatchUrl(url)
             ?: url.substringAfterLast("-").substringBefore("?").substringBefore("#")
 
         val totalEpisodes = html.findJsonInt("totalEpisodes")
@@ -138,8 +135,6 @@ class Anizen : MainAPI() {
             callback(link)
         }
 
-        // Keep all servers loading (restored original behaviour so hindi/abyss still appears).
-        // Only skip the very lowest-priority fallback servers once we already have links.
         response.servers.sortedBy { it.priority() }.forEach { server ->
             val embed = server.embed?.takeIf { it.isNotBlank() } ?: server.iframeUrl?.takeIf { it.isNotBlank() }
             if (embed != null) {
@@ -187,28 +182,33 @@ class Anizen : MainAPI() {
     }
 
     /**
-     * Extracts the unique ID slug from a /watch/ URL.
-     * Examples:
-     *   /watch/one-piece-odmau              -> "odmau"
-     *   /watch/naruto-shippuden-c8gov       -> "c8gov"
-     *   /watch/bleach-yaa9n                 -> "yaa9n"
-     *   /watch/smoking-behind-the-supermarket-with-you  -> null (no alphanumeric suffix; full slug is the id)
+     * Extracts the dataId from an AniZen /watch/ URL.
      *
-     * Rule: the last segment after the final "-" is the id ONLY when it is a short (<=8 char)
-     * alphanumeric token that contains at least one digit OR is clearly not an English word
-     * (i.e. looks like a hash). Otherwise the whole slug is used as the id.
+     * URL patterns observed:
+     *   /watch/one-piece-odmau           -> last part "odmau" contains digit+letters -> use it
+     *   /watch/naruto-shippuden-c8gov    -> "c8gov" has digit -> use it
+     *   /watch/bleach-yaa9n             -> "yaa9n" has digit -> use it
+     *   /watch/wistoria-wand-and-sword-season-2-dua04 -> "dua04" has digit -> use it
+     *   /watch/smoking-behind-the-supermarket-with-you -> "you" is all letters, no digit
+     *                                                     -> use full slug as dataId
+     *
+     * Rule confirmed by user: data-data-id="odmau" for /watch/one-piece-odmau
      */
-    private fun extractSlugFromWatchUrl(url: String): String? {
-        val path = url.substringBefore("?").substringBefore("#")
-        if (!path.contains("/watch/")) return null
-        val slug = path.substringAfterLast("/watch/").ifBlank { return null }
-        val lastPart = slug.substringAfterLast("-")
-        // Use lastPart as the id if it's short (<=8 chars), all alphanumeric, and contains a digit
-        // — these are the random hash suffixes like "odmau", "yaa9n", "c8gov", "0u851"
-        return if (lastPart.length <= 8 && lastPart.all { it.isLetterOrDigit() } && lastPart.any { it.isDigit() }) {
-            lastPart
+    private fun extractDataId(url: String): String? {
+        val cleanUrl = url.substringBefore("?").substringBefore("#")
+        if (!cleanUrl.contains("/watch/")) return null
+        val slug = cleanUrl.substringAfterLast("/watch/").substringAfterLast("/")
+        if (slug.isBlank()) return null
+        val lastSegment = slug.substringAfterLast("-")
+        // If the last segment is short (≤8 chars), alphanumeric, and has at least one digit,
+        // it's a hash-style ID suffix -> use it directly
+        return if (lastSegment.length in 3..8
+            && lastSegment.all { it.isLetterOrDigit() }
+            && lastSegment.any { it.isDigit() }
+        ) {
+            lastSegment
         } else {
-            // No recognizable hash suffix — use the full slug as the id (e.g. "smoking-behind-the-supermarket-with-you")
+            // No hash suffix -> full slug is the ID (e.g. "smoking-behind-the-supermarket-with-you")
             slug
         }
     }
@@ -226,14 +226,15 @@ class Anizen : MainAPI() {
         }
     }
 
+    // EpisodeData stores the clean dataId (e.g. "odmau") and episode number.
+    // fromString just splits on "|" — no further stripping needed since load()
+    // already stores only the clean ID.
     private data class EpisodeData(val dataId: String, val episode: Int) {
         override fun toString(): String = "$dataId|$episode"
 
         companion object {
             fun fromString(data: String): EpisodeData? {
                 val split = data.split("|")
-                // The first part is the raw dataId as stored by load() — it's already the clean id
-                // (e.g. "odmau", "c8gov", or a full slug). We do NOT strip it further.
                 val dataId = split.getOrNull(0)?.trim()?.takeIf { it.isNotBlank() } ?: return null
                 val episode = split.getOrNull(1)?.toIntOrNull() ?: 1
                 return EpisodeData(dataId, episode)

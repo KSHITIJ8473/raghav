@@ -25,6 +25,7 @@ import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.newExtractorLink
 import com.lagradost.cloudstream3.utils.loadExtractor
 import com.lagradost.cloudstream3.Score
+import kotlinx.coroutines.runBlocking
 
 class Miruro : MainAPI() {
     override var mainUrl = "https://www.miruro.ru"
@@ -205,19 +206,21 @@ class Miruro : MainAPI() {
         val providerEntries = parts.drop(2)  // ["prov1:id1", "prov2:id2", ...]
 
         val suffix = if (category == "dub") "Dub" else "Sub"
-        val wrappedCallback: suspend (ExtractorLink) -> Unit = { link ->
+        val wrappedCallback: (ExtractorLink) -> Unit = { link ->
             val newName = if (link.name.contains(suffix)) link.name else "${link.name} ($suffix)"
-            callback(
-                newExtractorLink(
-                    source = link.source,
-                    name = newName,
-                    url = link.url,
-                    type = link.type
-                ) {
-                    this.quality = link.quality
-                    this.headers = link.headers
-                }
-            )
+            runBlocking {
+                callback(
+                    newExtractorLink(
+                        source = link.source,
+                        name = newName,
+                        url = link.url,
+                        type = link.type
+                    ) {
+                        this.quality = link.quality
+                        this.headers = link.headers
+                    }
+                )
+            }
         }
 
         for (entry in providerEntries) {

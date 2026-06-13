@@ -204,6 +204,12 @@ class Miruro : MainAPI() {
         val anilistId = parts[1].toIntOrNull()
         val providerEntries = parts.drop(2)  // ["prov1:id1", "prov2:id2", ...]
 
+        val suffix = if (category == "dub") "Dub" else "Sub"
+        val wrappedCallback = { link: ExtractorLink ->
+            val newName = if (link.name.contains(suffix)) link.name else "${link.name} ($suffix)"
+            callback.invoke(link.copy(name = newName))
+        }
+
         for (entry in providerEntries) {
             val colonIdx = entry.indexOf(':')
             if (colonIdx < 0) continue
@@ -243,7 +249,7 @@ class Miruro : MainAPI() {
                     val qualityLabel = stream.quality ?: "Auto"
                     val fansubLabel = if (!stream.fansub.isNullOrEmpty()) " [${stream.fansub}]" else ""
 
-                    callback.invoke(
+                    wrappedCallback.invoke(
                         newExtractorLink(
                             source = "Miruro",
                             name = "Miruro $provider$fansubLabel - $qualityLabel",
@@ -264,7 +270,7 @@ class Miruro : MainAPI() {
                 for (stream in streams.filter { it.type == "mp4" && !it.url.isNullOrEmpty() }) {
                     val mp4Url = stream.url ?: continue
                     val referer = stream.referer ?: "$mainUrl/"
-                    callback.invoke(
+                    wrappedCallback.invoke(
                         newExtractorLink(
                             source = "Miruro",
                             name = "Miruro $provider (MP4)",
@@ -286,7 +292,7 @@ class Miruro : MainAPI() {
                     val embedUrl = stream.url ?: continue
                     val referer = stream.referer ?: "$mainUrl/"
                     try {
-                        loadExtractor(embedUrl, referer, subtitleCallback, callback)
+                        loadExtractor(embedUrl, referer, subtitleCallback, wrappedCallback)
                         foundSources = true
                     } catch (_: Exception) {}
                 }

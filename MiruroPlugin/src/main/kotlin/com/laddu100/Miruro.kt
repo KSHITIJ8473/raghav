@@ -39,7 +39,11 @@ class Miruro : MainAPI() {
         TvType.OVA
     )
 
+    // Order in which providers are checked / preferred
     private val providerOrder = listOf("kiwi", "pewe", "bonk", "bee", "ally", "hop", "moo")
+
+    // Providers that can serve a *real* English dub audio track
+    private val realDubProviders = listOf("bee", "moo", "ally", "hop", "bonk")
 
     override val mainPage = mainPageOf(
         "TRENDING" to "Trending",
@@ -58,7 +62,6 @@ class Miruro : MainAPI() {
         val responseText = anilistQuery(query, variables)
         val response = parseJson<AniListResponse>(responseText)
         val mediaList = response.data?.Page?.media ?: emptyList()
-
         val home = mediaList.mapNotNull { media ->
             val id = media.id ?: return@mapNotNull null
             val title = media.title?.english ?: media.title?.romaji ?: return@mapNotNull null
@@ -76,7 +79,6 @@ class Miruro : MainAPI() {
         val responseText = anilistQuery(SEARCH_QUERY, variables)
         val response = parseJson<AniListResponse>(responseText)
         val mediaList = response.data?.Page?.media ?: emptyList()
-
         return mediaList.mapNotNull { media ->
             val id = media.id ?: return@mapNotNull null
             val title = media.title?.english ?: media.title?.romaji ?: return@mapNotNull null
@@ -90,11 +92,9 @@ class Miruro : MainAPI() {
 
     override suspend fun load(url: String): LoadResponse? {
         val anilistId = Regex("""/info/(\d+)""").find(url)?.groupValues?.get(1)?.toIntOrNull() ?: return null
-
         val infoText = anilistQuery(INFO_QUERY, mapOf("id" to anilistId))
         val infoResponse = parseJson<AniListResponse>(infoText)
         val media = infoResponse.data?.Media ?: return null
-
         val title = media.title?.english ?: media.title?.romaji ?: "Unknown"
         val posterUrl = media.coverImage?.extraLarge ?: media.coverImage?.large
         val bannerUrl = media.bannerImage
@@ -102,7 +102,6 @@ class Miruro : MainAPI() {
         val year = media.seasonYear
         val tags = media.genres ?: emptyList()
         val animeScore = media.averageScore
-
         val tvType = when (media.format) {
             "MOVIE" -> TvType.AnimeMovie
             "OVA", "ONA" -> TvType.OVA
@@ -123,21 +122,28 @@ class Miruro : MainAPI() {
             val providers = episodesData.providers ?: emptyMap()
 
             // ── Sub episodes ──
+            // "moo" is a dub-only provider (AnimeGG), so it is excluded from sub mapping entirely.
             var bestSubProvider: String? = null
             var bestSubCount = 0
             for (provName in providerOrder) {
+                if (provName == "moo") continue
                 val subCount = providers[provName]?.episodes?.sub?.size ?: 0
                 val ssubCount = providers[provName]?.episodes?.ssub?.size ?: 0
                 val count = maxOf(subCount, ssubCount)
-                if (count > bestSubCount) { bestSubCount = count; bestSubProvider = provName }
+                if (count > bestSubCount) {
+                    bestSubCount = count
+                    bestSubProvider = provName
+                }
             }
+
             if (bestSubProvider != null) {
                 val epList = providers[bestSubProvider]!!.episodes!!.let { it.sub ?: it.ssub } ?: emptyList()
                 epList.forEach { ep ->
                     val epNum = ep.number ?: return@forEach
-                    // Format: sub|anilistId|prov1:id1|prov2:id2|prov3:id3
+                    // Format: sub|anilistId|prov1:id1|prov2:id2|...
                     val parts = mutableListOf("sub", anilistId.toString())
                     for (provName in providerOrder) {
+                        if (provName == "moo") continue
                         val subMatch = providers[provName]?.episodes?.sub?.firstOrNull { it.number == epNum }
                         val ssubMatch = providers[provName]?.episodes?.ssub?.firstOrNull { it.number == epNum }
                         val matchId = subMatch?.id ?: ssubMatch?.id
@@ -153,18 +159,22 @@ class Miruro : MainAPI() {
             }
 
             // ── Dub episodes ──
+            // Only build a dub list if one of the real dub providers actually has dubbed episodes.
             var bestDubProvider: String? = null
             var bestDubCount = 0
-            val realDubProviders = listOf("bee", "moo", "ally", "hop")
             for (provName in realDubProviders) {
                 val count = providers[provName]?.episodes?.dub?.size ?: 0
-                if (count > bestDubCount) { bestDubCount = count; bestDubProvider = provName }
+                if (count > bestDubCount) {
+                    bestDubCount = count
+                    bestDubProvider = provName
+                }
             }
+
             if (bestDubProvider != null) {
                 val dubList = providers[bestDubProvider]!!.episodes!!.dub!!
                 dubList.forEach { ep ->
                     val epNum = ep.number ?: return@forEach
-                    // Format: dub|anilistId|prov1:id1|prov2:id2|prov3:id3
+                    // Format: dub|anilistId|prov1:id1|prov2:id2|...
                     val parts = mutableListOf("dub", anilistId.toString())
                     for (provName in providerOrder) {
                         if (provName in realDubProviders) {
@@ -223,39 +233,24 @@ class Miruro : MainAPI() {
             // Determine which categories to query for this provider
             val categoriesToQuery = mutableListOf<String>()
             if (category == "dub") {
-                // Dubbed mode: only query providers that serve real English dubs
-                if (provider in listOf("bee", "moo", "ally", "hop")) {
+                // Dubbed mode: only query providers that serve a real English dub track.
+                // kiwi & pewe are skipped entirely here.
+                if (provider in realDubProviders) {
                     categoriesToQuery.add("dub")
+                    if (provider == "moo") {
+                        categoriesToQuery.add("sub") // moo's "sub" stream is actually the dub
+                    }
                 }
             } else {
-                // Subbed mode:
+                // Subbed mode: never request a provider's "dub" category.
+                // moo is dub-only and is skipped entirely here.
                 when (provider) {
-                    "kiwi", "pewe" -> {
-                        categoriesToQuery.add("sub")
-                        categoriesToQuery.add("dub") // kiwi/pewe dub is actually subbed
-                    }
-                    "bonk" -> {
-                        categoriesToQuery.add("ssub")
-                        categoriesToQuery.add("sub")
-                        categoriesToQuery.add("dub") // bonk dub is actually subbed
-                    }
-                    "ally" -> {
-                        categoriesToQuery.add("sub")
-                    }
-                    "hop" -> {
+                    "moo" -> { /* dub-only provider, no sub streams */ }
+                    "bonk", "hop", "bee" -> {
                         categoriesToQuery.add("ssub")
                         categoriesToQuery.add("sub")
                     }
-                    "bee" -> {
-                        categoriesToQuery.add("ssub")
-                        categoriesToQuery.add("sub")
-                    }
-                    "moo" -> {
-                        categoriesToQuery.add("sub")
-                    }
-                    else -> {
-                        categoriesToQuery.add("sub")
-                    }
+                    else -> categoriesToQuery.add("sub")
                 }
             }
 
@@ -269,18 +264,13 @@ class Miruro : MainAPI() {
                     if (anilistId != null) {
                         queryMap["anilistId"] = anilistId
                     }
-
                     val sourcesJson = miruroPipeRequest(mainUrl, "sources", queryMap)
                     val sourcesData = parseJson<MiruroSourcesResponse>(sourcesJson)
                     val streams = sourcesData.streams ?: continue
 
-                    // Determine suffix for labelling stream names
-                    // For kiwi/pewe/bonk, their "dub" category streams are actually subbed, so label them (Sub)
-                    val streamSuffix = if (queryCategory == "dub" && provider in listOf("bee", "moo", "ally", "hop")) {
-                        "Dub"
-                    } else {
-                        "Sub"
-                    }
+                    // Label every stream from this provider with whether the
+                    // player is currently in Sub or Dub mode.
+                    val streamSuffix = if (category == "dub") "Dub" else "Sub"
 
                     val wrappedCallback: (ExtractorLink) -> Unit = { link ->
                         val newName = if (link.name.contains(streamSuffix)) link.name else "${link.name} ($streamSuffix)"
@@ -306,7 +296,6 @@ class Miruro : MainAPI() {
                         val quality = qualityFromString(stream.quality)
                         val qualityLabel = stream.quality ?: "Auto"
                         val fansubLabel = if (!stream.fansub.isNullOrEmpty()) " [${stream.fansub}]" else ""
-
                         wrappedCallback.invoke(
                             newExtractorLink(
                                 source = "Miruro",
@@ -377,10 +366,10 @@ class Miruro : MainAPI() {
                             subtitleCallback.invoke(SubtitleFile(sub.lang ?: "English", sub.url))
                         }
                     }
-
                 } catch (_: Exception) {}
             }
         }
+
         return foundAnySources
     }
 

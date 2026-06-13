@@ -24,6 +24,7 @@ import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.newExtractorLink
 import com.lagradost.cloudstream3.utils.Qualities
+import com.lagradost.cloudstream3.Score
 
 class Miruro : MainAPI() {
     override var mainUrl = "https://www.miruro.ru"
@@ -128,7 +129,7 @@ class Miruro : MainAPI() {
         val plot = media.description?.replace(Regex("<[^>]*>"), "")  // Strip HTML tags
         val year = media.seasonYear
         val tags = media.genres ?: emptyList()
-        val rating = media.averageScore?.times(10) // AniList uses 0-100, CS uses 0-1000
+        val animeScore = media.averageScore // AniList uses 0-100
         val studio = media.studios?.nodes?.firstOrNull { it.isAnimationStudio == true }?.name
 
         val tvType = when (media.format) {
@@ -231,7 +232,7 @@ class Miruro : MainAPI() {
             this.year = year
             this.plot = plot
             this.tags = tags
-            this.rating = rating
+            if (animeScore != null) this.score = Score.from10((animeScore / 10).toString())
             this.showStatus = showStatus
             addAniListId(anilistId)
             if (subEpisodes.isNotEmpty()) addEpisodes(DubStatus.Subbed, subEpisodes)

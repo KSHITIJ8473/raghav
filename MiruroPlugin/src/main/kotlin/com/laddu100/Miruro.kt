@@ -215,7 +215,8 @@ class Miruro : MainAPI() {
                             allIds.add("$provName:${matchingEp.id}")
                         }
                     }
-                    val data = allIds.joinToString(",")
+                    // Prefix with dub~ so loadLinks passes category=dub to the API
+                    val data = "dub~" + allIds.joinToString(",")
 
                     dubEpisodes.add(newEpisode(data) {
                         this.name = ep.title ?: "Episode $epNum"
@@ -252,9 +253,11 @@ class Miruro : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        // Data format: prov1:epId1,prov2:epId2,prov3:epId3
-        // Each entry is a provider:episodeId pair to try
-        val entries = data.split(",")
+        // Data format: [dub~]prov1:epId1,prov2:epId2,prov3:epId3
+        // dub~ prefix means pass category=dub to get dubbed audio streams
+        val isDub = data.startsWith("dub~")
+        val cleanData = if (isDub) data.removePrefix("dub~") else data
+        val entries = cleanData.split(",")
         if (entries.isEmpty()) return false
 
         // Try each provider in order until one returns sources
@@ -267,10 +270,17 @@ class Miruro : MainAPI() {
             if (provider.isEmpty() || episodeId.isEmpty()) continue
 
             try {
+                // Build query - add category=dub for dubbed audio
+                val query = mutableMapOf<String, Any>(
+                    "episodeId" to episodeId,
+                    "provider" to provider
+                )
+                if (isDub) query["category"] = "dub"
+
                 val sourcesJson = miruroPipeRequest(
                     mainUrl,
                     "sources",
-                    mapOf("episodeId" to episodeId, "provider" to provider)
+                    query
                 )
                 val sourcesData = parseJson<MiruroSourcesResponse>(sourcesJson)
                 val streams = sourcesData.streams ?: continue

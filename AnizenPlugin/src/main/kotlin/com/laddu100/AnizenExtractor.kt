@@ -84,12 +84,30 @@ open class AnizenMegaPlay(private val sourceName: String = "MegaPlay") : Extract
 
         runCatching {
             val document = app.get(url, headers = headers).document
-            val id = Regex("""/stream/s-\d+/(\d+)""").find(url)?.groupValues?.get(1)
-                ?: document.selectFirst("#megaplay-player")?.attr("data-realid")?.takeIf { it.isNotBlank() }
-                ?: document.selectFirst("#megaplay-player")?.attr("data-id")?.takeIf { it.isNotBlank() }
-                ?: Regex("""data-realid=["'](\d+)""").find(document.html())?.groupValues?.get(1)
-                ?: Regex("""data-id=["'](\d+)""").find(document.html())?.groupValues?.get(1)
+            val pageHtml = document.html()
+
+            // Try to get the numeric ID used by getSources.
+            // The network tab shows getSources?id=363382 so the id is numeric.
+            // Try multiple locations in order of reliability:
+            val id =
+                // 1. From URL path like /stream/s-1/363382
+                Regex("""/stream/[^/]+/(\d+)""").find(url)?.groupValues?.get(1)
+                // 2. From URL query param like ?id=363382
+                ?: Regex("""[?&]id=(\d+)""").find(url)?.groupValues?.get(1)
+                // 3. data-realid attribute on player element
+                ?: document.selectFirst("[data-realid]")?.attr("data-realid")?.takeIf { it.isNotBlank() }
+                // 4. data-id attribute on player element
+                ?: document.selectFirst("#megaplay-player,[data-id]")?.attr("data-id")?.takeIf { it.matches(Regex("""\d+""")) }
+                // 5. Regex scan of raw HTML for data-realid="..."
+                ?: Regex("""data-realid=["'](\d+)["']""").find(pageHtml)?.groupValues?.get(1)
+                // 6. Regex scan of raw HTML for data-id="<numeric>"
+                ?: Regex("""data-id=["'](\d+)["']""").find(pageHtml)?.groupValues?.get(1)
+                // 7. JavaScript variable like var id = 363382 or const id=363382
+                ?: Regex("""(?:var|let|const)\s+id\s*=\s*["']?(\d+)["']?""").find(pageHtml)?.groupValues?.get(1)
+                // 8. getSources URL already present in page source (sometimes injected)
+                ?: Regex("""getSources\?id=(\d+)""").find(pageHtml)?.groupValues?.get(1)
                 ?: return@runCatching
+
             val response = app.get("$mainUrl/stream/getSources?id=$id", headers = headers).parsedSafe<Response>()
                 ?: return@runCatching
             val m3u8 = response.sources?.file ?: return@runCatching

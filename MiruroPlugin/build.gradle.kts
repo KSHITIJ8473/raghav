@@ -11,5 +11,5 @@ cloudstream {
         "AnimeMovie",
         "OVA"
     )
-    iconUrl = "https://www.miruro.ru/icon-512x512.png"
+    iconUrl = "https://repository-images.githubusercontent.com/567000493/281ea6b4-7159-4ac7-b5f1-34abf335c033"
 }

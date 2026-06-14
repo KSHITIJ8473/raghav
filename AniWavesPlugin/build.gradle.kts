@@ -2,7 +2,7 @@ version = 1
 
 cloudstream {
     language = "en"
-    description = "Anime from AniWaves with Sub and Dub support"
+    description = "Anime from AniWaves with only Sub support for now  "
     authors = listOf("KSHITIJ8473")
 
     status = 1

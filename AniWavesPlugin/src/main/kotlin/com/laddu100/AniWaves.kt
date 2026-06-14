@@ -179,8 +179,8 @@ class AniWaves : MainAPI() {
             val seenDub = mutableSetOf<Int>()
 
             for (ep in episodeElements) {
-                val dataIds = ep.attr("data-ids") // e.g. "81553&eps=1"
                 val epNum = ep.attr("data-num").toIntOrNull() ?: continue
+                val dataIds = "$animeId&eps=$epNum"
                 val hasSub = ep.attr("data-sub") == "1"
                 val hasDub = ep.attr("data-dub") == "1"
 

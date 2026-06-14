@@ -21,7 +21,6 @@ import com.lagradost.cloudstream3.newHomePageResponse
 import com.lagradost.cloudstream3.addDubStatus
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.loadExtractor
-import com.lagradost.cloudstream3.utils.newExtractorLink
 import org.jsoup.Jsoup
 
 class AniWaves : MainAPI() {
@@ -185,8 +184,8 @@ class AniWaves : MainAPI() {
                 val hasSub = ep.attr("data-sub") == "1"
                 val hasDub = ep.attr("data-dub") == "1"
 
-                // Episode data format: animeId|epNum|dataIds
-                val episodeData = "$animeId|$epNum|$dataIds"
+                // Episode data format: animeId|epNum|dataIds|watchUrl
+                val episodeData = "$animeId|$epNum|$dataIds|$url"
 
                 if (hasSub && seenSub.add(epNum)) {
                     subEpisodes.add(newEpisode("sub|$episodeData") {
@@ -223,7 +222,7 @@ class AniWaves : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        // Format: sub|animeId|epNum|dataIds  OR  dub|animeId|epNum|dataIds
+        // Format: sub|animeId|epNum|dataIds|watchUrl  OR  dub|animeId|epNum|dataIds|watchUrl
         val parts = data.split("|")
         if (parts.size < 4) return false
 
@@ -231,13 +230,14 @@ class AniWaves : MainAPI() {
         val animeId = parts[1]
         val epNum = parts[2]
         val dataIds = parts[3] // e.g. "81553&eps=1"
+        val watchUrl = parts.getOrNull(4) ?: "$mainUrl/watch/"
 
         // Step 1: Get server list for this episode
         val serverResponse = app.get(
             "$mainUrl/ajax/server/list?servers=$dataIds",
             headers = mapOf(
                 "X-Requested-With" to "XMLHttpRequest",
-                "Referer" to "$mainUrl/watch/"
+                "Referer" to watchUrl
             )
         ).parsed<AjaxResponse>()
 
@@ -245,14 +245,24 @@ class AniWaves : MainAPI() {
 
         val serverDoc = Jsoup.parse(serverResponse.result)
 
-        // Step 2: Prioritize target type based on selection but include both sub and dub
-        val targetTypes = if (dubOrSub == "dub") {
-            listOf("dub", "sub", "ssub")
-        } else {
-            listOf("sub", "ssub", "dub")
+        val targetTypes = when (dubOrSub) {
+            "dub" -> listOf("dub")
+            else -> listOf("sub")
         }
 
         var foundAnySources = false
+        val seenUrls = mutableSetOf<String>()
+        val linkCallback: (ExtractorLink) -> Unit = { link ->
+            foundAnySources = true
+            val suffix = " (${
+                when (dubOrSub) {
+                    "dub" -> "DUB"
+                    else -> "SUB"
+                }
+            })"
+            val newName = if (link.name.contains(suffix)) link.name else "${link.name}$suffix"
+            callback(link.copy(name = newName))
+        }
 
         for (targetType in targetTypes) {
             val typeSection = serverDoc.selectFirst(".type[data-type=$targetType]") ?: continue
@@ -262,7 +272,6 @@ class AniWaves : MainAPI() {
                 val svId = serverLi.attr("data-sv-id")
                 val serverName = serverLi.text().trim()
                 val displayName = serverNames[svId] ?: serverName
-                val typeLabel = targetType.uppercase()
 
                 if (linkId.isEmpty()) continue
 
@@ -272,50 +281,25 @@ class AniWaves : MainAPI() {
                         "$mainUrl/ajax/sources?id=$linkId&asi=0&autoPlay=0",
                         headers = mapOf(
                             "X-Requested-With" to "XMLHttpRequest",
-                            "Referer" to "$mainUrl/watch/"
+                            "Referer" to watchUrl
                         )
                     ).parsed<SourceResponse>()
 
                     if (sourceResponse.status?.toString() != "200") continue
                     val embedUrl = sourceResponse.result?.url ?: continue
-                    if (embedUrl.isEmpty()) continue
+                    if (embedUrl.isEmpty() || !seenUrls.add(embedUrl)) continue
 
-                    val suffix = " ($typeLabel)"
-
-                    val nameWithType = "$displayName$suffix"
                     val loaded = when {
                         embedUrl.contains("echovideo") || embedUrl.contains("weneverbeenfree.com") || embedUrl.contains("filemoon") || embedUrl.contains("myvidplay.com") -> {
-                            AniWavesWebView(nameWithType, embedUrl.baseUrl()).getUrl(embedUrl, "$mainUrl/", subtitleCallback, callback)
+                            AniWavesWebView("$displayName (${targetType.uppercase()})", embedUrl.baseUrl()).getUrl(embedUrl, watchUrl, subtitleCallback, linkCallback)
                             true
                         }
                         else -> {
-                            val collectedLinks = mutableListOf<ExtractorLink>()
-                            val result = loadExtractor(embedUrl, "$mainUrl/", subtitleCallback) { link ->
-                                collectedLinks.add(link)
-                            }
-
-                            for (link in collectedLinks) {
-                                val newName = if (link.name.contains(suffix)) link.name else "${link.name}$suffix"
-                                callback(
-                                    newExtractorLink(
-                                        source = link.source,
-                                        name = newName,
-                                        url = link.url,
-                                        type = link.type
-                                    ) {
-                                        this.quality = link.quality
-                                        this.referer = link.referer
-                                        this.headers = link.headers
-                                        this.extractorData = link.extractorData
-                                    }
-                                )
-                            }
-
-                            result
+                            loadExtractor(embedUrl, watchUrl, subtitleCallback, linkCallback)
                         }
                     }
-                    if (loaded) {
-                        foundAnySources = true
+                    if (loaded && foundAnySources) {
+                        return true
                     }
                 } catch (_: Exception) {
                     continue

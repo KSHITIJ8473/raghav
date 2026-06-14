@@ -6,7 +6,7 @@ cloudstream {
     status = 1
     tvTypes = listOf("Anime", "AnimeMovie", "OVA")
     language = "en"
-    iconUrl = "https://anikoto.cz/AnikotoTheme/assets/images/logo.png"
+    iconUrl = "https://aniwaves.ru/assets/images/aniwave.png"
    
 }
   

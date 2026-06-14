@@ -278,35 +278,17 @@ class AniWaves : MainAPI() {
                     val embedUrl = sourceResponse.result?.url ?: continue
                     if (embedUrl.isEmpty()) continue
 
-                    // Step 4: Use loadExtractor to resolve the embed URL
-                    try {
-                        loadExtractor(
-                            embedUrl,
-                            "$mainUrl/",
-                            subtitleCallback,
-                            callback
-                        )
+                    val loaded = when {
+                        embedUrl.contains("echovideo") || embedUrl.contains("weneverbeenfree.com") || embedUrl.contains("filemoon") || embedUrl.contains("myvidplay.com") -> {
+                            AniWavesWebView(displayName, embedUrl.baseUrl()).getUrl(embedUrl, "$mainUrl/", subtitleCallback, callback)
+                            true
+                        }
+                        else -> {
+                            loadExtractor(embedUrl, "$mainUrl/", subtitleCallback, callback)
+                        }
+                    }
+                    if (loaded) {
                         foundAnySources = true
-                    } catch (_: Exception) {
-                        // If loadExtractor fails, try our custom extractors
-                        try {
-                            when {
-                                embedUrl.contains("echovideo") -> {
-                                    AniWavesEchoVideo().getUrl(
-                                        embedUrl,
-                                        "$mainUrl/",
-                                        subtitleCallback,
-                                        callback
-                                    )
-                                    foundAnySources = true
-                                }
-                                else -> {
-                                    // Last resort: try loadExtractor with the domain
-                                    loadExtractor(embedUrl, "$mainUrl/", subtitleCallback, callback)
-                                    foundAnySources = true
-                                }
-                            }
-                        } catch (_: Exception) {}
                     }
                 } catch (_: Exception) {
                     continue
@@ -340,4 +322,8 @@ class AniWaves : MainAPI() {
         val intro: List<Int>? = null,
         val outro: List<Int>? = null
     )
+
+    private fun String.baseUrl(): String {
+        return Regex("""https?://[^/]+""").find(this)?.value ?: mainUrl
+    }
 }

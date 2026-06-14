@@ -1,7 +1,7 @@
 version = 1
 
 cloudstream {
-    description = "Anime from Anikoto.cz — Sub & Dub"
+    description = "not working anymore cloudfare protected "
     authors = listOf("KSHITIJ8473")
     status = 1
     tvTypes = listOf("Anime", "AnimeMovie", "OVA")

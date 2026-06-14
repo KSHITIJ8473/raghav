@@ -11,5 +11,5 @@ cloudstream {
         "AnimeMovie",
         "OVA"
     )
-    iconUrl = "https://www.google.com/s2/favicons?domain=animedubhindi.cc&sz=%size%"
+    iconUrl = "https://aniwaves.ru/assets/images/aniwave.png"
 }

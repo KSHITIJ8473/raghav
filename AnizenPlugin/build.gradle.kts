@@ -2,7 +2,7 @@ version = 1
 
 cloudstream {
     language = "en"
-    description = "AniZen anime with English sub, English dub, and Hindi servers"
+    description = "AniZen anime with English sub, English dub, and some Hindi servers"
     authors = listOf("KSHITIJ8473", "Codex")
 
     status = 3

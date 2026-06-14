@@ -164,15 +164,13 @@ class AniWaves : MainAPI() {
             )
         ).parsed<AjaxResponse>()
 
-        val subEpisodes = mutableListOf<Episode>()
-        val dubEpisodes = mutableListOf<Episode>()
+        val episodes = mutableListOf<Episode>()
 
         if (epResponse.status?.toString() == "200" && epResponse.result != null) {
             val epDoc = Jsoup.parse(epResponse.result)
             val episodeElements = epDoc.select("li a[data-ids]")
 
-            val seenSub = mutableSetOf<Int>()
-            val seenDub = mutableSetOf<Int>()
+            val seenEp = mutableSetOf<Int>()
 
             for (ep in episodeElements) {
                 val epNum = ep.attr("data-num").toIntOrNull() ?: continue
@@ -180,17 +178,10 @@ class AniWaves : MainAPI() {
                 val hasSub = ep.attr("data-sub") == "1"
                 val hasDub = ep.attr("data-dub") == "1"
 
-                val episodeData = "$animeId|$epNum|$dataIds|$url"
+                val episodeData = "mix|$animeId|$epNum|$dataIds|$url"
 
-                if (hasSub && seenSub.add(epNum)) {
-                    subEpisodes.add(newEpisode("sub|$episodeData") {
-                        this.name = "Episode $epNum"
-                        this.episode = epNum
-                    })
-                }
-
-                if (hasDub && seenDub.add(epNum)) {
-                    dubEpisodes.add(newEpisode("dub|$episodeData") {
+                if ((hasSub || hasDub) && seenEp.add(epNum)) {
+                    episodes.add(newEpisode(episodeData) {
                         this.name = "Episode $epNum"
                         this.episode = epNum
                     })
@@ -206,8 +197,7 @@ class AniWaves : MainAPI() {
             this.tags = tags
             this.showStatus = showStatus
             if (jpTitle != null) this.japName = jpTitle
-            if (subEpisodes.isNotEmpty()) addEpisodes(DubStatus.Subbed, subEpisodes)
-            if (dubEpisodes.isNotEmpty()) addEpisodes(DubStatus.Dubbed, dubEpisodes)
+            if (episodes.isNotEmpty()) addEpisodes(DubStatus.Subbed, episodes)
         }
     }
 
@@ -238,10 +228,10 @@ class AniWaves : MainAPI() {
 
         val serverDoc = Jsoup.parse(serverResponse.result)
 
-        val targetTypes = if (dubOrSub == "dub") {
-            listOf("dub")
-        } else {
-            listOf("sub", "ssub")
+        val targetTypes = when (dubOrSub) {
+            "dub" -> listOf("dub")
+            "sub" -> listOf("sub", "ssub")
+            else -> listOf("sub", "ssub", "dub")
         }
 
         var foundAnySources = false

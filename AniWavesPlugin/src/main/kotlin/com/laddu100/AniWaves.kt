@@ -254,14 +254,7 @@ class AniWaves : MainAPI() {
         val seenUrls = mutableSetOf<String>()
         val linkCallback: (ExtractorLink) -> Unit = { link ->
             foundAnySources = true
-            val suffix = " (${
-                when (dubOrSub) {
-                    "dub" -> "DUB"
-                    else -> "SUB"
-                }
-            })"
-            val newName = if (link.name.contains(suffix)) link.name else "${link.name}$suffix"
-            callback(link.copy(name = newName))
+            callback(link)
         }
 
         for (targetType in targetTypes) {

@@ -239,21 +239,21 @@ class AniWaves : MainAPI() {
         }
 
         val refererUrl = appendQuery(watchUrl, "type", dubOrSub)
-        val cookies = "prefered_source_type=$dubOrSub; prefered_server_type=$dubOrSub"
 
-        // Step 1: Get server list for this episode
-        val serverResponse = app.get(
-            "$mainUrl/ajax/server/list?servers=$dataIds",
-            headers = mapOf(
-                "X-Requested-With" to "XMLHttpRequest",
-                "Referer" to refererUrl,
-                "Cookie" to cookies
-            )
-        ).parsed<AjaxResponse>()
+        val serverResponses = listOf(refererUrl, watchUrl).distinct().mapNotNull { candidateReferer ->
+            runCatching {
+                app.get(
+                    "$mainUrl/ajax/server/list?servers=$dataIds",
+                    headers = mapOf(
+                        "X-Requested-With" to "XMLHttpRequest",
+                        "Referer" to candidateReferer
+                    )
+                ).parsed<AjaxResponse>()
+            }.getOrNull()
+        }.firstOrNull { it.status?.toString() == "200" && !it.result.isNullOrEmpty() }
+            ?: return false
 
-        if (serverResponse.status?.toString() != "200" || serverResponse.result.isNullOrEmpty()) return false
-
-        val serverDoc = Jsoup.parse(serverResponse.result)
+        val serverDoc = Jsoup.parse(serverResponses.result!!)
 
         var foundAnySources = false
         val seenUrls = mutableSetOf<String>()
@@ -274,28 +274,36 @@ class AniWaves : MainAPI() {
                 if (linkId.isEmpty()) continue
 
                 try {
-                    // Step 3: Get the embed URL from the sources endpoint
-                    val sourceTypeParam = "&type=$targetType"
-                    val sourceResponse = app.get(
-                        "$mainUrl/ajax/sources?id=$linkId&asi=0&autoPlay=0$sourceTypeParam",
-                        headers = mapOf(
-                            "X-Requested-With" to "XMLHttpRequest",
-                            "Referer" to refererUrl,
-                            "Cookie" to cookies
-                        )
-                    ).parsed<SourceResponse>()
+                    val sourceCandidates = listOf(
+                        "$mainUrl/ajax/sources?id=$linkId&asi=0&autoPlay=0&type=$targetType" to refererUrl,
+                        "$mainUrl/ajax/sources?id=$linkId&asi=0&autoPlay=0" to watchUrl
+                    ).distinctBy { it.first }
 
-                    if (sourceResponse.status?.toString() != "200") continue
-                    val embedUrl = sourceResponse.result?.url ?: continue
-                    if (embedUrl.isEmpty() || !seenUrls.add(embedUrl)) continue
+                    for ((sourceUrl, candidateReferer) in sourceCandidates) {
+                        val sourceResponse = runCatching {
+                            app.get(
+                                sourceUrl,
+                                headers = mapOf(
+                                    "X-Requested-With" to "XMLHttpRequest",
+                                    "Referer" to candidateReferer
+                                )
+                            ).parsed<SourceResponse>()
+                        }.getOrNull() ?: continue
 
-                    when {
-                        embedUrl.contains("echovideo") || embedUrl.contains("weneverbeenfree.com") || embedUrl.contains("filemoon") || embedUrl.contains("myvidplay.com") -> {
-                            AniWavesWebView("$displayName (${targetType.uppercase()})", embedUrl.baseUrl()).getUrl(embedUrl, refererUrl, subtitleCallback, linkCallback)
+                        if (sourceResponse.status?.toString() != "200") continue
+                        val embedUrl = sourceResponse.result?.url?.takeIf { it.isNotBlank() } ?: continue
+                        if (!seenUrls.add(embedUrl)) continue
+
+                        when {
+                            embedUrl.contains("echovideo") || embedUrl.contains("weneverbeenfree.com") || embedUrl.contains("filemoon") || embedUrl.contains("myvidplay.com") -> {
+                                AniWavesWebView("$displayName (${targetType.uppercase()})", embedUrl.baseUrl()).getUrl(embedUrl, candidateReferer, subtitleCallback, linkCallback)
+                            }
+                            else -> {
+                                loadExtractor(embedUrl, candidateReferer, subtitleCallback, linkCallback)
+                            }
                         }
-                        else -> {
-                            loadExtractor(embedUrl, refererUrl, subtitleCallback, linkCallback)
-                        }
+
+                        if (foundAnySources) break
                     }
                 } catch (_: Exception) {
                     continue

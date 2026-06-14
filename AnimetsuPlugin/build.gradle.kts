@@ -2,7 +2,7 @@ version = 1
 
 cloudstream {
     language = "en"
-    description = "Anime from Animetsu with Sub and Dub support"
+    description = "not working cloudfare protected"
     authors = listOf("KSHITIJ8473")
 
     status = 1

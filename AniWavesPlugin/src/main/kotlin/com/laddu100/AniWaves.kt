@@ -170,7 +170,7 @@ class AniWaves : MainAPI() {
         val subEpisodes = mutableListOf<Episode>()
         val dubEpisodes = mutableListOf<Episode>()
 
-        if (epResponse.status == 200 && epResponse.result != null) {
+        if (epResponse.status?.toString() == "200" && epResponse.result != null) {
             val epDoc = Jsoup.parse(epResponse.result)
             val episodeElements = epDoc.select("li a[data-ids]")
 
@@ -240,14 +240,15 @@ class AniWaves : MainAPI() {
             )
         ).parsed<AjaxResponse>()
 
-        if (serverResponse.status != 200 || serverResponse.result.isNullOrEmpty()) return false
+        if (serverResponse.status?.toString() != "200" || serverResponse.result.isNullOrEmpty()) return false
 
         val serverDoc = Jsoup.parse(serverResponse.result)
 
-        // Step 2: Find servers matching the requested type (sub or dub)
-        val targetTypes = when (dubOrSub) {
-            "dub" -> listOf("dub")
-            else -> listOf("sub", "ssub") // For sub, also include ssub (soft sub)
+        // Step 2: Prioritize target type based on selection but include both sub and dub
+        val targetTypes = if (dubOrSub == "dub") {
+            listOf("dub", "sub", "ssub")
+        } else {
+            listOf("sub", "ssub", "dub")
         }
 
         var foundAnySources = false
@@ -274,17 +275,24 @@ class AniWaves : MainAPI() {
                         )
                     ).parsed<SourceResponse>()
 
-                    if (sourceResponse.status != 200) continue
+                    if (sourceResponse.status?.toString() != "200") continue
                     val embedUrl = sourceResponse.result?.url ?: continue
                     if (embedUrl.isEmpty()) continue
 
+                    val suffix = " ($typeLabel)"
+                    val wrappedCallback = { link: ExtractorLink ->
+                        val newName = if (link.name.contains(suffix)) link.name else "${link.name}$suffix"
+                        callback(link.copy(name = newName))
+                    }
+
+                    val nameWithType = "$displayName$suffix"
                     val loaded = when {
                         embedUrl.contains("echovideo") || embedUrl.contains("weneverbeenfree.com") || embedUrl.contains("filemoon") || embedUrl.contains("myvidplay.com") -> {
-                            AniWavesWebView(displayName, embedUrl.baseUrl()).getUrl(embedUrl, "$mainUrl/", subtitleCallback, callback)
+                            AniWavesWebView(nameWithType, embedUrl.baseUrl()).getUrl(embedUrl, "$mainUrl/", subtitleCallback, callback)
                             true
                         }
                         else -> {
-                            loadExtractor(embedUrl, "$mainUrl/", subtitleCallback, callback)
+                            loadExtractor(embedUrl, "$mainUrl/", subtitleCallback, wrappedCallback)
                         }
                     }
                     if (loaded) {
@@ -301,12 +309,12 @@ class AniWaves : MainAPI() {
 
     // Data classes for AJAX responses
     data class AjaxResponse(
-        val status: Int = 0,
+        val status: Any? = null,
         val result: String? = null
     )
 
     data class SourceResponse(
-        val status: Int = 0,
+        val status: Any? = null,
         val result: SourceResult? = null
     )
 

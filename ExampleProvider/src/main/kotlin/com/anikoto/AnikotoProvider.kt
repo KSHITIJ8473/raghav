@@ -202,60 +202,73 @@ class AnikotoProvider : MainAPI() {
     )
 
     private fun jsonResultString(json: String): String {
-        return runCatching {
+        return try {
             val obj = JsonParser.parseString(json).asJsonObject
-            if (obj.get("status")?.asInt != 200) return ""
-            obj.get("result")?.asString.orEmpty()
-        }.getOrDefault("")
+            if (obj.get("status")?.asInt != 200) ""
+            else obj.get("result")?.asString.orEmpty()
+        } catch (e: Exception) {
+            ""
+        }
     }
 
     private fun jsonResultUrl(json: String): String? {
-        return runCatching {
+        return try {
             val obj = JsonParser.parseString(json).asJsonObject
-            if (obj.get("status")?.asInt != 200) return null
-            obj.get("result")?.asJsonObject?.get("url")?.asString
-        }.getOrNull()
+            if (obj.get("status")?.asInt != 200) null
+            else obj.get("result")?.asJsonObject?.get("url")?.asString
+        } catch (e: Exception) {
+            null
+        }
     }
 
     private suspend fun refreshServerIds(referer: String, slug: String, fallback: String): String? {
         if (slug.isBlank()) return null
-        return runCatching {
+        return try {
             val animeId = app.get(referer).document
                 .selectFirst("#watch-main")
                 ?.attr("data-id")
                 .orEmpty()
-            if (animeId.isBlank()) return@runCatching null
-
-            val json = app.get(
-                "$mainUrl/ajax/episode/list/$animeId",
-                referer = referer,
-                headers = ajaxHeaders(referer)
-            ).text
-            val html = jsonResultString(json)
-            val episode = Jsoup.parse(html).selectFirst("a[data-slug=\"$slug\"]") ?: return@runCatching null
-            episode.attr("data-ids").takeIf { it.isNotBlank() }
-        }.getOrNull() ?: fallback.takeIf { it.isNotBlank() }
+            if (animeId.isBlank()) null
+            else {
+                val json = app.get(
+                    "$mainUrl/ajax/episode/list/$animeId",
+                    referer = referer,
+                    headers = ajaxHeaders(referer)
+                ).text
+                val html = jsonResultString(json)
+                val episode = Jsoup.parse(html).selectFirst("a[data-slug=\"$slug\"]")
+                episode?.attr("data-ids")?.takeIf { it.isNotBlank() }
+            }
+        } catch (e: Exception) {
+            null
+        } ?: fallback.takeIf { it.isNotBlank() }
     }
 
     private suspend fun getEpisodeMeta(referer: String, serverIds: String): EpisodeMeta? {
-        return runCatching {
+        return try {
             val animeDoc = app.get(referer).document
             val animeId = animeDoc.selectFirst("#watch-main")?.attr("data-id").orEmpty()
-            if (animeId.isBlank()) return@runCatching null
-
-            val json = app.get(
-                "$mainUrl/ajax/episode/list/$animeId",
-                referer = referer,
-                headers = ajaxHeaders(referer)
-            ).text
-            val html = jsonResultString(json)
-            val episode = Jsoup.parse(html).selectFirst("a[data-ids=\"$serverIds\"]") ?: return@runCatching null
-            EpisodeMeta(
-                episode.attr("data-mal"),
-                episode.attr("data-slug"),
-                episode.attr("data-timestamp")
-            )
-        }.getOrNull()
+            if (animeId.isBlank()) null
+            else {
+                val json = app.get(
+                    "$mainUrl/ajax/episode/list/$animeId",
+                    referer = referer,
+                    headers = ajaxHeaders(referer)
+                ).text
+                val html = jsonResultString(json)
+                val episode = Jsoup.parse(html).selectFirst("a[data-ids=\"$serverIds\"]")
+                if (episode == null) null
+                else {
+                    EpisodeMeta(
+                        episode.attr("data-mal"),
+                        episode.attr("data-slug"),
+                        episode.attr("data-timestamp")
+                    )
+                }
+            }
+        } catch (e: Exception) {
+            null
+        }
     }
 
     private suspend fun getMappedServerIds(meta: EpisodeMeta?, audioType: String): List<String> {
@@ -264,15 +277,19 @@ class AnikotoProvider : MainAPI() {
         val timestamp = meta?.timestamp.orEmpty()
         if (malId.isBlank() || slug.isBlank() || timestamp.isBlank()) return emptyList()
 
-        return runCatching {
+        return try {
             val json = app.get("https://mapper.nekostream.site/api/mal/$malId/$slug/$timestamp").text
             val obj = JsonParser.parseString(json).asJsonObject
             obj.entrySet().flatMap { (_, value) ->
-                if (!value.isJsonObject) return@flatMap emptyList()
-                val source = value.asJsonObject
-                listOfNotNull(source[audioType]?.asJsonObject?.get("url")?.asString)
+                if (!value.isJsonObject) emptyList()
+                else {
+                    val source = value.asJsonObject
+                    listOfNotNull(source[audioType]?.asJsonObject?.get("url")?.asString)
+                }
             }
-        }.getOrDefault(emptyList())
+        } catch (e: Exception) {
+            emptyList()
+        }
     }
 
     private data class EpisodeMeta(
@@ -331,16 +348,15 @@ class AnikotoProvider : MainAPI() {
     }
 
     private fun getHashM3u8(url: String): String? {
-        return url.substringAfter("#", "")
+        val encoded = url.substringAfter("#", "")
             .substringBefore("#")
-            .takeIf { it.isNotBlank() }
-            ?.let { encoded ->
-                runCatching {
-                    String(Base64.decode(encoded, Base64.DEFAULT))
-                }.getOrNull()
-            }
-            ?.let { proxyPlayerHost(it) }
-            ?.takeIf { it.startsWith("http") && it.contains(".m3u8") }
+            .takeIf { it.isNotBlank() } ?: return null
+        val decoded = try {
+            String(Base64.decode(encoded, Base64.DEFAULT))
+        } catch (e: Exception) {
+            null
+        } ?: return null
+        return proxyPlayerHost(decoded).takeIf { it.startsWith("http") && it.contains(".m3u8") }
     }
 
     private fun proxyPlayerHost(url: String): String {

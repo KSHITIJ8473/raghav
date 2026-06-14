@@ -74,18 +74,22 @@ open class MegaPlay : ExtractorApi() {
                 "Referer" to url,
             )
 
-            val jsonText = runCatching {
+            val jsonText = try {
                 app.get(
                     "$host/stream/getSources?id=$streamId&type=$type",
                     headers = ajaxHeaders,
                     referer = url
                 ).text
-            }.getOrElse {
-                Log.e("MegaPlay", "getSources failed: ${it.message}")
+            } catch (e: Exception) {
+                Log.e("MegaPlay", "getSources failed: ${e.message}")
                 return
             }
 
-            val root = runCatching { JsonParser.parseString(jsonText).asJsonObject }.getOrNull() ?: return
+            val root = try {
+                JsonParser.parseString(jsonText).asJsonObject
+            } catch (e: Exception) {
+                null
+            } ?: return
             val m3u8 = root.getAsJsonObject("sources")?.get("file")?.asString
             if (m3u8.isNullOrBlank()) {
                 Log.e("MegaPlay", "No m3u8 in response for id=$streamId")
@@ -104,20 +108,24 @@ open class MegaPlay : ExtractorApi() {
                 )
             }
 
-            runCatching {
-                val tracks = root.getAsJsonArray("tracks") ?: return@runCatching
-                for (element in tracks) {
-                    val track = element.asJsonObject
-                    val kind = track.get("kind")?.asString ?: continue
-                    if (kind != "captions" && kind != "subtitles") continue
-                    val file = track.get("file")?.asString ?: continue
-                    val label = track.get("label")?.asString ?: "Unknown"
-                    subtitleCallback(
-                        newSubtitleFile(label, file) {
-                            this.headers = playbackHeaders
-                        }
-                    )
+            try {
+                val tracks = root.getAsJsonArray("tracks")
+                if (tracks != null) {
+                    for (element in tracks) {
+                        val track = element.asJsonObject
+                        val kind = track.get("kind")?.asString ?: continue
+                        if (kind != "captions" && kind != "subtitles") continue
+                        val file = track.get("file")?.asString ?: continue
+                        val label = track.get("label")?.asString ?: "Unknown"
+                        subtitleCallback(
+                            newSubtitleFile(label, file) {
+                                this.headers = playbackHeaders
+                            }
+                        )
+                    }
                 }
+            } catch (e: Exception) {
+                // ignore
             }
         }
     }

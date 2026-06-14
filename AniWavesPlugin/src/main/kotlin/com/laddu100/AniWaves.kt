@@ -235,9 +235,10 @@ class AniWaves : MainAPI() {
 
         val serverDoc = Jsoup.parse(serverResponse.result)
 
-        val targetTypes = when (dubOrSub) {
-            "dub" -> listOf("dub")
-            else -> listOf("sub")
+        val targetTypes = if (dubOrSub == "dub") {
+            listOf("dub", "sub", "ssub")
+        } else {
+            listOf("sub", "ssub", "dub")
         }
 
         var foundAnySources = false
@@ -280,8 +281,8 @@ class AniWaves : MainAPI() {
                             loadExtractor(embedUrl, watchUrl, subtitleCallback, linkCallback)
                         }
                     }
-                    if (loaded && foundAnySources) {
-                        return true
+                    if (loaded) {
+                        foundAnySources = true
                     }
                 } catch (_: Exception) {
                     continue

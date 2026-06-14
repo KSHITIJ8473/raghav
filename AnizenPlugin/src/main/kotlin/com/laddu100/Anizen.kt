@@ -138,7 +138,7 @@ class Anizen : MainAPI() {
         response.servers.sortedBy { it.priority() }.forEach { server ->
             val embed = server.embed?.takeIf { it.isNotBlank() } ?: server.iframeUrl?.takeIf { it.isNotBlank() }
             if (embed != null) {
-                if (loadedLinks && server.priority() >= 6) return@forEach
+                if (loadedLinks && server.priority() >= 5) return@forEach
                 val sourceName = listOf(server.serverName, server.type.uppercase())
                     .filter { it.isNotBlank() }
                     .distinct()
@@ -152,7 +152,7 @@ class Anizen : MainAPI() {
                     }
                     embed.contains("megaplay.buzz") -> AnizenMegaPlay(sourceName).getUrl(embed, mainUrl, subtitleCallback, wrappedCallback)
                     embed.contains("vidwish.live") -> AnizenVidWish(sourceName).getUrl(embed, mainUrl, subtitleCallback, wrappedCallback)
-                    embed.contains("playerp2p.live") || embed.contains("gdmirrorbot.") || embed.contains("boosterx.") || embed.contains("oiiaoiia.stream") || embed.contains("bysesukior.com") || embed.contains("filemoon") -> {
+                    embed.contains("playerp2p.live") || embed.contains("gdmirrorbot.") || embed.contains("boosterx.") -> {
                         AnizenWebView(sourceName, embed.baseUrl()).getUrl(embed, mainUrl, subtitleCallback, wrappedCallback)
                     }
                     else -> loadExtractor(embed, mainUrl, subtitleCallback, wrappedCallback)
@@ -244,13 +244,11 @@ class Anizen : MainAPI() {
         return when {
             key.contains("gdmirror") || key.contains("mirror") || key.contains("default") -> 0
             key.contains("ryzex") || key.contains("abyss") -> 1
-            key.contains("vmoly") || key.contains("vidmoly") -> 2
-            key.contains("filemoon") -> 3
+            key.contains("megaplay") || key.contains("vidstream") -> 2
+            key.contains("vidwish") || key.contains("vidcloud") -> 3
             key.contains("boosterx") || key.contains("playerx") -> 4
             key.contains("vidstack") || key.contains("playerp2p") || key.contains("streamp2p") -> 5
-            key.contains("megaplay") || key.contains("vidstream") -> 6
-            key.contains("vidwish") || key.contains("vidcloud") -> 7
-            else -> 8
+            else -> 6
         }
     }
 
@@ -286,4 +284,3 @@ class Anizen : MainAPI() {
 
     class ErrorLoadingException(message: String) : RuntimeException(message)
 }
-                  

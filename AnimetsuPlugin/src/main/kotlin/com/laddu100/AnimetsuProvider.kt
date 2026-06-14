@@ -4,6 +4,7 @@ import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
+import com.lagradost.cloudstream3.network.CloudflareKiller
 import java.net.URLEncoder
 
 class AnimetsuProvider : MainAPI() {
@@ -29,15 +30,28 @@ class AnimetsuProvider : MainAPI() {
 
     private val apiBase = "https://animetsu.live/v2/api"
     private val proxyBase = "https://swiftstream.top/proxy"
+    private val cfKiller = CloudflareKiller()
+
+    private suspend fun apiGet(url: String): String {
+        return app.get(
+            url = url,
+            headers = mapOf(
+                "Accept" to "application/json, text/plain, */*",
+                "Origin" to mainUrl,
+                "Referer" to "$mainUrl/"
+            ),
+            interceptor = cfKiller
+        ).text
+    }
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val items = if (request.data == "recent") {
-            val responseText = app.get("$apiBase/anime/recent?page=$page&per_page=20").text
+            val responseText = apiGet("$apiBase/anime/recent?page=$page&per_page=20")
             val response = parseJson<PaginatedResponse>(responseText)
             response.results?.map { it.toSearchResponse() } ?: emptyList()
         } else {
             if (page > 1) return newHomePageResponse(request.name, emptyList())
-            val responseText = app.get("$apiBase/anime/home").text
+            val responseText = apiGet("$apiBase/anime/home")
             val response = parseJson<HomeResponse>(responseText)
             val list = when (request.data) {
                 "seasonal" -> response.seasonal
@@ -54,7 +68,7 @@ class AnimetsuProvider : MainAPI() {
 
     override suspend fun search(query: String): List<SearchResponse> {
         val encodedQuery = URLEncoder.encode(query, "UTF-8")
-        val responseText = app.get("$apiBase/anime/search/?query=$encodedQuery").text
+        val responseText = apiGet("$apiBase/anime/search/?query=$encodedQuery")
         val response = parseJson<PaginatedResponse>(responseText)
         return response.results?.map { it.toSearchResponse() } ?: emptyList()
     }
@@ -66,10 +80,10 @@ class AnimetsuProvider : MainAPI() {
             url
         }
 
-        val infoText = app.get("$apiBase/anime/info/$animeId").text
+        val infoText = apiGet("$apiBase/anime/info/$animeId")
         val info = parseJson<AnimeInfo>(infoText)
 
-        val epsText = app.get("$apiBase/anime/eps/$animeId").text
+        val epsText = apiGet("$apiBase/anime/eps/$animeId")
         val eps = parseJson<List<EpisodeItem>>(epsText)
 
         val title = info.title?.english ?: info.title?.romaji ?: info.title?.native ?: "Unknown"
@@ -89,11 +103,11 @@ class AnimetsuProvider : MainAPI() {
         var hasDub = false
         if (eps.isNotEmpty()) {
             val firstEpNum = eps[0].epNum
-            val serversText = app.get("$apiBase/anime/servers/$animeId/$firstEpNum").text
+            val serversText = apiGet("$apiBase/anime/servers/$animeId/$firstEpNum")
             val servers = parseJson<List<ServerItem>>(serversText)
             if (servers.isNotEmpty()) {
                 val defaultServer = servers.firstOrNull { it.default } ?: servers[0]
-                val oppaiText = app.get("$apiBase/anime/oppai/$animeId/$firstEpNum?server=${defaultServer.id}&source_type=dub").text
+                val oppaiText = apiGet("$apiBase/anime/oppai/$animeId/$firstEpNum?server=${defaultServer.id}&source_type=dub")
                 val oppaiRes = parseJson<OppaiResponse>(oppaiText)
                 if (oppaiRes.sources != null && oppaiRes.sources.isNotEmpty()) {
                     hasDub = true
@@ -146,13 +160,13 @@ class AnimetsuProvider : MainAPI() {
         val epNum = parts[2]
         val sourceType = parts[3] // "sub" or "dub"
 
-        val serversText = app.get("$apiBase/anime/servers/$animeId/$epNum").text
+        val serversText = apiGet("$apiBase/anime/servers/$animeId/$epNum")
         val servers = parseJson<List<ServerItem>>(serversText)
 
         var found = false
         for (server in servers) {
             try {
-                val oppaiText = app.get("$apiBase/anime/oppai/$animeId/$epNum?server=${server.id}&source_type=$sourceType").text
+                val oppaiText = apiGet("$apiBase/anime/oppai/$animeId/$epNum?server=${server.id}&source_type=$sourceType")
                 val oppaiRes = parseJson<OppaiResponse>(oppaiText)
                 
                 val sources = oppaiRes.sources ?: continue

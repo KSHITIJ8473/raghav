@@ -23,19 +23,19 @@ class AnikotoProvider : MainAPI() {
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val doc = app.get("${request.data}?page=$page").document
+        val doc = app.get("${request.data}?page=$page", headers = browserHeaders).document
         val items = doc.select("div.ani.items div.item").mapNotNull { it.toSearchResult() }
         return newHomePageResponse(request.name, items)
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
         val encodedQuery = URLEncoder.encode(query, "UTF-8")
-        val doc = app.get("$mainUrl/filter?keyword=$encodedQuery").document
+        val doc = app.get("$mainUrl/filter?keyword=$encodedQuery", headers = browserHeaders).document
         return doc.select("div.ani.items div.item").mapNotNull { it.toSearchResult() }
     }
 
     override suspend fun load(url: String): LoadResponse? {
-        val doc = app.get(url).document
+        val doc = app.get(url, headers = browserHeaders).document
         val title = doc.selectFirst("#w-info h1.title, h1[itemprop=name]")?.text()?.trim() ?: return null
         val poster = doc.selectFirst("#w-info .poster img, img[itemprop=image]")?.attr("src")
         val description = doc.selectFirst("#w-info .synopsis .content, #w-info .synopsis")?.text()
@@ -190,13 +190,14 @@ class AnikotoProvider : MainAPI() {
     }
 
     private fun ajaxHeaders(referer: String) = mapOf(
+        "User-Agent" to USER_AGENT,
         "X-Requested-With" to "XMLHttpRequest",
         "Accept" to "application/json, text/javascript, */*; q=0.01",
         "Referer" to referer,
     )
 
     private val browserHeaders = mapOf(
-        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "User-Agent" to USER_AGENT,
         "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Accept-Language" to "en-US,en;q=0.5",
     )
@@ -224,7 +225,7 @@ class AnikotoProvider : MainAPI() {
     private suspend fun refreshServerIds(referer: String, slug: String, fallback: String): String? {
         if (slug.isBlank()) return null
         return try {
-            val animeId = app.get(referer).document
+            val animeId = app.get(referer, headers = browserHeaders).document
                 .selectFirst("#watch-main")
                 ?.attr("data-id")
                 .orEmpty()
@@ -246,7 +247,7 @@ class AnikotoProvider : MainAPI() {
 
     private suspend fun getEpisodeMeta(referer: String, serverIds: String): EpisodeMeta? {
         return try {
-            val animeDoc = app.get(referer).document
+            val animeDoc = app.get(referer, headers = browserHeaders).document
             val animeId = animeDoc.selectFirst("#watch-main")?.attr("data-id").orEmpty()
             if (animeId.isBlank()) null
             else {

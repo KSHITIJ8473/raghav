@@ -22,6 +22,9 @@ import com.lagradost.cloudstream3.newHomePageResponse
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.loadExtractor
 import org.jsoup.Jsoup
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 
 class AniWaves : MainAPI() {
     override var mainUrl = "https://aniwaves.ru"
@@ -213,9 +216,9 @@ class AniWaves : MainAPI() {
         isCasting: Boolean,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
-    ): Boolean {
+    ): Boolean = coroutineScope {
         val parts = data.split("|")
-        if (parts.size < 4) return false
+        if (parts.size < 4) return@coroutineScope false
 
         val dubOrSub = parts[0]
         val animeId = parts[1]
@@ -231,34 +234,45 @@ class AniWaves : MainAPI() {
             )
         ).parsed<AjaxResponse>()
 
-        if (serverResponse.status?.toString() != "200" || serverResponse.result.isNullOrEmpty()) return false
+        if (serverResponse.status?.toString() != "200" || serverResponse.result.isNullOrEmpty()) return@coroutineScope false
 
         val serverDoc = Jsoup.parse(serverResponse.result)
 
         val targetTypes = if (dubOrSub == "dub") {
-            listOf("dub", "sub", "ssub")
+            listOf("dub")
         } else {
-            listOf("sub", "ssub", "dub")
+            listOf("sub", "ssub")
         }
 
         var foundAnySources = false
         val seenUrls = mutableSetOf<String>()
         val linkCallback: (ExtractorLink) -> Unit = { link ->
-            foundAnySources = true
+            synchronized(seenUrls) {
+                foundAnySources = true
+            }
             callback(link)
         }
 
+        val serversToLoad = mutableListOf<Triple<String, String, String>>()
+
         for (targetType in targetTypes) {
             val typeSection = serverDoc.selectFirst(".type[data-type=$targetType]") ?: continue
-
             for (serverLi in typeSection.select("li[data-link-id]")) {
                 val linkId = serverLi.attr("data-link-id")
                 val svId = serverLi.attr("data-sv-id")
                 val serverName = serverLi.text().trim()
                 val displayName = serverNames[svId] ?: serverName
 
-                if (linkId.isEmpty()) continue
+                if (linkId.isNotEmpty()) {
+                    serversToLoad.add(Triple(linkId, displayName, targetType))
+                }
+            }
+        }
 
+        if (serversToLoad.isEmpty()) return@coroutineScope false
+
+        val deferreds = serversToLoad.map { (linkId, displayName, targetType) ->
+            async {
                 try {
                     val sourceResponse = app.get(
                         "$mainUrl/ajax/sources?id=$linkId&asi=0&autoPlay=0",
@@ -268,9 +282,14 @@ class AniWaves : MainAPI() {
                         )
                     ).parsed<SourceResponse>()
 
-                    if (sourceResponse.status?.toString() != "200") continue
-                    val embedUrl = sourceResponse.result?.url ?: continue
-                    if (embedUrl.isEmpty() || !seenUrls.add(embedUrl)) continue
+                    if (sourceResponse.status?.toString() != "200") return@async
+                    val embedUrl = sourceResponse.result?.url ?: return@async
+                    if (embedUrl.isEmpty()) return@async
+
+                    val isNew = synchronized(seenUrls) {
+                        seenUrls.add(embedUrl)
+                    }
+                    if (!isNew) return@async
 
                     val loaded = when {
                         embedUrl.contains("echovideo") || embedUrl.contains("weneverbeenfree.com") || embedUrl.contains("filemoon") || embedUrl.contains("myvidplay.com") -> {
@@ -282,15 +301,17 @@ class AniWaves : MainAPI() {
                         }
                     }
                     if (loaded) {
-                        foundAnySources = true
+                        synchronized(seenUrls) {
+                            foundAnySources = true
+                        }
                     }
                 } catch (_: Exception) {
-                    continue
                 }
             }
         }
 
-        return foundAnySources
+        deferreds.awaitAll()
+        return@coroutineScope foundAnySources
     }
 
     data class AjaxResponse(

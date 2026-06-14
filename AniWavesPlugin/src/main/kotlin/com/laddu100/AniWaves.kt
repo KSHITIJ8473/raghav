@@ -21,6 +21,7 @@ import com.lagradost.cloudstream3.newHomePageResponse
 import com.lagradost.cloudstream3.addDubStatus
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.loadExtractor
+import com.lagradost.cloudstream3.utils.newExtractorLink
 import org.jsoup.Jsoup
 
 class AniWaves : MainAPI() {
@@ -282,7 +283,19 @@ class AniWaves : MainAPI() {
                     val suffix = " ($typeLabel)"
                     val wrappedCallback = { link: ExtractorLink ->
                         val newName = if (link.name.contains(suffix)) link.name else "${link.name}$suffix"
-                        callback(link.copy(name = newName))
+                        callback(
+                            newExtractorLink(
+                                source = link.source,
+                                name = newName,
+                                url = link.url,
+                                type = link.type
+                            ) {
+                                this.quality = link.quality
+                                this.referer = link.referer
+                                this.headers = link.headers
+                                this.extractorData = link.extractorData
+                            }
+                        )
                     }
 
                     val nameWithType = "$displayName$suffix"

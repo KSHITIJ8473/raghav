@@ -11,5 +11,5 @@ cloudstream {
         "AnimeMovie",
         "OVA"
     )
-    iconUrl = "https://cdn2.steamgriddb.com/icon/327174d3648a2d047e8940d7d15204ca.png"
+    iconUrl = "https://static.aniwaves.ru/resources/cover/60x76/100/65b9eea6e1cc6bb9f0cd2a47751a186f.jpg"
 }

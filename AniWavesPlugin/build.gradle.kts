@@ -11,5 +11,5 @@ cloudstream {
         "AnimeMovie",
         "OVA"
     )
-    iconUrl = "https://static.aniwaves.ru/resources/cover/60x76/100/65b9eea6e1cc6bb9f0cd2a47751a186f.jpg"
+    iconUrl = "https://play-lh.googleusercontent.com/F3jWPSrcSNIACoBThPkbgzWu0ejHPmlCNUTNnfOkDfTTzW027WhzhfmWaT18bYwTT9vM-gGs7bRuU8z6rqqudA"
 }

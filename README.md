@@ -1,55 +1,41 @@
 **⚠️ This is currently under development, dont use it yet if you're not comfortable with constantly merging new changes**
 
-# `Cloudstream3 Plugin Repo Template`
+Installation
+To add this repository to your Cloudstream app:
 
-Template for a [Cloudstream3](https://github.com/recloudstream) plugin repo
+Open Cloudstream and navigate to Settings (gear icon) -> Extensions.
+Tap Add Repository.
+Use the following details:
+Repository Name: raghavrepo
+Repository URL: https://raw.githubusercontent.com/KSHITIJ8473/raghav/builds/repo.json
+Tap Add.
+Select raghavrepo from your repository list 
 
-**⚠️ Make sure you check "Include all branches" when using this template**
+
+VERY IMPORTANT BEFORE USING 
+
+for now miruro is working for dub and sub and aniwave is working for subbed anime all the other are in testing phase and some of them are cloudfare protected so USE MIRURO (sub and dub) and ANIWAVE FOR SUBBBED ANIME 
+
+⚖️ DMCA Disclaimer
+We hereby issue this notice to clarify that these extensions function similarly to a standard web browser by fetching video files from the internet.
+
+No content is hosted by this repository or the Cloudstream 3 application.
+Any content accessed is hosted by third-party websites.
+Users are solely responsible for their usage and must comply with their local laws.
+If you believe content is violating copyright laws, please contact the actual file hosts, not the developers of this repository or the Cloudstream 3 app.
+
+Legal Notice & Disclaimer
+This project is created strictly for educational, research, and development purposes. The code does not host or store any media files.
+
+For full legal compliance details, please read our DMCA & Disclaimer Notice.
+
+License
+This project is licensed under the GNU General Public License v3.0. 
 
  
-## Getting started with writing your first plugin
-
-This template includes 1 example plugin.
-
-1. Open the root build.gradle.kts, read the comments and replace all the placeholders
-2. Familiarize yourself with the project structure. Most files are commented
-3. Build or deploy your first plugin using:
-   - Windows: `.\gradlew.bat ExampleProvider:make` or `.\gradlew.bat ExampleProvider:deployWithAdb`
-   - Linux & Mac: `./gradlew ExampleProvider:make` or `./gradlew ExampleProvider:deployWithAdb`
 
 
-## Granting All Files Access on Newer Android Devices
 
-For local plugin testing, you need to grant the app "All Files Access" on newer Android devices (Android 11 and above). Here’s how to do it:
-
-### Using ADB
-
-* `adb shell appops set --uid PACKAGE_NAME MANAGE_EXTERNAL_STORAGE allow`
-* Replace `PACKAGE_NAME` with the name of the package for the Cloudstream3 version you are using:
-   - debug: `com.lagradost.cloudstream3.prerelease.debug`
-   - prerelease: `com.lagradost.cloudstream3.prerelease`
-   - stable: `com.lagradost.cloudstream3`
-
-### Manually
-
-1. **Open Settings**: Go to your device’s Settings menu.
-
-2. **Navigate to Special Access**:
-   - Tap on "Apps & notifications" or "Apps".
-   - Select "Special app access" or "Special access".
-
-3. **Select All Files Access**:
-   - Tap on "All files access".
-   - It may be under the three vertical dots menu towards the top of the screen.
-
-4. **Grant Access to the App**: Find the app in the list and tap on it to toggle it, if it is not already enabled.
-
-6. **Restart the App**: Close and reopen the app to apply the changes.
-
-
-## License
-
-Everything in this repo is released into the public domain. You may use it however you want with no conditions whatsoever
 
 
 ## Attribution

@@ -10,6 +10,7 @@ import com.lagradost.cloudstream3.SearchResponse
 import com.lagradost.cloudstream3.ShowStatus
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.TvType
+import com.lagradost.cloudstream3.addDubStatus
 import com.lagradost.cloudstream3.addEpisodes
 import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.fixUrl
@@ -18,7 +19,6 @@ import com.lagradost.cloudstream3.newAnimeLoadResponse
 import com.lagradost.cloudstream3.newAnimeSearchResponse
 import com.lagradost.cloudstream3.newEpisode
 import com.lagradost.cloudstream3.newHomePageResponse
-import com.lagradost.cloudstream3.addDubStatus
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.loadExtractor
 import org.jsoup.Jsoup
@@ -35,7 +35,6 @@ class AniWaves : MainAPI() {
         TvType.OVA
     )
 
-    // Server display names by sv-id
     private val serverNames = mapOf(
         "4" to "Vidplay",
         "1" to "BYFMS",
@@ -52,13 +51,11 @@ class AniWaves : MainAPI() {
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val category = request.data
-        // The homepage uses AJAX for different tabs, but we can scrape the main page
         val url = "$mainUrl/home"
         val doc = app.get(url).document
 
         val home = mutableListOf<SearchResponse>()
 
-        // Parse anime items from the page
         val items = doc.select(".ani.items .item")
         for (item in items) {
             val aTag = item.selectFirst(".poster a") ?: continue
@@ -68,7 +65,6 @@ class AniWaves : MainAPI() {
                 ?: item.selectFirst(".poster img")?.attr("alt")?.replace(Regex(" Japanese english subbed$"), "")
                 ?: continue
 
-            // Extract sub/dub episode counts
             val subEps = item.selectFirst(".ep-status.sub span")?.text()?.trim()?.toIntOrNull()
             val dubEps = item.selectFirst(".ep-status.dub span")?.text()?.trim()?.toIntOrNull()
 
@@ -131,12 +127,12 @@ class AniWaves : MainAPI() {
         val jpTitle = doc.selectFirst("h1.title")?.attr("data-jp")
         val posterUrl = doc.selectFirst(".poster img")?.attr("src")
         val backgroundUrl = doc.selectFirst(".hotest .image div")?.let {
-            Regex("url\\('([^']+)'\\)").find(it.attr("style"))?.groupValues?.get(1)
+            Regex("""url\('([^']+)'\)""").find(it.attr("style"))?.groupValues?.get(1)
         }
         val plot = doc.selectFirst(".synopsis .shorting")?.text()
             ?: doc.selectFirst(".synopsis")?.text()
         val year = doc.selectFirst(".bmeta .meta div:contains(Premiered) a")?.text()?.trim()
-            ?.let { Regex("(\\d{4})").find(it)?.groupValues?.get(1)?.toIntOrNull() }
+            ?.let { Regex("""(\d{4})""").find(it)?.groupValues?.get(1)?.toIntOrNull() }
         val tags = doc.select(".bmeta .meta div:contains(Genre) a").map { it.text() }
         val typeStr = doc.selectFirst(".bmeta .meta div:contains(Type) span")?.text()?.trim() ?: ""
 
@@ -153,12 +149,10 @@ class AniWaves : MainAPI() {
             else -> null
         }
 
-        // Get anime ID from the page
         val animeId = doc.selectFirst("#watch-main")?.attr("data-id")
-            ?: Regex("-(\\d+)$").find(url)?.groupValues?.get(1)
+            ?: Regex("""-(\d+)$""").find(url)?.groupValues?.get(1)
             ?: return null
 
-        // Fetch episodes via AJAX
         val epResponse = app.get(
             "$mainUrl/ajax/episode/list/$animeId",
             headers = mapOf(
@@ -174,7 +168,6 @@ class AniWaves : MainAPI() {
             val epDoc = Jsoup.parse(epResponse.result)
             val episodeElements = epDoc.select("li a[data-ids]")
 
-            // De-duplicate by episode number (site sometimes has duplicates)
             val seenSub = mutableSetOf<Int>()
             val seenDub = mutableSetOf<Int>()
 
@@ -184,7 +177,6 @@ class AniWaves : MainAPI() {
                 val hasSub = ep.attr("data-sub") == "1"
                 val hasDub = ep.attr("data-dub") == "1"
 
-                // Episode data format: animeId|epNum|dataIds|watchUrl
                 val episodeData = "$animeId|$epNum|$dataIds|$url"
 
                 if (hasSub && seenSub.add(epNum)) {
@@ -222,38 +214,31 @@ class AniWaves : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        // Format: sub|animeId|epNum|dataIds|watchUrl  OR  dub|animeId|epNum|dataIds|watchUrl
         val parts = data.split("|")
         if (parts.size < 4) return false
 
-        val dubOrSub = parts[0] // "sub" or "dub"
+        val dubOrSub = parts[0]
         val animeId = parts[1]
         val epNum = parts[2]
-        val dataIds = parts[3] // e.g. "81553&eps=1"
+        val dataIds = parts[3]
         val watchUrl = parts.getOrNull(4) ?: "$mainUrl/watch/"
+
+        val serverResponse = app.get(
+            "$mainUrl/ajax/server/list?servers=$dataIds",
+            headers = mapOf(
+                "X-Requested-With" to "XMLHttpRequest",
+                "Referer" to watchUrl
+            )
+        ).parsed<AjaxResponse>()
+
+        if (serverResponse.status?.toString() != "200" || serverResponse.result.isNullOrEmpty()) return false
+
+        val serverDoc = Jsoup.parse(serverResponse.result)
 
         val targetTypes = when (dubOrSub) {
             "dub" -> listOf("dub")
-            "sub" -> listOf("sub")
-            else -> return false
+            else -> listOf("sub")
         }
-
-        val refererUrl = appendQuery(watchUrl, "type", dubOrSub)
-
-        val serverResponses = listOf(refererUrl, watchUrl).distinct().mapNotNull { candidateReferer ->
-            runCatching {
-                app.get(
-                    "$mainUrl/ajax/server/list?servers=$dataIds",
-                    headers = mapOf(
-                        "X-Requested-With" to "XMLHttpRequest",
-                        "Referer" to candidateReferer
-                    )
-                ).parsed<AjaxResponse>()
-            }.getOrNull()
-        }.firstOrNull { it.status?.toString() == "200" && !it.result.isNullOrEmpty() }
-            ?: return false
-
-        val serverDoc = Jsoup.parse(serverResponses.result!!)
 
         var foundAnySources = false
         val seenUrls = mutableSetOf<String>()
@@ -274,36 +259,29 @@ class AniWaves : MainAPI() {
                 if (linkId.isEmpty()) continue
 
                 try {
-                    val sourceCandidates = listOf(
-                        "$mainUrl/ajax/sources?id=$linkId&asi=0&autoPlay=0&type=$targetType" to refererUrl,
-                        "$mainUrl/ajax/sources?id=$linkId&asi=0&autoPlay=0" to watchUrl
-                    ).distinctBy { it.first }
+                    val sourceResponse = app.get(
+                        "$mainUrl/ajax/sources?id=$linkId&asi=0&autoPlay=0",
+                        headers = mapOf(
+                            "X-Requested-With" to "XMLHttpRequest",
+                            "Referer" to watchUrl
+                        )
+                    ).parsed<SourceResponse>()
 
-                    for ((sourceUrl, candidateReferer) in sourceCandidates) {
-                        val sourceResponse = runCatching {
-                            app.get(
-                                sourceUrl,
-                                headers = mapOf(
-                                    "X-Requested-With" to "XMLHttpRequest",
-                                    "Referer" to candidateReferer
-                                )
-                            ).parsed<SourceResponse>()
-                        }.getOrNull() ?: continue
+                    if (sourceResponse.status?.toString() != "200") continue
+                    val embedUrl = sourceResponse.result?.url ?: continue
+                    if (embedUrl.isEmpty() || !seenUrls.add(embedUrl)) continue
 
-                        if (sourceResponse.status?.toString() != "200") continue
-                        val embedUrl = sourceResponse.result?.url?.takeIf { it.isNotBlank() } ?: continue
-                        if (!seenUrls.add(embedUrl)) continue
-
-                        when {
-                            embedUrl.contains("echovideo") || embedUrl.contains("weneverbeenfree.com") || embedUrl.contains("filemoon") || embedUrl.contains("myvidplay.com") -> {
-                                AniWavesWebView("$displayName (${targetType.uppercase()})", embedUrl.baseUrl()).getUrl(embedUrl, candidateReferer, subtitleCallback, linkCallback)
-                            }
-                            else -> {
-                                loadExtractor(embedUrl, candidateReferer, subtitleCallback, linkCallback)
-                            }
+                    val loaded = when {
+                        embedUrl.contains("echovideo") || embedUrl.contains("weneverbeenfree.com") || embedUrl.contains("filemoon") || embedUrl.contains("myvidplay.com") -> {
+                            AniWavesWebView("$displayName (${targetType.uppercase()})", embedUrl.baseUrl()).getUrl(embedUrl, watchUrl, subtitleCallback, linkCallback)
+                            true
                         }
-
-                        if (foundAnySources) break
+                        else -> {
+                            loadExtractor(embedUrl, watchUrl, subtitleCallback, linkCallback)
+                        }
+                    }
+                    if (loaded && foundAnySources) {
+                        return true
                     }
                 } catch (_: Exception) {
                     continue
@@ -314,7 +292,6 @@ class AniWaves : MainAPI() {
         return foundAnySources
     }
 
-    // Data classes for AJAX responses
     data class AjaxResponse(
         val status: Any? = null,
         val result: String? = null
@@ -337,14 +314,6 @@ class AniWaves : MainAPI() {
         val intro: List<Int>? = null,
         val outro: List<Int>? = null
     )
-
-    private fun appendQuery(url: String, key: String, value: String): String {
-        val fragment = url.substringAfter('#', "")
-        val cleanUrl = url.substringBefore('#')
-        val separator = if (cleanUrl.contains("?")) "&" else "?"
-        val suffix = if (fragment.isNotEmpty()) "#$fragment" else ""
-        return "$cleanUrl$separator$key=$value$suffix"
-    }
 
     private fun String.baseUrl(): String {
         return Regex("""https?://[^/]+""").find(this)?.value ?: mainUrl

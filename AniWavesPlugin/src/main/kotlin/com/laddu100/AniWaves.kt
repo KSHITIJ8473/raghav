@@ -232,23 +232,28 @@ class AniWaves : MainAPI() {
         val dataIds = parts[3] // e.g. "81553&eps=1"
         val watchUrl = parts.getOrNull(4) ?: "$mainUrl/watch/"
 
+        val targetTypes = when (dubOrSub) {
+            "dub" -> listOf("dub")
+            "sub" -> listOf("sub")
+            else -> return false
+        }
+
+        val refererUrl = appendQuery(watchUrl, "type", dubOrSub)
+        val cookies = "prefered_source_type=$dubOrSub; prefered_server_type=$dubOrSub"
+
         // Step 1: Get server list for this episode
         val serverResponse = app.get(
             "$mainUrl/ajax/server/list?servers=$dataIds",
             headers = mapOf(
                 "X-Requested-With" to "XMLHttpRequest",
-                "Referer" to watchUrl
+                "Referer" to refererUrl,
+                "Cookie" to cookies
             )
         ).parsed<AjaxResponse>()
 
         if (serverResponse.status?.toString() != "200" || serverResponse.result.isNullOrEmpty()) return false
 
         val serverDoc = Jsoup.parse(serverResponse.result)
-
-        val targetTypes = when (dubOrSub) {
-            "dub" -> listOf("dub")
-            else -> listOf("sub")
-        }
 
         var foundAnySources = false
         val seenUrls = mutableSetOf<String>()
@@ -270,11 +275,13 @@ class AniWaves : MainAPI() {
 
                 try {
                     // Step 3: Get the embed URL from the sources endpoint
+                    val sourceTypeParam = "&type=$targetType"
                     val sourceResponse = app.get(
-                        "$mainUrl/ajax/sources?id=$linkId&asi=0&autoPlay=0",
+                        "$mainUrl/ajax/sources?id=$linkId&asi=0&autoPlay=0$sourceTypeParam",
                         headers = mapOf(
                             "X-Requested-With" to "XMLHttpRequest",
-                            "Referer" to watchUrl
+                            "Referer" to refererUrl,
+                            "Cookie" to cookies
                         )
                     ).parsed<SourceResponse>()
 
@@ -282,17 +289,13 @@ class AniWaves : MainAPI() {
                     val embedUrl = sourceResponse.result?.url ?: continue
                     if (embedUrl.isEmpty() || !seenUrls.add(embedUrl)) continue
 
-                    val loaded = when {
+                    when {
                         embedUrl.contains("echovideo") || embedUrl.contains("weneverbeenfree.com") || embedUrl.contains("filemoon") || embedUrl.contains("myvidplay.com") -> {
-                            AniWavesWebView("$displayName (${targetType.uppercase()})", embedUrl.baseUrl()).getUrl(embedUrl, watchUrl, subtitleCallback, linkCallback)
-                            true
+                            AniWavesWebView("$displayName (${targetType.uppercase()})", embedUrl.baseUrl()).getUrl(embedUrl, refererUrl, subtitleCallback, linkCallback)
                         }
                         else -> {
-                            loadExtractor(embedUrl, watchUrl, subtitleCallback, linkCallback)
+                            loadExtractor(embedUrl, refererUrl, subtitleCallback, linkCallback)
                         }
-                    }
-                    if (loaded && foundAnySources) {
-                        return true
                     }
                 } catch (_: Exception) {
                     continue
@@ -326,6 +329,14 @@ class AniWaves : MainAPI() {
         val intro: List<Int>? = null,
         val outro: List<Int>? = null
     )
+
+    private fun appendQuery(url: String, key: String, value: String): String {
+        val fragment = url.substringAfter('#', "")
+        val cleanUrl = url.substringBefore('#')
+        val separator = if (cleanUrl.contains("?")) "&" else "?"
+        val suffix = if (fragment.isNotEmpty()) "#$fragment" else ""
+        return "$cleanUrl$separator$key=$value$suffix"
+    }
 
     private fun String.baseUrl(): String {
         return Regex("""https?://[^/]+""").find(this)?.value ?: mainUrl

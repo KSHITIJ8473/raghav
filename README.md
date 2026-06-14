@@ -10,26 +10,25 @@ Repository Name: raghavrepo
 Repository URL: https://raw.githubusercontent.com/KSHITIJ8473/raghav/builds/repo.json
 Tap Add.
 Select raghavrepo from your repository 
-.
-.
-.
-.
-.
-.
+
+
+
+
+
+
+
+
+
+
 VERY IMPORTANT BEFORE USING 
 
 for now miruro is working for dub and sub and aniwave is working for subbed anime all the other are in testing phase and some of them are cloudfare protected so USE MIRURO (sub and dub) and ANIWAVE FOR SUBBBED ANIME 
-..
-.
-.
-.
-.
-.
-.
 
-.
-.
-.
+
+
+
+
+
 ⚖️ DMCA Disclaimer
 We hereby issue this notice to clarify that these extensions function similarly to a standard web browser by fetching video files from the internet.
 

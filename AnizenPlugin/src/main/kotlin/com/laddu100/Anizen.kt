@@ -286,3 +286,4 @@ class Anizen : MainAPI() {
 
     class ErrorLoadingException(message: String) : RuntimeException(message)
 }
+                  

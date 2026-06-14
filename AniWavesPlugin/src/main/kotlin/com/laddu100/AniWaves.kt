@@ -281,22 +281,6 @@ class AniWaves : MainAPI() {
                     if (embedUrl.isEmpty()) continue
 
                     val suffix = " ($typeLabel)"
-                    val wrappedCallback = { link: ExtractorLink ->
-                        val newName = if (link.name.contains(suffix)) link.name else "${link.name}$suffix"
-                        callback(
-                            newExtractorLink(
-                                source = link.source,
-                                name = newName,
-                                url = link.url,
-                                type = link.type
-                            ) {
-                                this.quality = link.quality
-                                this.referer = link.referer
-                                this.headers = link.headers
-                                this.extractorData = link.extractorData
-                            }
-                        )
-                    }
 
                     val nameWithType = "$displayName$suffix"
                     val loaded = when {
@@ -305,7 +289,29 @@ class AniWaves : MainAPI() {
                             true
                         }
                         else -> {
-                            loadExtractor(embedUrl, "$mainUrl/", subtitleCallback, wrappedCallback)
+                            val collectedLinks = mutableListOf<ExtractorLink>()
+                            val result = loadExtractor(embedUrl, "$mainUrl/", subtitleCallback) { link ->
+                                collectedLinks.add(link)
+                            }
+
+                            for (link in collectedLinks) {
+                                val newName = if (link.name.contains(suffix)) link.name else "${link.name}$suffix"
+                                callback(
+                                    newExtractorLink(
+                                        source = link.source,
+                                        name = newName,
+                                        url = link.url,
+                                        type = link.type
+                                    ) {
+                                        this.quality = link.quality
+                                        this.referer = link.referer
+                                        this.headers = link.headers
+                                        this.extractorData = link.extractorData
+                                    }
+                                )
+                            }
+
+                            result
                         }
                     }
                     if (loaded) {

@@ -2,7 +2,7 @@ version = 1
 
 cloudstream {
     language = "en"
-    description = "Anime from AniWaves with only Sub support for now  "
+    description = "Sub anime support for now  "
     authors = listOf("KSHITIJ8473")
 
     status = 1
@@ -11,5 +11,5 @@ cloudstream {
         "AnimeMovie",
         "OVA"
     )
-    iconUrl = "https://static.aniwaves.ru/resources/cover/60x76/100/65b9eea6e1cc6bb9f0cd2a47751a186f.jpg"
+    iconUrl = "https://www.google.com/s2/favicons?domain=animedubhindi.cc&sz=%size%"
 }

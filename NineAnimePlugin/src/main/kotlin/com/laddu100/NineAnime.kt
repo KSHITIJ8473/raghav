@@ -41,12 +41,6 @@ class NineAnime : MainAPI() {
 
             newAnimeSearchResponse(title, href, TvType.Anime) {
                 this.posterUrl = posterUrl
-                val typeText = element.selectFirst(".type")?.text() ?: ""
-                this.dubStatus = if (title.contains("(Dub)", ignoreCase = true) || typeText.contains("Dub", ignoreCase = true)) {
-                    mutableSetOf(DubStatus.Dubbed)
-                } else {
-                    mutableSetOf(DubStatus.Subbed)
-                }
             }
         }
         return newHomePageResponse(request.name, anime, hasNext = anime.isNotEmpty())
@@ -67,12 +61,6 @@ class NineAnime : MainAPI() {
 
             newAnimeSearchResponse(title, href, TvType.Anime) {
                 this.posterUrl = posterUrl
-                val typeText = element.selectFirst(".type")?.text() ?: ""
-                this.dubStatus = if (title.contains("(Dub)", ignoreCase = true) || typeText.contains("Dub", ignoreCase = true)) {
-                    mutableSetOf(DubStatus.Dubbed)
-                } else {
-                    mutableSetOf(DubStatus.Subbed)
-                }
             }
         }
     }
@@ -82,8 +70,10 @@ class NineAnime : MainAPI() {
         if (!url.contains("/anime/")) {
             // Fetch the episode page to find the parent anime page link
             val doc = app.get(url).document
-            val animeLink = doc.selectFirst("a[href*=/anime/]")?.attr("href")
-                ?: doc.select("a").firstOrNull { it.attr("href").contains("/anime/") }?.attr("href")
+            val animeLink = doc.select("a[href*=/anime/]").map { it.attr("href") }.firstOrNull { href ->
+                val path = href.substringAfter("/anime/").trim('/')
+                path.isNotEmpty() && !path.contains('/') && !path.contains('?') && !path.contains("page")
+            }
             if (animeLink != null) {
                 detailUrl = animeLink
             }
@@ -105,7 +95,7 @@ class NineAnime : MainAPI() {
             ?: doc.selectFirst(".story")?.text()
 
         // Metadata
-        val tags = doc.select(".info-content a[href*=/genre/]").map { it.text() }
+        val tags = doc.select(".genxed a").map { it.text() }
         
         val statusText = doc.selectFirst(".info-content")?.text() ?: ""
         val showStatus = when {

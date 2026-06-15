@@ -6,7 +6,7 @@ import com.lagradost.cloudstream3.utils.loadExtractor
 import com.lagradost.cloudstream3.network.WebViewResolver
 import com.google.gson.JsonParser
 import org.jsoup.Jsoup
-import android.util.Base64
+import android.util.Base64             
 
 class NineAnime : MainAPI() {
     override var mainUrl = "https://9anime.org.lv"

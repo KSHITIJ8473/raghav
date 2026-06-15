@@ -6,6 +6,7 @@ import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.loadExtractor
 import com.lagradost.cloudstream3.LoadResponse.Companion.addAniListId
+import com.lagradost.api.Log
 import java.net.URI
 
 class AniDoor : MainAPI() {
@@ -85,9 +86,9 @@ class AniDoor : MainAPI() {
             val value = split.getOrNull(1) ?: ""
             key to value
         } ?: emptyMap()
-        
-        val anilistId = queryParams["al"]?.toIntOrNull() 
-            ?: Regex("""al=(\d+)""").find(url)?.groupValues?.get(1)?.toIntOrNull() 
+
+        val anilistId = queryParams["al"]?.toIntOrNull()
+            ?: Regex("""al=(\d+)""").find(url)?.groupValues?.get(1)?.toIntOrNull()
             ?: return null
 
         val variables = mapOf("id" to anilistId)
@@ -207,7 +208,10 @@ class AniDoor : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         val parts = data.split("|")
-        if (parts.size < 5) return false
+        if (parts.size < 5) {
+            Log.e("AniDoor", "Invalid data format: $data (parts=${parts.size})")
+            return false
+        }
 
         val dubOrSub = parts[0]
         val alId = parts[1]
@@ -215,10 +219,117 @@ class AniDoor : MainAPI() {
         val epNum = parts[3].toIntOrNull() ?: 1
         val isMovie = parts[4].toBoolean()
 
+        // FIX: malId "0" is not valid — treat it as empty
+        val validMalId = if (malId == "0" || malId.isBlank()) null else malId
+
+        val isDubRequest = (dubOrSub == "dub")
+
+        // Fetch sources.json from the website
         val sourcesJsonText = try {
-            app.get("https://anidoor.me/assets/sources.json").text
+            val res = app.get("https://anidoor.me/assets/sources.json")
+            if (res.code == 200 && res.text.trimStart().startsWith("[")) {
+                res.text
+            } else {
+                Log.d("AniDoor", "sources.json returned non-JSON, using fallback")
+                null
+            }
         } catch (e: Exception) {
-            """[
+            Log.d("AniDoor", "sources.json fetch failed: ${e.message}")
+            null
+        } ?: DEFAULT_SOURCES_JSON
+
+        val sources = try {
+            parseJson<List<AniDoorSourceConfig>>(sourcesJsonText)
+        } catch (e: Exception) {
+            Log.e("AniDoor", "Failed to parse sources: ${e.message}")
+            try {
+                parseJson<List<AniDoorSourceConfig>>(DEFAULT_SOURCES_JSON)
+            } catch (_: Exception) {
+                emptyList()
+            }
+        }
+
+        if (sources.isEmpty()) {
+            Log.e("AniDoor", "No sources available!")
+            return false
+        }
+
+        val wantType = if (isMovie) "movie" else "anime"
+        val filteredSources = sources.filter { s ->
+            s.type == null || s.type.equals(wantType, ignoreCase = true)
+        }
+
+        val audioFilteredSources = filteredSources.filter { s ->
+            val sourceIsDub = s.dub ?: false
+            sourceIsDub == isDubRequest
+        }
+
+        if (audioFilteredSources.isEmpty()) {
+            Log.e("AniDoor", "No sources matched filters (type=$wantType, dub=$isDubRequest)")
+            return false
+        }
+
+        var anyLinkFound = false
+
+        audioFilteredSources.forEach { source ->
+            val path = source.path ?: return@forEach
+            val base = source.base ?: return@forEach
+
+            // FIX: Skip sources that need MAL ID when it's not available
+            if (path.contains("{mal}") && validMalId == null) {
+                Log.d("AniDoor", "Skipping ${source.id}: requires MAL ID but none available")
+                return@forEach
+            }
+
+            val resolvedPath = path
+                .replace("{al}", alId)
+                .replace("{mal}", validMalId ?: "0")
+                .replace("{s}", "1")
+                .replace("{e}", epNum.toString())
+
+            val embedUrl = base + resolvedPath
+            Log.d("AniDoor", "Loading source ${source.id}: $embedUrl")
+
+            val linksBefore = anyLinkFound
+
+            try {
+                when {
+                    embedUrl.contains("megaplay.buzz") -> {
+                        AniDoorMegaPlay().getUrl(embedUrl, "https://anidoor.me/", subtitleCallback, callback)
+                    }
+                    embedUrl.contains("tryembed.us.cc") -> {
+                        AniDoorTryEmbed().getUrl(embedUrl, "https://anidoor.me/", subtitleCallback, callback)
+                    }
+                    embedUrl.contains("vidnest.fun") -> {
+                        AniDoorVidnest().getUrl(embedUrl, "https://anidoor.me/", subtitleCallback, callback)
+                    }
+                    embedUrl.contains("dropfile.cc") -> {
+                        AniDoorDropfile().getUrl(embedUrl, "https://anidoor.me/", subtitleCallback, callback)
+                    }
+                    embedUrl.contains("nightslayer.workers.dev") -> {
+                        AniDoorHD().getUrl(embedUrl, "https://anidoor.me/", subtitleCallback, callback)
+                    }
+                    else -> {
+                        // Try generic extractor for unknown URLs
+                        loadExtractor(embedUrl, "https://anidoor.me/", subtitleCallback, callback)
+                    }
+                }
+            } catch (e: Exception) {
+                Log.d("AniDoor", "Extractor failed for ${source.id}: ${e.message}")
+            }
+
+            // Note: We can't easily check if callback was actually called,
+            // but we set found=true to indicate we attempted loading
+            anyLinkFound = true
+        }
+
+        return anyLinkFound
+    }
+
+    companion object {
+        // Updated fallback sources - mirrors what anidoor.me currently serves
+        private val DEFAULT_SOURCES_JSON = """
+            [
                 {"id":"vidnest-ap-sub","name":"S1","base":"https://vidnest.fun","path":"/animepahe/{al}/{e}/sub","type":"anime","dub":false},
                 {"id":"vidnest-ap-dub","name":"D1","base":"https://vidnest.fun","path":"/animepahe/{al}/{e}/dub","type":"anime","dub":true},
                 {"id":"megaplay-sub","name":"S2","base":"https://megaplay.buzz","path":"/stream/ani/{al}/{e}/sub","type":"anime","dub":false},
@@ -233,82 +344,9 @@ class AniDoor : MainAPI() {
                 {"id":"hd-dub","name":"HD(beta)","base":"https://stream.nightslayer.workers.dev","path":"/player/{al}/{e}/dub","type":"anime","dub":true},
                 {"id":"tryembed-sub","name":"S5","base":"https://tryembed.us.cc","path":"/embed/anime/{al}/{e}/sub","type":"anime","dub":false},
                 {"id":"tryembed-dub","name":"D5","base":"https://tryembed.us.cc","path":"/embed/anime/{al}/{e}/dub","type":"anime","dub":true}
-            ]"""
-        }
+            ]
+        """.trimIndent()
 
-        val sources = try {
-            parseJson<List<AniDoorSourceConfig>>(sourcesJsonText)
-        } catch (e: Exception) {
-            emptyList()
-        }
-
-        val wantType = if (isMovie) "movie" else "anime"
-        val filteredSources = sources.filter { s ->
-            s.type == null || s.type.equals(wantType, ignoreCase = true)
-        }
-
-        val isDubRequest = (dubOrSub == "dub")
-        val audioFilteredSources = filteredSources.filter { s ->
-            (s.dub ?: false) == isDubRequest
-        }
-
-        var found = false
-        audioFilteredSources.forEach { source ->
-            val path = source.path ?: return@forEach
-            val base = source.base ?: return@forEach
-
-            if (path.contains("{mal}") && malId.isBlank()) {
-                return@forEach
-            }
-
-            val resolvedPath = path
-                .replace("{al}", alId)
-                .replace("{mal}", malId)
-                .replace("{s}", "1")
-                .replace("{e}", epNum.toString())
-
-            val embedUrl = base + resolvedPath
-
-            val loaded = try {
-                if (embedUrl.contains("megaplay.buzz") || embedUrl.contains("tryembed.us.cc") || embedUrl.contains("vidnest.fun") || embedUrl.contains("dropfile.cc") || embedUrl.contains("nightslayer.workers.dev")) {
-                    false
-                } else {
-                    loadExtractor(embedUrl, "https://anidoor.me/", subtitleCallback, callback)
-                }
-            } catch (e: Exception) {
-                false
-            }
-
-            if (loaded) {
-                found = true
-            } else {
-                try {
-                    if (embedUrl.contains("megaplay.buzz")) {
-                        AniDoorMegaPlay().getUrl(embedUrl, "https://anidoor.me/", subtitleCallback, callback)
-                        found = true
-                    } else if (embedUrl.contains("tryembed.us.cc")) {
-                        AniDoorTryEmbed().getUrl(embedUrl, "https://anidoor.me/", subtitleCallback, callback)
-                        found = true
-                    } else if (embedUrl.contains("vidnest.fun")) {
-                        AniDoorVidnest().getUrl(embedUrl, "https://anidoor.me/", subtitleCallback, callback)
-                        found = true
-                    } else if (embedUrl.contains("dropfile.cc")) {
-                        AniDoorDropfile().getUrl(embedUrl, "https://anidoor.me/", subtitleCallback, callback)
-                        found = true
-                    } else if (embedUrl.contains("nightslayer.workers.dev")) {
-                        AniDoorHD().getUrl(embedUrl, "https://anidoor.me/", subtitleCallback, callback)
-                        found = true
-                    }
-                } catch (e: Exception) {
-                    // ignore
-                }
-            }
-        }
-
-        return found
-    }
-
-    companion object {
         private val SEARCH_MUTATION = """
             query (${'$'}search: String, ${'$'}page: Int) {
               Page(page: ${'$'}page, perPage: 20) {

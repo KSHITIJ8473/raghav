@@ -166,8 +166,10 @@ open class AniDoorTryEmbed : ExtractorApi() {
             null
         }
 
-        val finalResponseData = responseData ?: run {
-            // Fallback: Make AJAX API request to get stream data if RAW_PAYLOAD is not present
+        val finalResponseData = if (responseData?.providers != null) {
+            responseData
+        } else {
+            // Fallback: Make AJAX API request to get stream data if RAW_PAYLOAD is not present or missing providers
             val cookies = pageRes.okhttpResponse.headers("Set-Cookie")
             val authCookieHeader = cookies.firstOrNull { it.contains("tryembed_auth=") }
             val tryembedAuth = authCookieHeader?.substringBefore(";")?.substringAfter("tryembed_auth=")
@@ -306,19 +308,19 @@ open class AniDoorVidnest : ExtractorApi() {
         val playbackHeaders = mapOf(
             "User-Agent" to USER_AGENT,
             "Accept" to "*/*",
-            "Origin" to mainUrl,
-            "Referer" to "$mainUrl/",
+            "Origin" to "https://megaplay.buzz",
+            "Referer" to "https://megaplay.buzz/",
         )
 
         decryptedResponse.sources?.forEach { source ->
             val fileUrl = source.file ?: return@forEach
-            val generated = M3u8Helper.generateM3u8(name, fileUrl, mainUrl, headers = playbackHeaders)
+            val generated = M3u8Helper.generateM3u8(name, fileUrl, "https://megaplay.buzz/", headers = playbackHeaders)
             if (generated.isNotEmpty()) {
                 generated.forEach(callback)
             } else {
                 callback(
                     newExtractorLink(name, name, fileUrl, ExtractorLinkType.M3U8) {
-                        this.referer = "$mainUrl/"
+                        this.referer = "https://megaplay.buzz/"
                         this.headers = playbackHeaders
                     }
                 )
@@ -414,8 +416,10 @@ open class AniDoorDropfile : ExtractorApi() {
         val regex = Regex("""(https?://[^\s"']+(?:\.m3u8|\.mp4)[^\s"']*)""")
         regex.findAll(html).forEach { match ->
             val link = match.groupValues[1]
+            val refererForLink = if (link.contains("streamzone1.site") || link.contains("cinewave2.site")) "https://megaplay.buzz/" else mainUrl
+            val headersForLink = mapOf("User-Agent" to USER_AGENT, "Referer" to refererForLink)
             if (link.contains(".m3u8")) {
-                M3u8Helper.generateM3u8(name, link, mainUrl).forEach(callback)
+                M3u8Helper.generateM3u8(name, link, refererForLink, headers = headersForLink).forEach(callback)
             } else {
                 callback(
                     newExtractorLink(
@@ -424,7 +428,8 @@ open class AniDoorDropfile : ExtractorApi() {
                         url = link,
                         type = ExtractorLinkType.VIDEO
                     ) {
-                        this.referer = referer ?: ""
+                        this.referer = refererForLink
+                        this.headers = headersForLink
                         this.quality = getQualityFromName(name)
                     }
                 )
@@ -450,8 +455,10 @@ open class AniDoorHD : ExtractorApi() {
         val regex = Regex("""(https?://[^\s"']+(?:\.m3u8|\.mp4)[^\s"']*)""")
         regex.findAll(html).forEach { match ->
             val link = match.groupValues[1]
+            val refererForLink = if (link.contains("streamzone1.site") || link.contains("cinewave2.site")) "https://megaplay.buzz/" else mainUrl
+            val headersForLink = mapOf("User-Agent" to USER_AGENT, "Referer" to refererForLink)
             if (link.contains(".m3u8")) {
-                M3u8Helper.generateM3u8(name, link, mainUrl).forEach(callback)
+                M3u8Helper.generateM3u8(name, link, refererForLink, headers = headersForLink).forEach(callback)
             } else {
                 callback(
                     newExtractorLink(
@@ -460,7 +467,8 @@ open class AniDoorHD : ExtractorApi() {
                         url = link,
                         type = ExtractorLinkType.VIDEO
                     ) {
-                        this.referer = referer ?: ""
+                        this.referer = refererForLink
+                        this.headers = headersForLink
                         this.quality = getQualityFromName(name)
                     }
                 )

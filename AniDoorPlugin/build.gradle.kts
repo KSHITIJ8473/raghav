@@ -2,7 +2,7 @@ version = 2
 
 cloudstream {
     language = "en"
-    description = "under development subbed working for now"
+    description = "Anime from AniDoor with Sub and Dub support"
     authors = listOf("KSHITIJ8473")
 
     status = 1

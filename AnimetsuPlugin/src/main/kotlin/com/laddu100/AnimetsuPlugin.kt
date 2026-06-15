@@ -4,7 +4,7 @@ import com.lagradost.cloudstream3.plugins.BasePlugin
 import com.lagradost.cloudstream3.plugins.CloudstreamPlugin
 
 @CloudstreamPlugin
-class AnimetsuPlugin(disabled) : BasePlugin() {
+class AnimetsuPlugin : BasePlugin() {
     override fun load() {
         registerMainAPI(AnimetsuProvider())
     }

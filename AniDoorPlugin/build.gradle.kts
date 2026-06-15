@@ -11,7 +11,5 @@ cloudstream {
         "AnimeMovie",
         "OVA"
     )
-    versionCode = 3
-    versionName = "1.0.3"
     iconUrl = "https://anidoor.me/assets/img/favicon/favicon.ico"
 }

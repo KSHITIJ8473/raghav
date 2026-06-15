@@ -296,6 +296,12 @@ open class AniDoorVidnest : ExtractorApi() {
 
         if (!decryptedResponse.success) return
 
+        val metaSubOrDub = decryptedResponse.metadata?.subOrDub
+        if (!metaSubOrDub.isNullOrBlank() && !metaSubOrDub.equals(audio, ignoreCase = true)) {
+            Log.e("VidNest", "Audio mismatch: requested $audio but got $metaSubOrDub")
+            return
+        }
+
         val playbackHeaders = mapOf(
             "User-Agent" to USER_AGENT,
             "Accept" to "*/*",
@@ -369,7 +375,12 @@ open class AniDoorVidnest : ExtractorApi() {
     data class VidNestDecryptedResponse(
         @JsonProperty("success") val success: Boolean = false,
         @JsonProperty("sources") val sources: List<VidNestSource>? = null,
-        @JsonProperty("tracks") val tracks: List<VidNestTrack>? = null
+        @JsonProperty("tracks") val tracks: List<VidNestTrack>? = null,
+        @JsonProperty("metadata") val metadata: VidNestMetadata? = null
+    )
+
+    data class VidNestMetadata(
+        @JsonProperty("subOrDub") val subOrDub: String? = null
     )
 
     data class VidNestSource(

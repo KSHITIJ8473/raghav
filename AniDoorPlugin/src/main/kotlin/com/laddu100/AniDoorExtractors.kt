@@ -419,13 +419,14 @@ open class AniDoorDropfile : ExtractorApi() {
             } else {
                 callback(
                     newExtractorLink(
-                        name,
-                        name,
-                        link,
-                        referer ?: "",
-                        getQualityFromName(name),
-                        link.contains(".m3u8")
-                    )
+                        source = name,
+                        name = name,
+                        url = link,
+                        type = ExtractorLinkType.VIDEO
+                    ) {
+                        this.referer = referer ?: ""
+                        this.quality = getQualityFromName(name)
+                    }
                 )
             }
         }
@@ -454,13 +455,14 @@ open class AniDoorHD : ExtractorApi() {
             } else {
                 callback(
                     newExtractorLink(
-                        name,
-                        name,
-                        link,
-                        referer ?: "",
-                        getQualityFromName(name),
-                        link.contains(".m3u8")
-                    )
+                        source = name,
+                        name = name,
+                        url = link,
+                        type = ExtractorLinkType.VIDEO
+                    ) {
+                        this.referer = referer ?: ""
+                        this.quality = getQualityFromName(name)
+                    }
                 )
             }
         }

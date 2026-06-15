@@ -2,7 +2,7 @@ version = 1
 
 cloudstream {
     language = "en"
-    description = "Sub anime support for now  "
+    description = "720p sub and dub anime"
     authors = listOf("KSHITIJ8473")
 
     status = 1

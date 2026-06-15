@@ -3,10 +3,12 @@ package com.laddu100
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.loadExtractor
+import com.lagradost.cloudstream3.utils.newExtractorLink
+import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.network.WebViewResolver
 import com.google.gson.JsonParser
 import org.jsoup.Jsoup
-import android.util.Base64             
+import android.util.Base64
 
 class NineAnime : MainAPI() {
     override var mainUrl = "https://9anime.org.lv"
@@ -41,9 +43,9 @@ class NineAnime : MainAPI() {
                 this.posterUrl = posterUrl
                 val typeText = element.selectFirst(".type")?.text() ?: ""
                 this.dubStatus = if (title.contains("(Dub)", ignoreCase = true) || typeText.contains("Dub", ignoreCase = true)) {
-                    DubStatus.Dubbed
+                    mutableSetOf(DubStatus.Dubbed)
                 } else {
-                    DubStatus.Subbed
+                    mutableSetOf(DubStatus.Subbed)
                 }
             }
         }
@@ -67,9 +69,9 @@ class NineAnime : MainAPI() {
                 this.posterUrl = posterUrl
                 val typeText = element.selectFirst(".type")?.text() ?: ""
                 this.dubStatus = if (title.contains("(Dub)", ignoreCase = true) || typeText.contains("Dub", ignoreCase = true)) {
-                    DubStatus.Dubbed
+                    mutableSetOf(DubStatus.Dubbed)
                 } else {
-                    DubStatus.Subbed
+                    mutableSetOf(DubStatus.Subbed)
                 }
             }
         }

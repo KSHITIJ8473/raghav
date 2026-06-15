@@ -22,6 +22,9 @@ import com.lagradost.cloudstream3.newTvSeriesLoadResponse
 import com.lagradost.cloudstream3.toNewSearchResponseList
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.loadExtractor
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import org.jsoup.nodes.Element
 import java.net.URLEncoder
 
@@ -68,6 +71,7 @@ class Anizen : MainAPI() {
         val html = document.html()
         val title = document.selectFirst("meta[property=og:title]")?.attr("content")
             ?.let { Regex("""Watch\s+(.+?)\s+Anime Online""").find(it)?.groupValues?.get(1) }
+            ?: document.title().let { Regex("""Watch\s+(.+?)\s+Anime Online""").find(it)?.groupValues?.get(1) ?: it.substringBefore(" | AniZen").removePrefix("Watch ") }
             ?: html.findJsonString("title")
             ?: Regex("""<title>Watch\s+(.+?)\s+Anime Online""").find(document.toString())?.groupValues?.get(1)
             ?: throw ErrorLoadingException("Unable to find title")
@@ -86,7 +90,7 @@ class Anizen : MainAPI() {
             ?.nextElementSibling()?.text()
             ?.let { Regex("""\d{4}""").find(it)?.value?.toIntOrNull() }
         val dataId = document.selectFirst("div[data-data-id]")?.attr("data-data-id")?.takeIf { it.isNotBlank() }
-            ?: url.substringBefore("?").substringBefore("#").removeSuffix("/").substringAfterLast("-")
+            ?: url.substringBefore("?").substringBefore("#").removeSuffix("/").substringAfterLast("/")
         val totalEpisodes = document.select("span")
             .firstOrNull { it.text().trim() == "Episodes:" }
             ?.nextElementSibling()?.text()?.trim()?.toIntOrNull()
@@ -135,29 +139,35 @@ class Anizen : MainAPI() {
             callback(link)
         }
 
-        response.servers.sortedBy { it.priority() }.forEach { server ->
-            val embed = server.embed?.takeIf { it.isNotBlank() } ?: server.iframeUrl?.takeIf { it.isNotBlank() }
-            if (embed != null) {
-                if (loadedLinks && server.priority() >= 5) return@forEach
-                val sourceName = listOf(server.serverName, server.type.uppercase())
-                    .filter { it.isNotBlank() }
-                    .distinct()
-                    .joinToString(" ")
-                when {
-                    embed.contains("ryzex.top") -> {
-                        AnizenRyzex().apply { name = sourceName }.getUrl(embed, mainUrl, subtitleCallback, wrappedCallback)
+        coroutineScope {
+            response.servers.sortedBy { it.priority() }.map { server ->
+                async {
+                    runCatching {
+                        val embed = server.embed?.takeIf { it.isNotBlank() } ?: server.iframeUrl?.takeIf { it.isNotBlank() }
+                        if (embed != null) {
+                            val sourceName = listOf(server.serverName, server.type.uppercase())
+                                .filter { it.isNotBlank() }
+                                .distinct()
+                                .joinToString(" ")
+                            when {
+                                embed.contains("ryzex.top") -> {
+                                    AnizenRyzex().apply { name = sourceName }.getUrl(embed, mainUrl, subtitleCallback, wrappedCallback)
+                                }
+                                embed.contains("abyssplayer.com") || embed.contains("abyss.to") -> {
+                                    AnizenAbyss().apply { name = sourceName }.getUrl(embed, mainUrl, subtitleCallback, wrappedCallback)
+                                }
+                                embed.contains("megaplay.buzz") -> AnizenMegaPlay(sourceName).getUrl(embed, mainUrl, subtitleCallback, wrappedCallback)
+                                embed.contains("vidwish.live") -> AnizenVidWish(sourceName).getUrl(embed, mainUrl, subtitleCallback, wrappedCallback)
+                                embed.contains("vidtube.site") -> AnizenVidTube(sourceName).getUrl(embed, mainUrl, subtitleCallback, wrappedCallback)
+                                embed.contains("playerp2p.live") || embed.contains("gdmirrorbot.") || embed.contains("boosterx.") -> {
+                                    AnizenWebView(sourceName, embed.baseUrl()).getUrl(embed, mainUrl, subtitleCallback, wrappedCallback)
+                                }
+                                else -> loadExtractor(embed, mainUrl, subtitleCallback, wrappedCallback)
+                            }
+                        }
                     }
-                    embed.contains("abyssplayer.com") || embed.contains("abyss.to") -> {
-                        AnizenAbyss().apply { name = sourceName }.getUrl(embed, mainUrl, subtitleCallback, wrappedCallback)
-                    }
-                    embed.contains("megaplay.buzz") -> AnizenMegaPlay(sourceName).getUrl(embed, mainUrl, subtitleCallback, wrappedCallback)
-                    embed.contains("vidwish.live") -> AnizenVidWish(sourceName).getUrl(embed, mainUrl, subtitleCallback, wrappedCallback)
-                    embed.contains("playerp2p.live") || embed.contains("gdmirrorbot.") || embed.contains("boosterx.") -> {
-                        AnizenWebView(sourceName, embed.baseUrl()).getUrl(embed, mainUrl, subtitleCallback, wrappedCallback)
-                    }
-                    else -> loadExtractor(embed, mainUrl, subtitleCallback, wrappedCallback)
                 }
-            }
+            }.awaitAll()
         }
         return loadedLinks
     }
@@ -204,10 +214,8 @@ class Anizen : MainAPI() {
                 val cleanDataId = rawDataId
                     .substringBefore("?")
                     .substringBefore("#")
+                    .removeSuffix("/")
                     .substringAfterLast("/")
-                    .let { path ->
-                        if (rawDataId.contains("/watch/")) path.substringAfterLast("-") else path
-                    }
                     .takeIf { it.isNotBlank() }
                     ?: return null
                 return EpisodeData(cleanDataId, split.getOrNull(1)?.toIntOrNull() ?: 1)

@@ -9,6 +9,7 @@ class AnizenProvider : BasePlugin() {
         registerMainAPI(Anizen())
         registerExtractorAPI(AnizenMegaPlay())
         registerExtractorAPI(AnizenVidWish())
+        registerExtractorAPI(AnizenVidTube())
         registerExtractorAPI(AnizenAbyss())
         registerExtractorAPI(AnizenRyzex())
     }

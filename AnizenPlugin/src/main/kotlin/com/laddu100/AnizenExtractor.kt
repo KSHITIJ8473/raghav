@@ -19,6 +19,10 @@ class AnizenVidWish(sourceName: String = "VidWish") : AnizenMegaPlay(sourceName)
     override val mainUrl = "https://vidwish.live"
 }
 
+class AnizenVidTube(sourceName: String = "VidPlay") : AnizenMegaPlay(sourceName) {
+    override val mainUrl = "https://vidtube.site"
+}
+
 class AnizenWebView(private val sourceName: String, private val baseUrl: String) : ExtractorApi() {
     override val name = sourceName
     override val mainUrl = baseUrl

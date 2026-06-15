@@ -202,10 +202,11 @@ open class AniDoorTryEmbed : ExtractorApi() {
                         serverName,
                         "$serverName - $qualityLabel",
                         m3u8Url,
-                        "$mainUrl/",
-                        ExtractorLinkType.M3U8,
-                        headers = playbackHeaders
-                    )
+                        ExtractorLinkType.M3U8
+                    ) {
+                        this.referer = "$mainUrl/"
+                        this.headers = playbackHeaders
+                    }
                 )
             }
         }

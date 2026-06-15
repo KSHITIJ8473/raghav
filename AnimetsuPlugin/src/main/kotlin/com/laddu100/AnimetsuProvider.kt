@@ -9,7 +9,7 @@ import java.net.URLEncoder
 
 class AnimetsuProvider : MainAPI() {
     override var mainUrl = "https://animetsu.live"
-    override var name = "Animetsu"
+    override var name = "Animetsu (disabled)"
     override var lang = "en"
     override val hasMainPage = true
     override val hasDownloadSupport = true

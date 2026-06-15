@@ -14,6 +14,7 @@ import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.M3u8Helper
 import com.lagradost.cloudstream3.utils.newExtractorLink
+import com.lagradost.cloudstream3.utils.getQualityFromName
 
 // ── CUSTOM MEGAPLAY EXTRACTOR ────────────────────────────────────────
 open class AniDoorMegaPlay : ExtractorApi() {
@@ -417,7 +418,7 @@ open class AniDoorDropfile : ExtractorApi() {
                 M3u8Helper.generateM3u8(name, link, mainUrl).forEach(callback)
             } else {
                 callback(
-                    ExtractorLink(
+                    newExtractorLink(
                         name,
                         name,
                         link,
@@ -452,7 +453,7 @@ open class AniDoorHD : ExtractorApi() {
                 M3u8Helper.generateM3u8(name, link, mainUrl).forEach(callback)
             } else {
                 callback(
-                    ExtractorLink(
+                    newExtractorLink(
                         name,
                         name,
                         link,

@@ -1,5 +1,6 @@
 package com.laddu100
 
+import android.util.Base64
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.google.gson.JsonParser
 import com.lagradost.api.Log
@@ -144,44 +145,68 @@ open class AniDoorTryEmbed : ExtractorApi() {
             "Referer" to embedReferer
         )
 
-        // 1. Get the page to receive tryembed_auth cookie
+        // 1. Get the page
         val pageRes = app.get(url, headers = pageHeaders)
-        val cookies = pageRes.okhttpResponse.headers("Set-Cookie")
-        val authCookieHeader = cookies.firstOrNull { it.contains("tryembed_auth=") }
-        val tryembedAuth = authCookieHeader?.substringBefore(";")?.substringAfter("tryembed_auth=")
+        val html = pageRes.text
 
-        // 2. Parse AniList ID and episode from URL path
-        // URL Format: https://tryembed.us.cc/embed/anime/{al}/{e}/{sub/dub}
-        val pathParts = url.substringAfter("https://tryembed.us.cc/embed/anime/").split("/")
-        if (pathParts.size < 3) return
-        val alId = pathParts[0]
-        val episode = pathParts[1]
-        val audio = pathParts[2] // sub or dub
-
-        // 3. Make AJAX API request to get stream data
-        val apiHeaders = mutableMapOf(
-            "User-Agent" to USER_AGENT,
-            "Referer" to url,
-            "Origin" to mainUrl,
-            "Sec-Fetch-Mode" to "cors",
-            "Sec-Fetch-Site" to "same-origin",
-            "Sec-Fetch-Dest" to "empty",
-            "Accept" to "*/*"
-        )
-        if (tryembedAuth != null) {
-            apiHeaders["Cookie"] = "tryembed_auth=$tryembedAuth"
+        // Check if RAW_PAYLOAD is embedded in the page HTML
+        val payloadRegex = Regex("""RAW_PAYLOAD\s*=\s*["']([^"']+)["']""")
+        val payloadMatch = payloadRegex.find(html)
+        val responseData = if (payloadMatch != null) {
+            try {
+                val base64Payload = payloadMatch.groupValues[1]
+                val decodedBytes = Base64.decode(base64Payload, Base64.DEFAULT)
+                val decodedJson = String(decodedBytes, Charsets.UTF_8)
+                parseJson<TryEmbedResponse>(decodedJson)
+            } catch (e: Exception) {
+                null
+            }
+        } else {
+            null
         }
 
-        val apiUrl = "$mainUrl/api/stream_data?id=$alId&episode=$episode&audio=$audio"
-        val apiRes = try {
-            app.get(apiUrl, headers = apiHeaders)
-        } catch (e: Exception) {
-            Log.e("TryEmbed", "API fetch failed: ${e.message}")
-            return
-        }
+        val finalResponseData = responseData ?: run {
+            // Fallback: Make AJAX API request to get stream data if RAW_PAYLOAD is not present
+            val cookies = pageRes.okhttpResponse.headers("Set-Cookie")
+            val authCookieHeader = cookies.firstOrNull { it.contains("tryembed_auth=") }
+            val tryembedAuth = authCookieHeader?.substringBefore(";")?.substringAfter("tryembed_auth=")
 
-        val responseData = parseJson<TryEmbedResponse>(apiRes.text)
-        val providers = responseData.providers ?: return
+            // Parse AniList ID and episode from URL path
+            val pathParts = url.substringAfter("https://tryembed.us.cc/embed/anime/").split("/")
+            if (pathParts.size < 3) return
+            val alId = pathParts[0]
+            val episode = pathParts[1]
+            val audio = pathParts[2] // sub or dub
+
+            val apiHeaders = mutableMapOf(
+                "User-Agent" to USER_AGENT,
+                "Referer" to url,
+                "Origin" to mainUrl,
+                "Sec-Fetch-Mode" to "cors",
+                "Sec-Fetch-Site" to "same-origin",
+                "Sec-Fetch-Dest" to "empty",
+                "Accept" to "*/*"
+            )
+            if (tryembedAuth != null) {
+                apiHeaders["Cookie"] = "tryembed_auth=$tryembedAuth"
+            }
+
+            val apiUrl = "$mainUrl/api/stream_data?id=$alId&episode=$episode&audio=$audio"
+            val apiRes = try {
+                app.get(apiUrl, headers = apiHeaders)
+            } catch (e: Exception) {
+                Log.e("TryEmbed", "API fetch failed: ${e.message}")
+                return
+            }
+
+            try {
+                parseJson<TryEmbedResponse>(apiRes.text)
+            } catch (e: Exception) {
+                null
+            }
+        } ?: return
+
+        val providers = finalResponseData.providers ?: return
 
         val playbackHeaders = mapOf(
             "User-Agent" to USER_AGENT,
@@ -257,7 +282,7 @@ open class AniDoorVidnest : ExtractorApi() {
             return
         }
 
-        if (!json.success || json.data.isNullOrBlank()) return
+        if (json.data.isNullOrBlank()) return
 
         val decryptedJsonText = decrypt(json.data)
         val decryptedResponse = try {
@@ -266,6 +291,8 @@ open class AniDoorVidnest : ExtractorApi() {
             Log.e("VidNest", "Failed to parse decrypted JSON: ${e.message}")
             return
         }
+
+        if (!decryptedResponse.success) return
 
         val playbackHeaders = mapOf(
             "User-Agent" to USER_AGENT,
@@ -334,11 +361,11 @@ open class AniDoorVidnest : ExtractorApi() {
 
     data class VidNestApiResponse(
         @JsonProperty("data") val data: String? = null,
-        @JsonProperty("success") val success: Boolean = false,
         @JsonProperty("encrypted") val encrypted: Boolean = false
     )
 
     data class VidNestDecryptedResponse(
+        @JsonProperty("success") val success: Boolean = false,
         @JsonProperty("sources") val sources: List<VidNestSource>? = null,
         @JsonProperty("tracks") val tracks: List<VidNestTrack>? = null
     )

@@ -219,8 +219,12 @@ class AniDoor : MainAPI() {
             app.get("https://anidoor.me/assets/sources.json").text
         } catch (e: Exception) {
             """[
+                {"id":"vidnest-ap-sub","name":"S1","base":"https://vidnest.fun","path":"/animepahe/{al}/{e}/sub","type":"anime","dub":false},
+                {"id":"vidnest-ap-dub","name":"D1","base":"https://vidnest.fun","path":"/animepahe/{al}/{e}/dub","type":"anime","dub":true},
                 {"id":"megaplay-sub","name":"S2","base":"https://megaplay.buzz","path":"/stream/ani/{al}/{e}/sub","type":"anime","dub":false},
                 {"id":"megaplay-dub","name":"D2","base":"https://megaplay.buzz","path":"/stream/ani/{al}/{e}/dub","type":"anime","dub":true},
+                {"id":"vidnest-anime-sub","name":"S3","base":"https://vidnest.fun","path":"/anime/{al}/{e}/sub","type":"anime","dub":false},
+                {"id":"vidnest-anime-dub","name":"D3","base":"https://vidnest.fun","path":"/anime/{al}/{e}/dub","type":"anime","dub":true},
                 {"id":"tryembed-sub","name":"S5","base":"https://tryembed.us.cc","path":"/embed/anime/{al}/{e}/sub","type":"anime","dub":false},
                 {"id":"tryembed-dub","name":"D5","base":"https://tryembed.us.cc","path":"/embed/anime/{al}/{e}/dub","type":"anime","dub":true}
             ]"""
@@ -260,7 +264,11 @@ class AniDoor : MainAPI() {
             val embedUrl = base + resolvedPath
 
             val loaded = try {
-                loadExtractor(embedUrl, "https://anidoor.me/", subtitleCallback, callback)
+                if (embedUrl.contains("megaplay.buzz") || embedUrl.contains("tryembed.us.cc") || embedUrl.contains("vidnest.fun")) {
+                    false
+                } else {
+                    loadExtractor(embedUrl, "https://anidoor.me/", subtitleCallback, callback)
+                }
             } catch (e: Exception) {
                 false
             }
@@ -274,6 +282,9 @@ class AniDoor : MainAPI() {
                         found = true
                     } else if (embedUrl.contains("tryembed.us.cc")) {
                         AniDoorTryEmbed().getUrl(embedUrl, "https://anidoor.me/", subtitleCallback, callback)
+                        found = true
+                    } else if (embedUrl.contains("vidnest.fun")) {
+                        AniDoorVidnest().getUrl(embedUrl, "https://anidoor.me/", subtitleCallback, callback)
                         found = true
                     }
                 } catch (e: Exception) {

@@ -147,8 +147,8 @@ open class AniDoorTryEmbed : ExtractorApi() {
         // 1. Get the page to receive tryembed_auth cookie
         val pageRes = app.get(url, headers = pageHeaders)
         val cookies = pageRes.okhttpResponse.headers("Set-Cookie")
-        val authCookieHeader = cookies.firstOrNull { it.contains("tryembed_auth=") } ?: return
-        val tryembedAuth = authCookieHeader.substringBefore(";").substringAfter("tryembed_auth=")
+        val authCookieHeader = cookies.firstOrNull { it.contains("tryembed_auth=") }
+        val tryembedAuth = authCookieHeader?.substringBefore(";")?.substringAfter("tryembed_auth=")
 
         // 2. Parse AniList ID and episode from URL path
         // URL Format: https://tryembed.us.cc/embed/anime/{al}/{e}/{sub/dub}
@@ -159,16 +159,18 @@ open class AniDoorTryEmbed : ExtractorApi() {
         val audio = pathParts[2] // sub or dub
 
         // 3. Make AJAX API request to get stream data
-        val apiHeaders = mapOf(
+        val apiHeaders = mutableMapOf(
             "User-Agent" to USER_AGENT,
             "Referer" to url,
             "Origin" to mainUrl,
-            "Cookie" to "tryembed_auth=$tryembedAuth",
             "Sec-Fetch-Mode" to "cors",
             "Sec-Fetch-Site" to "same-origin",
             "Sec-Fetch-Dest" to "empty",
             "Accept" to "*/*"
         )
+        if (tryembedAuth != null) {
+            apiHeaders["Cookie"] = "tryembed_auth=$tryembedAuth"
+        }
 
         val apiUrl = "$mainUrl/api/stream_data?id=$alId&episode=$episode&audio=$audio"
         val apiRes = try {
@@ -212,3 +214,145 @@ open class AniDoorTryEmbed : ExtractorApi() {
         }
     }
 }
+
+// ── CUSTOM VIDNEST EXTRACTOR ─────────────────────────────────────────
+open class AniDoorVidnest : ExtractorApi() {
+    override val name = "VidNest"
+    override val mainUrl = "https://vidnest.fun"
+    override val requiresReferer = true
+
+    override suspend fun getUrl(
+        url: String,
+        referer: String?,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        val uri = java.net.URI(url)
+        val pathParts = uri.path.split("/").filter { it.isNotBlank() }
+        if (pathParts.size < 4) return
+        
+        val alId = pathParts[1]
+        val episode = pathParts[2]
+        val audio = pathParts[3] // sub or dub
+
+        val apiHeaders = mapOf(
+            "User-Agent" to USER_AGENT,
+            "Referer" to "$mainUrl/",
+            "Origin" to mainUrl,
+            "Accept" to "application/json"
+        )
+
+        val apiUrl = "https://new.vidnest.fun/hianime/anime/$alId/$episode/$audio"
+        val responseText = try {
+            app.get(apiUrl, headers = apiHeaders).text
+        } catch (e: Exception) {
+            Log.e("VidNest", "API request failed: ${e.message}")
+            return
+        }
+
+        val json = try {
+            parseJson<VidNestApiResponse>(responseText)
+        } catch (e: Exception) {
+            Log.e("VidNest", "JSON parsing failed: ${e.message}")
+            return
+        }
+
+        if (!json.success || json.data.isNullOrBlank()) return
+
+        val decryptedJsonText = decrypt(json.data)
+        val decryptedResponse = try {
+            parseJson<VidNestDecryptedResponse>(decryptedJsonText)
+        } catch (e: Exception) {
+            Log.e("VidNest", "Failed to parse decrypted JSON: ${e.message}")
+            return
+        }
+
+        val playbackHeaders = mapOf(
+            "User-Agent" to USER_AGENT,
+            "Accept" to "*/*",
+            "Origin" to mainUrl,
+            "Referer" to "$mainUrl/",
+        )
+
+        decryptedResponse.sources?.forEach { source ->
+            val fileUrl = source.file ?: return@forEach
+            val generated = M3u8Helper.generateM3u8(name, fileUrl, mainUrl, headers = playbackHeaders)
+            if (generated.isNotEmpty()) {
+                generated.forEach(callback)
+            } else {
+                callback(
+                    newExtractorLink(name, name, fileUrl, ExtractorLinkType.M3U8) {
+                        this.referer = "$mainUrl/"
+                        this.headers = playbackHeaders
+                    }
+                )
+            }
+        }
+
+        decryptedResponse.tracks?.forEach { track ->
+            val fileUrl = track.file ?: return@forEach
+            val label = track.label ?: "Unknown"
+            if (track.kind == "captions" || track.kind == "subtitles") {
+                subtitleCallback(
+                    newSubtitleFile(label, fileUrl) {
+                        this.headers = playbackHeaders
+                    }
+                )
+            }
+        }
+    }
+
+    private fun decrypt(encryptedData: String): String {
+        val key = "RB0fpH8ZEyVLkv7c2i6MAJ5u3IKFDxlS1NTsnGaqmXYdUrtzjwObCgQP94hoeW+/="
+        val charMap = key.withIndex().associate { it.value to it.index }
+        val out = java.io.ByteArrayOutputStream()
+
+        var i = 0
+        while (i < encryptedData.length) {
+            val endIdx = if (i + 4 < encryptedData.length) i + 4 else encryptedData.length
+            val chunk = encryptedData.substring(i, endIdx).padEnd(4, '=')
+            val d = chunk.map { charMap[it] ?: 64 }
+
+            val b1 = ((d[0] shl 2) or (d[1] ushr 4))
+            out.write(b1)
+
+            if (d[2] != 64) {
+                val b2 = (((d[1] and 15) shl 4) or (d[2] ushr 2))
+                out.write(b2)
+            }
+
+            if (d[3] != 64) {
+                val b3 = (((d[2] and 3) shl 6) or d[3])
+                out.write(b3)
+            }
+
+            i += 4
+        }
+
+        return out.toString("UTF-8")
+    }
+
+    data class VidNestApiResponse(
+        @JsonProperty("data") val data: String? = null,
+        @JsonProperty("success") val success: Boolean = false,
+        @JsonProperty("encrypted") val encrypted: Boolean = false
+    )
+
+    data class VidNestDecryptedResponse(
+        @JsonProperty("sources") val sources: List<VidNestSource>? = null,
+        @JsonProperty("tracks") val tracks: List<VidNestTrack>? = null
+    )
+
+    data class VidNestSource(
+        @JsonProperty("file") val file: String? = null,
+        @JsonProperty("type") val type: String? = null
+    )
+
+    data class VidNestTrack(
+        @JsonProperty("file") val file: String? = null,
+        @JsonProperty("label") val label: String? = null,
+        @JsonProperty("kind") val kind: String? = null,
+        @JsonProperty("default") val default: Boolean = false
+    )
+}
+

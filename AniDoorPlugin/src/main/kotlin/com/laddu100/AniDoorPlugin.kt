@@ -9,5 +9,6 @@ class AniDoorPlugin : BasePlugin() {
         registerMainAPI(AniDoor())
         registerExtractorAPI(AniDoorMegaPlay())
         registerExtractorAPI(AniDoorTryEmbed())
+        registerExtractorAPI(AniDoorVidnest())
     }
 }

@@ -223,8 +223,14 @@ class AniDoor : MainAPI() {
                 {"id":"vidnest-ap-dub","name":"D1","base":"https://vidnest.fun","path":"/animepahe/{al}/{e}/dub","type":"anime","dub":true},
                 {"id":"megaplay-sub","name":"S2","base":"https://megaplay.buzz","path":"/stream/ani/{al}/{e}/sub","type":"anime","dub":false},
                 {"id":"megaplay-dub","name":"D2","base":"https://megaplay.buzz","path":"/stream/ani/{al}/{e}/dub","type":"anime","dub":true},
+                {"id":"megaplay-sub-alt","name":"S2(alt)","base":"https://megaplay.buzz","path":"/stream/mal/{mal}/{e}/sub","type":"anime","dub":false},
+                {"id":"megaplay-dub-alt","name":"D2(alt)","base":"https://megaplay.buzz","path":"/stream/mal/{mal}/{e}/dub","type":"anime","dub":true},
                 {"id":"vidnest-anime-sub","name":"S3","base":"https://vidnest.fun","path":"/anime/{al}/{e}/sub","type":"anime","dub":false},
                 {"id":"vidnest-anime-dub","name":"D3","base":"https://vidnest.fun","path":"/anime/{al}/{e}/dub","type":"anime","dub":true},
+                {"id":"dropfile-cc-sub","name":"S4","base":"https://dropfile.cc","path":"/player/tv/mal-{mal}/1/{e}?audio=sub&lang=en&color=%237c6fe0","type":"anime","dub":false},
+                {"id":"dropfile-cc-dub","name":"D4","base":"https://dropfile.cc","path":"/player/tv/mal-{mal}/1/{e}?audio=dub&lang=en&color=%237c6fe0","type":"anime","dub":true},
+                {"id":"hd-sub","name":"HD(beta)","base":"https://stream.nightslayer.workers.dev","path":"/player/{al}/{e}/sub","type":"anime","dub":false},
+                {"id":"hd-dub","name":"HD(beta)","base":"https://stream.nightslayer.workers.dev","path":"/player/{al}/{e}/dub","type":"anime","dub":true},
                 {"id":"tryembed-sub","name":"S5","base":"https://tryembed.us.cc","path":"/embed/anime/{al}/{e}/sub","type":"anime","dub":false},
                 {"id":"tryembed-dub","name":"D5","base":"https://tryembed.us.cc","path":"/embed/anime/{al}/{e}/dub","type":"anime","dub":true}
             ]"""
@@ -264,7 +270,7 @@ class AniDoor : MainAPI() {
             val embedUrl = base + resolvedPath
 
             val loaded = try {
-                if (embedUrl.contains("megaplay.buzz") || embedUrl.contains("tryembed.us.cc") || embedUrl.contains("vidnest.fun")) {
+                if (embedUrl.contains("megaplay.buzz") || embedUrl.contains("tryembed.us.cc") || embedUrl.contains("vidnest.fun") || embedUrl.contains("dropfile.cc") || embedUrl.contains("nightslayer.workers.dev")) {
                     false
                 } else {
                     loadExtractor(embedUrl, "https://anidoor.me/", subtitleCallback, callback)
@@ -285,6 +291,12 @@ class AniDoor : MainAPI() {
                         found = true
                     } else if (embedUrl.contains("vidnest.fun")) {
                         AniDoorVidnest().getUrl(embedUrl, "https://anidoor.me/", subtitleCallback, callback)
+                        found = true
+                    } else if (embedUrl.contains("dropfile.cc")) {
+                        AniDoorDropfile().getUrl(embedUrl, "https://anidoor.me/", subtitleCallback, callback)
+                        found = true
+                    } else if (embedUrl.contains("nightslayer.workers.dev")) {
+                        AniDoorHD().getUrl(embedUrl, "https://anidoor.me/", subtitleCallback, callback)
                         found = true
                     }
                 } catch (e: Exception) {

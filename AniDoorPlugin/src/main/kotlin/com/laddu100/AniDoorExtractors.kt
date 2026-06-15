@@ -260,6 +260,8 @@ open class AniDoorVidnest : ExtractorApi() {
         val episode = pathParts[2]
         val audio = pathParts[3] // sub or dub
 
+        val backend = if (pathParts[0] == "animepahe") "animepahe" else "hianime"
+
         val apiHeaders = mapOf(
             "User-Agent" to USER_AGENT,
             "Referer" to "$mainUrl/",
@@ -267,7 +269,7 @@ open class AniDoorVidnest : ExtractorApi() {
             "Accept" to "application/json"
         )
 
-        val apiUrl = "https://new.vidnest.fun/hianime/anime/$alId/$episode/$audio"
+        val apiUrl = "https://new.vidnest.fun/$backend/anime/$alId/$episode/$audio"
         val responseText = try {
             app.get(apiUrl, headers = apiHeaders).text
         } catch (e: Exception) {
@@ -383,3 +385,72 @@ open class AniDoorVidnest : ExtractorApi() {
     )
 }
 
+open class AniDoorDropfile : ExtractorApi() {
+    override val name = "DropFile"
+    override val mainUrl = "https://dropfile.cc"
+    override val requiresReferer = true
+
+    override suspend fun getUrl(
+        url: String,
+        referer: String?,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        val pageRes = app.get(url, headers = mapOf("Referer" to (referer ?: "https://anidoor.me/")))
+        val html = pageRes.text
+
+        val regex = Regex("""(https?://[^\s"']+(?:\.m3u8|\.mp4)[^\s"']*)""")
+        regex.findAll(html).forEach { match ->
+            val link = match.groupValues[1]
+            if (link.contains(".m3u8")) {
+                M3u8Helper.generateM3u8(name, link, mainUrl).forEach(callback)
+            } else {
+                callback(
+                    ExtractorLink(
+                        name,
+                        name,
+                        link,
+                        referer ?: "",
+                        getQualityFromName(name),
+                        link.contains(".m3u8")
+                    )
+                )
+            }
+        }
+    }
+}
+
+open class AniDoorHD : ExtractorApi() {
+    override val name = "HD"
+    override val mainUrl = "https://stream.nightslayer.workers.dev"
+    override val requiresReferer = true
+
+    override suspend fun getUrl(
+        url: String,
+        referer: String?,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        val pageRes = app.get(url, headers = mapOf("Referer" to (referer ?: "https://anidoor.me/")))
+        val html = pageRes.text
+
+        val regex = Regex("""(https?://[^\s"']+(?:\.m3u8|\.mp4)[^\s"']*)""")
+        regex.findAll(html).forEach { match ->
+            val link = match.groupValues[1]
+            if (link.contains(".m3u8")) {
+                M3u8Helper.generateM3u8(name, link, mainUrl).forEach(callback)
+            } else {
+                callback(
+                    ExtractorLink(
+                        name,
+                        name,
+                        link,
+                        referer ?: "",
+                        getQualityFromName(name),
+                        link.contains(".m3u8")
+                    )
+                )
+            }
+        }
+    }
+}

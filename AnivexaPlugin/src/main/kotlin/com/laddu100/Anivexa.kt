@@ -18,7 +18,6 @@ import com.lagradost.cloudstream3.utils.newExtractorLink
 import com.lagradost.nicehttp.RequestBodyTypes
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.RequestBody.Companion.toRequestBody
-import java.net.URLDecoder
 
 class Anivexa : MainAPI() {
     override var mainUrl = "https://anivexa.vercel.app"
@@ -182,79 +181,19 @@ class Anivexa : MainAPI() {
         var linksHarvested = false
 
         try {
-            // Allows normal URLs or our custom iframe intercept URL to trigger the resolver
-            val targetServers = Regex("""(?i)anivexa-intercept://.*|.*workers\.dev.*|.*megaplay.*|.*vidwish.*|.*vidnest.*|.*\.m3u8.*""")
+            val targetServers = Regex("""(?i).*(workers\.dev|megaplay\.buzz|vidwish\.live|vidnest\.fun|tryembed|dropfile|nightslayer|abyss|ryzex|\.m3u8).*""")
             
             val resolver = WebViewResolver(
                 interceptUrl = targetServers,
                 additionalUrls = emptyList(),
                 script = """
-                    (function() {
-                        let intercepted = new Set();
-                        
-                        function sendToKotlin(url) {
-                            if (!url || typeof url !== 'string') return;
-                            if (intercepted.has(url)) return;
-                            
-                            // If it matches our expected video hosts, force it out via iframe bridge
-                            if (url.includes('workers.dev') || url.includes('megaplay') || url.includes('vidwish') || url.includes('vidnest') || url.includes('.m3u8')) {
-                                intercepted.add(url);
-                                let i = document.createElement('iframe');
-                                i.style.display = 'none';
-                                i.src = 'anivexa-intercept://' + encodeURIComponent(url);
-                                document.body.appendChild(i);
-                            }
-                        }
-
-                        // 1. Trap all Fetch requests (Bypasses Service Workers!)
-                        const origFetch = window.fetch;
-                        window.fetch = async function(...args) {
-                            sendToKotlin(args[0]);
-                            return origFetch.apply(this, args);
-                        };
-
-                        // 2. Trap all XHR requests
-                        const origOpen = XMLHttpRequest.prototype.open;
-                        XMLHttpRequest.prototype.open = function(method, url) {
-                            sendToKotlin(url);
-                            return origOpen.apply(this, arguments);
-                        };
-
-                        // 3. Trap direct video assignments (like hls.js)
-                        const origSrc = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'src');
-                        if (origSrc) {
-                            Object.defineProperty(HTMLMediaElement.prototype, 'src', {
-                                get: function() { return origSrc.get.call(this); },
-                                set: function(val) {
-                                    sendToKotlin(val);
-                                    origSrc.set.call(this, val);
-                                }
-                            });
-                        }
-
-                        // 4. Force UI interaction to unblock streams
-                        let checks = 0;
-                        let interval = setInterval(() => {
-                            checks++;
-                            if (checks > 40) clearInterval(interval);
-                            
-                            document.querySelectorAll('iframe').forEach(ifr => {
-                                if (ifr.src && !ifr.src.includes('anivexa') && !ifr.src.includes('google')) {
-                                    sendToKotlin(ifr.src);
-                                }
-                            });
-                            
-                            let playBtn = document.querySelector('.vds-play-button, .play-button, .plyr__control--overlaid, button[aria-label="Play"]');
-                            if(playBtn) playBtn.click();
-                            
-                            // Force dub button click if audio=dub is selected
-                            if (window.location.href.includes('audio=dub')) {
-                                Array.from(document.querySelectorAll('button')).forEach(b => {
-                                    if(b.innerText && b.innerText.trim().toLowerCase() === 'dub') b.click();
-                                });
-                            }
-                        }, 500);
-                    })();
+                    let checks = 0;
+                    let interval = setInterval(() => {
+                        checks++;
+                        if (checks > 40) clearInterval(interval);
+                        let btn = document.querySelector('.vds-play-button, .play-button, .plyr__control, button[aria-label="Play"]');
+                        if (btn) btn.click();
+                    }, 500);
                 """.trimIndent(),
                 useOkhttp = false,
                 timeout = 25_000L
@@ -262,19 +201,14 @@ class Anivexa : MainAPI() {
             
             val resolvedUrl = app.get(watchTargetUrl, referer = mainUrl, interceptor = resolver).url
             
-            var targetUrl = resolvedUrl
-            if (resolvedUrl.startsWith("anivexa-intercept://")) {
-                targetUrl = URLDecoder.decode(resolvedUrl.removePrefix("anivexa-intercept://"), "UTF-8")
-            }
-            
             val reqHeaders = mapOf(
                 "Origin" to mainUrl,
                 "Referer" to "$mainUrl/",
                 "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36"
             )
 
-            if (targetUrl.contains("workers.dev", ignoreCase = true) || targetUrl.contains(".m3u8", ignoreCase = true)) {
-                val generated = M3u8Helper.generateM3u8("Anivexa ($audioType)", targetUrl, mainUrl, headers = reqHeaders)
+            if (resolvedUrl.contains("workers.dev", ignoreCase = true)) {
+                val generated = M3u8Helper.generateM3u8("Anivexa ($audioType)", resolvedUrl, mainUrl, headers = reqHeaders)
                 if (generated.isNotEmpty()) {
                     generated.forEach(callback)
                 } else {
@@ -282,7 +216,7 @@ class Anivexa : MainAPI() {
                         newExtractorLink(
                             source = "Anivexa Server",
                             name = "Anivexa ($audioType)",
-                            url = targetUrl,
+                            url = resolvedUrl,
                             type = ExtractorLinkType.M3U8
                         ) { 
                             this.headers = reqHeaders 
@@ -291,20 +225,22 @@ class Anivexa : MainAPI() {
                     )
                 }
                 linksHarvested = true
-            } else if (targetUrl.contains("megaplay", ignoreCase = true)) {
-                AnivexaMegaPlay().getUrl(targetUrl, watchTargetUrl, subtitleCallback, callback)
+            } else if (resolvedUrl.contains(".m3u8", ignoreCase = true)) {
+                M3u8Helper.generateM3u8("Anivexa Direct ($audioType)", resolvedUrl, mainUrl, headers = reqHeaders).forEach(callback)
                 linksHarvested = true
-            } else if (targetUrl.contains("vidwish", ignoreCase = true)) {
-                AnivexaVidWish().getUrl(targetUrl, watchTargetUrl, subtitleCallback, callback)
+            } else if (resolvedUrl.contains("megaplay", ignoreCase = true)) {
+                AnivexaMegaPlay().getUrl(resolvedUrl, watchTargetUrl, subtitleCallback, callback)
                 linksHarvested = true
-            } else if (targetUrl.contains("vidnest", ignoreCase = true)) {
-                AnivexaVidNest().getUrl(targetUrl, watchTargetUrl, subtitleCallback, callback)
+            } else if (resolvedUrl.contains("vidwish", ignoreCase = true)) {
+                AnivexaVidWish().getUrl(resolvedUrl, watchTargetUrl, subtitleCallback, callback)
                 linksHarvested = true
-            } else if (targetServers.matches(targetUrl)) {
-                loadExtractor(targetUrl, watchTargetUrl, subtitleCallback, callback)
+            } else if (resolvedUrl.contains("vidnest", ignoreCase = true)) {
+                AnivexaVidNest().getUrl(resolvedUrl, watchTargetUrl, subtitleCallback, callback)
+                linksHarvested = true
+            } else if (targetServers.matches(resolvedUrl)) {
+                loadExtractor(resolvedUrl, watchTargetUrl, subtitleCallback, callback)
                 linksHarvested = true
             }
-            
         } catch (e: Exception) {
             Log.e("Anivexa", "WebView extraction failed: ${e.message}")
         }

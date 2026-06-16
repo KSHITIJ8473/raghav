@@ -143,16 +143,12 @@ class Anizen : MainAPI() {
             response.servers.sortedBy { it.priority() }.map { server ->
                 async {
                     runCatching {
-                        val rawEmbed = server.embed?.takeIf { it.isNotBlank() } ?: server.iframeUrl?.takeIf { it.isNotBlank() }
-                        if (rawEmbed != null) {
-                            // FIX: Handle protocol-relative URLs
-                            val embed = if (rawEmbed.startsWith("//")) "https:$rawEmbed" else rawEmbed
-                            
+                        val embed = server.embed?.takeIf { it.isNotBlank() } ?: server.iframeUrl?.takeIf { it.isNotBlank() }
+                        if (embed != null) {
                             val sourceName = listOf(server.serverName, server.type.uppercase())
                                 .filter { it.isNotBlank() }
                                 .distinct()
                                 .joinToString(" ")
-                                
                             when {
                                 embed.contains("ryzex.top") -> {
                                     AnizenRyzex().apply { name = sourceName }.getUrl(embed, mainUrl, subtitleCallback, wrappedCallback)
@@ -164,11 +160,6 @@ class Anizen : MainAPI() {
                                 embed.contains("vidwish.live") -> AnizenVidWish(sourceName).getUrl(embed, mainUrl, subtitleCallback, wrappedCallback)
                                 embed.contains("vidtube.site") -> AnizenVidTube(sourceName).getUrl(embed, mainUrl, subtitleCallback, wrappedCallback)
                                 embed.contains("playerp2p.live") || embed.contains("gdmirrorbot.") || embed.contains("boosterx.") -> {
-                                    AnizenWebView(sourceName, embed.baseUrl()).getUrl(embed, mainUrl, subtitleCallback, wrappedCallback)
-                                }
-                                // RESTORED: Route VidStream/VidCloud to WebView to fix "No Links Found"
-                                embed.contains("vidstream") || embed.contains("vidcloud") || embed.contains("vizcloud") || embed.contains("vidplay") ||
-                                server.serverName.contains("vidstream", ignoreCase = true) || server.serverName.contains("vidcloud", ignoreCase = true) -> {
                                     AnizenWebView(sourceName, embed.baseUrl()).getUrl(embed, mainUrl, subtitleCallback, wrappedCallback)
                                 }
                                 else -> loadExtractor(embed, mainUrl, subtitleCallback, wrappedCallback)
@@ -300,4 +291,4 @@ class Anizen : MainAPI() {
     )
 
     class ErrorLoadingException(message: String) : RuntimeException(message)
-}
+}      

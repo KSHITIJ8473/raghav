@@ -1,11 +1,26 @@
 package com.laddu100
 
 import com.lagradost.cloudstream3.*
+import com.lagradost.cloudstream3.app
+import com.lagradost.cloudstream3.DubStatus
+import com.lagradost.cloudstream3.Episode
+import com.lagradost.cloudstream3.HomePageResponse
+import com.lagradost.cloudstream3.LoadResponse
+import com.lagradost.cloudstream3.MainAPI
+import com.lagradost.cloudstream3.MainPageRequest
+import com.lagradost.cloudstream3.TvType
+import com.lagradost.cloudstream3.mainPageOf
+import com.lagradost.cloudstream3.newAnimeLoadResponse
+import com.lagradost.cloudstream3.newAnimeSearchResponse
+import com.lagradost.cloudstream3.newEpisode
+import com.lagradost.cloudstream3.newHomePageResponse
+import com.lagradost.cloudstream3.addEpisodes
+import com.lagradost.cloudstream3.SearchResponse
+import com.lagradost.cloudstream3.addDubStatus
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.loadExtractor
 import com.lagradost.cloudstream3.utils.newExtractorLink
-import org.jsoup.Jsoup
 import java.net.URLEncoder
 
 class Anivexa : MainAPI() {
@@ -31,7 +46,8 @@ class Anivexa : MainAPI() {
         val items = doc.select(".ani.items .item, .items .item, .card, div[class*='item']")
         val animeList = items.mapNotNull { element ->
             val aTag = element.selectFirst("a") ?: return@mapNotNull null
-            val href = fixUrl(aTag.attr("href"))
+            val href = aTag.attr("href")
+            val link = if (href.startsWith("http")) href else "$mainUrl/${href.removePrefix("/")}"
             
             val title = element.selectFirst(".name, .title, h3")?.text() 
                 ?: element.selectFirst("img")?.attr("alt") 
@@ -40,12 +56,13 @@ class Anivexa : MainAPI() {
                 
             val posterUrl = element.selectFirst("img")?.attr("src")
 
-            newAnimeSearchResponse(title, href, TvType.Anime) {
+            newAnimeSearchResponse(title, link, TvType.Anime) {
                 this.posterUrl = posterUrl
                 addDubStatus(dubExist = true, subExist = true)
             }
         }
-        return newHomePageResponse(request.name, animeList, hasNext = false)
+        // Fixed: Removed the invalid 'hasNext' parameter from the simple string-name constructor
+        return newHomePageResponse(request.name, animeList)
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
@@ -55,13 +72,14 @@ class Anivexa : MainAPI() {
         
         return doc.select(".ani.items .item, .items .item, .card").mapNotNull { element ->
             val aTag = element.selectFirst("a") ?: return@mapNotNull null
-            val href = fixUrl(aTag.attr("href"))
+            val href = aTag.attr("href")
+            val link = if (href.startsWith("http")) href else "$mainUrl/${href.removePrefix("/")}"
             val title = element.selectFirst(".name, .title, h3")?.text() 
                 ?: element.selectFirst("img")?.attr("alt") 
                 ?: return@mapNotNull null
             val posterUrl = element.selectFirst("img")?.attr("src")
 
-            newAnimeSearchResponse(title, href, TvType.Anime) {
+            newAnimeSearchResponse(title, link, TvType.Anime) {
                 this.posterUrl = posterUrl
                 addDubStatus(dubExist = true, subExist = true)
             }
@@ -141,7 +159,9 @@ class Anivexa : MainAPI() {
 
         val playerIframe = doc.selectFirst("iframe")?.attr("src")
         if (!playerIframe.isNullOrBlank()) {
-            val iframeUrl = fixUrl(playerIframe)
+            val iframeUrl = if (playerIframe.startsWith("http")) playerIframe 
+                            else if (playerIframe.startsWith("//")) "https:$playerIframe" 
+                            else "$mainUrl/${playerIframe.removePrefix("/")}"
             loadExtractor(iframeUrl, watchTargetUrl, subtitleCallback, callback)
             linksHarvested = true
         }

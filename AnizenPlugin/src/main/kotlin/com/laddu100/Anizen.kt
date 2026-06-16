@@ -149,7 +149,7 @@ class Anizen : MainAPI() {
                             // FIX 1: Handle protocol-relative URLs (e.g., //megaplay.buzz)
                             var embed = if (rawEmbed.startsWith("//")) "https:$rawEmbed" else rawEmbed
                             
-                            // FIX 2: Append streamKey if the server provides one (Fixes Error 2004 for some servers)
+                            // FIX 2: Append streamKey if the server provides one (Fixes Error 2004)
                             server.streamKey?.takeIf { it.isNotBlank() }?.let { key ->
                                 embed = if ("?" in embed) "$embed&key=$key" else "$embed?key=$key"
                             }

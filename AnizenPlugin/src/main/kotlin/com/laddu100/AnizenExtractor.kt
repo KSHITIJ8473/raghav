@@ -79,15 +79,24 @@ open class AnizenMegaPlay(private val sourceName: String = "MegaPlay") : Extract
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        val headers = mapOf(
+        // Headers for fetching the HTML and API Data
+        val ajaxHeaders = mapOf(
             "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:140.0) Gecko/20100101 Firefox/140.0",
             "Accept" to "*/*",
             "X-Requested-With" to "XMLHttpRequest",
             "Referer" to "$mainUrl/"
         )
+        
+        // FIX: Clean headers for the video player. CDNs block AJAX headers on video chunks.
+        val videoHeaders = mapOf(
+            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36",
+            "Accept" to "*/*",
+            "Origin" to "https://megaplay.buzz",
+            "Referer" to "https://megaplay.buzz/"
+        )
 
         runCatching {
-            val document = app.get(url, headers = headers).document
+            val document = app.get(url, headers = ajaxHeaders).document
             val html = document.html()
             
             val id = document.selectFirst("#megaplay-player")?.attr("data-id")?.takeIf { it.isNotBlank() }
@@ -97,10 +106,10 @@ open class AnizenMegaPlay(private val sourceName: String = "MegaPlay") : Extract
                 ?: Regex("""/stream/s-\d+/(\d+)""").find(url)?.groupValues?.get(1)
                 ?: return@runCatching
 
-            // FIX: Scrape the security tokens from the settings object in the HTML
-            val cid = Regex("""cid\s*:\s*'([^']+)'""").find(html)?.groupValues?.get(1) ?: ""
-            val cidu = Regex("""cidu\s*:\s*'([^']+)'""").find(html)?.groupValues?.get(1) ?: ""
-            val type = Regex("""type\s*:\s*'([^']+)'""").find(html)?.groupValues?.get(1) ?: ""
+            // Scrape the security tokens from the settings object in the HTML
+            val cid = Regex("""cid\s*:\s*["']([^"']+)["']""").find(html)?.groupValues?.get(1) ?: ""
+            val cidu = Regex("""cidu\s*:\s*["']([^"']+)["']""").find(html)?.groupValues?.get(1) ?: ""
+            val type = Regex("""type\s*:\s*["']([^"']+)["']""").find(html)?.groupValues?.get(1) ?: ""
 
             // Build the API URL with the required tokens
             var apiUrl = "$mainUrl/stream/getSources?id=$id"
@@ -108,16 +117,18 @@ open class AnizenMegaPlay(private val sourceName: String = "MegaPlay") : Extract
             if (cidu.isNotEmpty()) apiUrl += "&cidu=$cidu"
             if (type.isNotEmpty()) apiUrl += "&type=$type"
 
-            val response = app.get(apiUrl, headers = headers).parsedSafe<Response>()
+            val response = app.get(apiUrl, headers = ajaxHeaders).parsedSafe<Response>()
                 ?: return@runCatching
             val m3u8 = response.sources?.file ?: return@runCatching
 
-            generateM3u8(name, m3u8, mainUrl, headers = headers).forEach(callback)
+            // Pass clean videoHeaders to generateM3u8 to fix Remote Error 2004
+            generateM3u8(name, m3u8, mainUrl, headers = videoHeaders).forEach(callback)
+            
             response.tracks.forEach { track ->
                 val file = track.file ?: return@forEach
                 if (track.kind == "captions" || track.kind == "subtitles") {
                     subtitleCallback(newSubtitleFile(track.label ?: "Subtitle", file) {
-                        this.headers = mapOf("Referer" to "$mainUrl/")
+                        this.headers = videoHeaders
                     })
                 }
             }
@@ -132,7 +143,7 @@ open class AnizenMegaPlay(private val sourceName: String = "MegaPlay") : Extract
             )
             val m3u8 = app.get(url, referer = mainUrl, interceptor = resolver).url
             if (m3u8.contains(".m3u8")) {
-                generateM3u8(name, m3u8, mainUrl, headers = headers).forEach(callback)
+                generateM3u8(name, m3u8, mainUrl, headers = videoHeaders).forEach(callback)
             }
         }
     }

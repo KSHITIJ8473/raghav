@@ -89,7 +89,7 @@ class Anizen : MainAPI() {
             .firstOrNull { it.text().trim() in listOf("Premiered:", "Date aired:") }
             ?.nextElementSibling()?.text()
             ?.let { Regex("""\d{4}""").find(it)?.value?.toIntOrNull() }
-        val dataId = document.selectFirst("div[data-data-ID]")?.attr("data-data-id")?.takeIf { it.isNotBlank() }
+        val dataId = document.selectFirst("div[data-data-id]")?.attr("data-data-id")?.takeIf { it.isNotBlank() }
             ?: url.substringBefore("?").substringBefore("#").removeSuffix("/").substringAfterLast("/")
         val totalEpisodes = document.select("span")
             .firstOrNull { it.text().trim() == "Episodes:" }
@@ -146,8 +146,13 @@ class Anizen : MainAPI() {
                         val rawEmbed = server.embed?.takeIf { it.isNotBlank() } ?: server.iframeUrl?.takeIf { it.isNotBlank() }
                         if (rawEmbed != null) {
                             
-                            // FIX: Ensure URL starts with https:// if it's a protocol-relative URL
-                            val embed = if (rawEmbed.startsWith("//")) "https:$rawEmbed" else rawEmbed
+                            // FIX 1: Handle protocol-relative URLs (e.g., //megaplay.buzz)
+                            var embed = if (rawEmbed.startsWith("//")) "https:$rawEmbed" else rawEmbed
+                            
+                            // FIX 2: Append streamKey if the server provides one (Fixes Error 2004 for some servers)
+                            server.streamKey?.takeIf { it.isNotBlank() }?.let { key ->
+                                embed = if ("?" in embed) "$embed&key=$key" else "$embed?key=$key"
+                            }
                             
                             val sourceName = listOf(server.serverName, server.type.uppercase())
                                 .filter { it.isNotBlank() }
@@ -167,13 +172,11 @@ class Anizen : MainAPI() {
                                 embed.contains("playerp2p.live") || embed.contains("gdmirrorbot.") || embed.contains("boosterx.") -> {
                                     AnizenWebView(sourceName, embed.baseUrl()).getUrl(embed, mainUrl, subtitleCallback, wrappedCallback)
                                 }
-                                // --- NEW FIX: Catch VidStream/VidCloud servers ---
-                                // We check both the URL and the serverName provided by the API
+                                // FIX 3: Force VidStream/VidCloud to use WebView since they fail on default extractors
                                 embed.contains("vidstream") || embed.contains("vidcloud") || embed.contains("vizcloud") || embed.contains("vidplay") ||
                                 server.serverName.contains("vidstream", ignoreCase = true) || server.serverName.contains("vidcloud", ignoreCase = true) -> {
                                     AnizenWebView(sourceName, embed.baseUrl()).getUrl(embed, mainUrl, subtitleCallback, wrappedCallback)
                                 }
-                                // -----------------------------------------------
                                 else -> loadExtractor(embed, mainUrl, subtitleCallback, wrappedCallback)
                             }
                         }

@@ -87,11 +87,11 @@ open class AnizenMegaPlay(private val sourceName: String = "MegaPlay") : Extract
             "Referer" to "$mainUrl/"
         )
         
-        // FIX: Clean headers for the video player. CDNs block AJAX headers on video chunks.
+        // FIX: Clean, standard headers for the video player. NO ORIGIN HEADER.
+        // CDNs often block requests with an Origin header.
         val videoHeaders = mapOf(
             "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36",
             "Accept" to "*/*",
-            "Origin" to "https://megaplay.buzz",
             "Referer" to "https://megaplay.buzz/"
         )
 
@@ -122,7 +122,7 @@ open class AnizenMegaPlay(private val sourceName: String = "MegaPlay") : Extract
             val m3u8 = response.sources?.file ?: return@runCatching
 
             // Pass clean videoHeaders to generateM3u8 to fix Remote Error 2004
-            generateM3u8(name, m3u8, mainUrl, headers = videoHeaders).forEach(callback)
+            generateM3u8(name, m3u8, "https://megaplay.buzz/", headers = videoHeaders).forEach(callback)
             
             response.tracks.forEach { track ->
                 val file = track.file ?: return@forEach
@@ -143,7 +143,7 @@ open class AnizenMegaPlay(private val sourceName: String = "MegaPlay") : Extract
             )
             val m3u8 = app.get(url, referer = mainUrl, interceptor = resolver).url
             if (m3u8.contains(".m3u8")) {
-                generateM3u8(name, m3u8, mainUrl, headers = videoHeaders).forEach(callback)
+                generateM3u8(name, m3u8, "https://megaplay.buzz/", headers = videoHeaders).forEach(callback)
             }
         }
     }

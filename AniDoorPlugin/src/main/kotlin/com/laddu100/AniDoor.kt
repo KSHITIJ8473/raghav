@@ -219,6 +219,7 @@ class AniDoor : MainAPI() {
         val epNum = parts[3].toIntOrNull() ?: 1
         val isMovie = parts[4].toBoolean()
 
+        // FIX: malId "0" is not valid — treat it as empty
         val validMalId = if (malId == "0" || malId.isBlank()) null else malId
         val isDubRequest = (dubOrSub == "dub")
 
@@ -248,7 +249,11 @@ class AniDoor : MainAPI() {
             val path = source.path ?: return@forEach
             val base = source.base ?: return@forEach
 
-            if (path.contains("{mal}") && validMalId == null) return@forEach
+            // FIX: Skip sources that need MAL ID when it's not available (Prevents Dropfile Remote Errors)
+            if (path.contains("{mal}") && validMalId == null) {
+                Log.d("AniDoor", "Skipping ${source.id}: requires MAL ID but none available")
+                return@forEach
+            }
 
             val resolvedPath = path
                 .replace("{al}", alId)
@@ -290,6 +295,7 @@ class AniDoor : MainAPI() {
     }
 
     companion object {
+        // Updated fallback sources - matches exactly what anidoor.me currently serves
         private val DEFAULT_SOURCES_JSON = """
             [
                 {"id":"vidnest-ap-sub","name":"S1","base":"https://vidnest.fun","path":"/animepahe/{al}/{e}/sub","type":"anime","dub":false,"default":true},

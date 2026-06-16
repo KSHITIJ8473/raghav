@@ -7,5 +7,8 @@ import com.lagradost.cloudstream3.plugins.CloudstreamPlugin
 class AnivexaPlugin : BasePlugin() {
     override fun load() {
         registerMainAPI(Anivexa())
+        registerExtractorAPI(AnivexaMegaPlay())
+        registerExtractorAPI(AnivexaVidWish())
+        registerExtractorAPI(AnivexaVidNest())
     }
 }

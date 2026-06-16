@@ -18,6 +18,7 @@ import com.lagradost.cloudstream3.utils.newExtractorLink
 import com.lagradost.nicehttp.RequestBodyTypes
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.RequestBody.Companion.toRequestBody
+import java.net.URLDecoder
 
 class Anivexa : MainAPI() {
     override var mainUrl = "https://anivexa.vercel.app"
@@ -181,65 +182,127 @@ class Anivexa : MainAPI() {
         var linksHarvested = false
 
         try {
-            val targetServers = Regex("""(?i).*(workers\.dev|megaplay\.buzz|vidwish\.live|vidnest\.fun|tryembed|dropfile|nightslayer|abyss|ryzex|\.m3u8).*""")
+            // The ultimate trap: A standard HTTP URL filter that Android's native WebView sniffer cannot ignore.
+            val targetServers = Regex("""(?i).*anivexa\.vercel\.app/cs-intercept\?url=.*""")
             
             val resolver = WebViewResolver(
                 interceptUrl = targetServers,
                 additionalUrls = emptyList(),
                 script = """
-                    let checks = 0;
-                    let interval = setInterval(() => {
-                        checks++;
-                        if (checks > 40) clearInterval(interval);
-                        let btn = document.querySelector('.vds-play-button, .play-button, .plyr__control, button[aria-label="Play"]');
-                        if (btn) btn.click();
-                    }, 500);
+                    (function() {
+                        let sent = new Set();
+                        function sendToKotlin(url) {
+                            if (!url || typeof url !== 'string') return;
+                            if (sent.has(url)) return;
+                            if (url.includes('workers.dev') || url.includes('megaplay') || url.includes('vidwish') || url.includes('vidnest') || url.includes('.m3u8')) {
+                                sent.add(url);
+                                // A standard HTTP fetch guarantees Android's network sniffer activates
+                                fetch('https://anivexa.vercel.app/cs-intercept?url=' + encodeURIComponent(url)).catch(e=>{});
+                            }
+                        }
+
+                        // 1. JSON parse trap: Catches SvelteKit's state hydration instantly before video plays
+                        const origParse = JSON.parse;
+                        JSON.parse = function(text) {
+                            if (typeof text === 'string') {
+                                let match = text.match(/https?:\/\/[^"'\\]*(?:workers\.dev|megaplay|vidwish|vidnest|\.m3u8)[^"'\\]*/i);
+                                if (match) sendToKotlin(match[0]);
+                            }
+                            return origParse.apply(this, arguments);
+                        };
+
+                        // 2. Network Fetch Trap
+                        const origFetch = window.fetch;
+                        window.fetch = async function(...args) {
+                            sendToKotlin(args[0]);
+                            return origFetch.apply(this, args);
+                        };
+
+                        // 3. Network XHR Trap
+                        const origOpen = XMLHttpRequest.prototype.open;
+                        XMLHttpRequest.prototype.open = function(method, url) {
+                            sendToKotlin(url);
+                            return origOpen.apply(this, arguments);
+                        };
+
+                        let checks = 0;
+                        let intv = setInterval(() => {
+                            checks++;
+                            if (checks > 40) clearInterval(intv);
+                            
+                            // 4. Iframe DOM Trap
+                            document.querySelectorAll('iframe').forEach(i => {
+                                if (i.src && !i.src.includes('anivexa') && !i.src.includes('google')) sendToKotlin(i.src);
+                            });
+                            
+                            // Push the play button if blocked by Android
+                            let btn = document.querySelector('.vds-play-button, button[aria-label="Play"], .plyr__control');
+                            if(btn) btn.click();
+                            
+                            // Auto-select dub if required by CloudStream
+                            if (window.location.href.includes('audio=dub') && checks === 2) {
+                                Array.from(document.querySelectorAll('button')).forEach(b => {
+                                    if(b.innerText && b.innerText.trim().toLowerCase() === 'dub') b.click();
+                                });
+                            }
+
+                            // If we injected late, re-click the active server to force a network reload
+                            if(checks === 4) {
+                                let srv = document.querySelector('.server-btn.active') || document.querySelector('.server-btn');
+                                if (srv) srv.click();
+                            }
+                        }, 500);
+                    })();
                 """.trimIndent(),
                 useOkhttp = false,
                 timeout = 25_000L
             )
             
+            // Launch the WebView trap
             val resolvedUrl = app.get(watchTargetUrl, referer = mainUrl, interceptor = resolver).url
             
-            val reqHeaders = mapOf(
-                "Origin" to mainUrl,
-                "Referer" to "$mainUrl/",
-                "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36"
-            )
+            if (resolvedUrl.contains("cs-intercept")) {
+                val encodedUrl = resolvedUrl.substringAfter("url=")
+                val targetUrl = URLDecoder.decode(encodedUrl, "UTF-8")
+                
+                val reqHeaders = mapOf(
+                    "Origin" to mainUrl,
+                    "Referer" to "$mainUrl/",
+                    "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36"
+                )
 
-            if (resolvedUrl.contains("workers.dev", ignoreCase = true)) {
-                val generated = M3u8Helper.generateM3u8("Anivexa ($audioType)", resolvedUrl, mainUrl, headers = reqHeaders)
-                if (generated.isNotEmpty()) {
-                    generated.forEach(callback)
+                // Process the natively hijacked stream
+                if (targetUrl.contains("workers.dev", ignoreCase = true) || targetUrl.contains(".m3u8", ignoreCase = true)) {
+                    val m3u8Links = M3u8Helper.generateM3u8("Anivexa Server", targetUrl, mainUrl, headers = reqHeaders)
+                    if (m3u8Links.isNotEmpty()) {
+                        m3u8Links.forEach(callback)
+                    } else {
+                        callback(
+                            newExtractorLink(
+                                source = "Anivexa Proxy",
+                                name = "Anivexa Server ($audioType)",
+                                url = targetUrl,
+                                referer = mainUrl,
+                                type = ExtractorLinkType.M3U8
+                            ) {
+                                this.headers = reqHeaders
+                            }
+                        )
+                    }
+                    linksHarvested = true
+                } else if (targetUrl.contains("megaplay", ignoreCase = true)) {
+                    AnivexaMegaPlay().getUrl(targetUrl, watchTargetUrl, subtitleCallback, callback)
+                    linksHarvested = true
+                } else if (targetUrl.contains("vidwish", ignoreCase = true)) {
+                    AnivexaVidWish().getUrl(targetUrl, watchTargetUrl, subtitleCallback, callback)
+                    linksHarvested = true
+                } else if (targetUrl.contains("vidnest", ignoreCase = true)) {
+                    AnivexaVidNest().getUrl(targetUrl, watchTargetUrl, subtitleCallback, callback)
+                    linksHarvested = true
                 } else {
-                    callback(
-                        newExtractorLink(
-                            source = "Anivexa Server",
-                            name = "Anivexa ($audioType)",
-                            url = resolvedUrl,
-                            type = ExtractorLinkType.M3U8
-                        ) { 
-                            this.headers = reqHeaders 
-                            this.referer = mainUrl
-                        }
-                    )
+                    loadExtractor(targetUrl, watchTargetUrl, subtitleCallback, callback)
+                    linksHarvested = true
                 }
-                linksHarvested = true
-            } else if (resolvedUrl.contains(".m3u8", ignoreCase = true)) {
-                M3u8Helper.generateM3u8("Anivexa Direct ($audioType)", resolvedUrl, mainUrl, headers = reqHeaders).forEach(callback)
-                linksHarvested = true
-            } else if (resolvedUrl.contains("megaplay", ignoreCase = true)) {
-                AnivexaMegaPlay().getUrl(resolvedUrl, watchTargetUrl, subtitleCallback, callback)
-                linksHarvested = true
-            } else if (resolvedUrl.contains("vidwish", ignoreCase = true)) {
-                AnivexaVidWish().getUrl(resolvedUrl, watchTargetUrl, subtitleCallback, callback)
-                linksHarvested = true
-            } else if (resolvedUrl.contains("vidnest", ignoreCase = true)) {
-                AnivexaVidNest().getUrl(resolvedUrl, watchTargetUrl, subtitleCallback, callback)
-                linksHarvested = true
-            } else if (targetServers.matches(resolvedUrl)) {
-                loadExtractor(resolvedUrl, watchTargetUrl, subtitleCallback, callback)
-                linksHarvested = true
             }
         } catch (e: Exception) {
             Log.e("Anivexa", "WebView extraction failed: ${e.message}")

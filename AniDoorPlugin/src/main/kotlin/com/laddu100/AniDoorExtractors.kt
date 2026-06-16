@@ -108,7 +108,8 @@ open class AniDoorMegaPlay : ExtractorApi() {
         return null
     }
 
-    private fun extractSubtitlesFromJson(
+    // FIX: Added 'suspend' here because newSubtitleFile is a suspend function
+    private suspend fun extractSubtitlesFromJson(
         root: com.google.gson.JsonObject,
         headers: Map<String, String>,
         subtitleCallback: (SubtitleFile) -> Unit

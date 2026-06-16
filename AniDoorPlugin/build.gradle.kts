@@ -2,7 +2,7 @@ version = 2
 
 cloudstream {
     language = "en"
-    description = "subbed anime(no dubbed) - UNDER DEVELOPMENT FOR DUBBED SUPPORT"
+    description = "DISABLED (UNDER DEVELOPMENT)"
     authors = listOf("KSHITIJ8473")
 
     status = 1

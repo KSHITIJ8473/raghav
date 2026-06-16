@@ -102,7 +102,7 @@ class Anizen : MainAPI() {
         val recommendations = emptyList<SearchResponse>()
 
         return if (tvType == TvType.AnimeMovie) {
-            newMovieLoadResponse(title, url, TvType.AnimeMovie, EpisodeData(dataId, 1).toString()) {
+            newMovieLoadResponse(title, url, TvType.AnimeMovie, EpisodeData(dataId, "1").toString()) {
                 this.posterUrl = poster
                 this.plot = description
                 this.year = year
@@ -128,9 +128,13 @@ class Anizen : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         val episodeData = EpisodeData.fromString(data) ?: return false
+        
+        // FIX: Added X-Requested-With header for better AJAX compatibility
+        val ajaxHeaders = headers + ("X-Requested-With" to "XMLHttpRequest")
+
         val response = app.get(
             "$mainUrl/ajax/servers/${episodeData.dataId}?ep=${episodeData.episode}",
-            headers = headers
+            headers = ajaxHeaders
         ).parsedSafe<ServerResponse>() ?: return false
 
         var loadedLinks = false
@@ -143,27 +147,39 @@ class Anizen : MainAPI() {
             response.servers.sortedBy { it.priority() }.map { server ->
                 async {
                     runCatching {
-                        val embed = server.embed?.takeIf { it.isNotBlank() } ?: server.iframeUrl?.takeIf { it.isNotBlank() }
-                        if (embed != null) {
-                            val sourceName = listOf(server.serverName, server.type.uppercase())
-                                .filter { it.isNotBlank() }
-                                .distinct()
-                                .joinToString(" ")
-                            when {
-                                embed.contains("ryzex.top") -> {
-                                    AnizenRyzex().apply { name = sourceName }.getUrl(embed, mainUrl, subtitleCallback, wrappedCallback)
-                                }
-                                embed.contains("abyssplayer.com") || embed.contains("abyss.to") -> {
-                                    AnizenAbyss().apply { name = sourceName }.getUrl(embed, mainUrl, subtitleCallback, wrappedCallback)
-                                }
-                                embed.contains("megaplay.buzz") -> AnizenMegaPlay(sourceName).getUrl(embed, mainUrl, subtitleCallback, wrappedCallback)
-                                embed.contains("vidwish.live") -> AnizenVidWish(sourceName).getUrl(embed, mainUrl, subtitleCallback, wrappedCallback)
-                                embed.contains("vidtube.site") -> AnizenVidTube(sourceName).getUrl(embed, mainUrl, subtitleCallback, wrappedCallback)
-                                embed.contains("playerp2p.live") || embed.contains("gdmirrorbot.") || embed.contains("boosterx.") -> {
-                                    AnizenWebView(sourceName, embed.baseUrl()).getUrl(embed, mainUrl, subtitleCallback, wrappedCallback)
-                                }
-                                else -> loadExtractor(embed, mainUrl, subtitleCallback, wrappedCallback)
+                        var embedUrl = server.embed?.takeIf { it.isNotBlank() } 
+                            ?: server.iframeUrl?.takeIf { it.isNotBlank() }
+                            ?: return@runCatching // Skip if both are empty
+
+                        // FIX: Handle protocol-relative URLs (e.g., //megaplay.buzz)
+                        if (embedUrl.startsWith("//")) {
+                            embedUrl = "https:$embedUrl"
+                        }
+
+                        // FIX: Append streamKey if the server provides one
+                        server.streamKey?.takeIf { it.isNotBlank() }?.let { key ->
+                            embedUrl = if ("?" in embedUrl) "$embedUrl&key=$key" else "$embedUrl?key=$key"
+                        }
+
+                        val sourceName = listOf(server.serverName, server.type.uppercase())
+                            .filter { it.isNotBlank() }
+                            .distinct()
+                            .joinToString(" ")
+
+                        when {
+                            embedUrl.contains("ryzex.top") -> {
+                                AnizenRyzex().apply { name = sourceName }.getUrl(embedUrl, mainUrl, subtitleCallback, wrappedCallback)
                             }
+                            embedUrl.contains("abyssplayer.com") || embedUrl.contains("abyss.to") -> {
+                                AnizenAbyss().apply { name = sourceName }.getUrl(embedUrl, mainUrl, subtitleCallback, wrappedCallback)
+                            }
+                            embedUrl.contains("megaplay.buzz") -> AnizenMegaPlay(sourceName).getUrl(embedUrl, mainUrl, subtitleCallback, wrappedCallback)
+                            embedUrl.contains("vidwish.live") -> AnizenVidWish(sourceName).getUrl(embedUrl, mainUrl, subtitleCallback, wrappedCallback)
+                            embedUrl.contains("vidtube.site") -> AnizenVidTube(sourceName).getUrl(embedUrl, mainUrl, subtitleCallback, wrappedCallback)
+                            embedUrl.contains("playerp2p.live") || embedUrl.contains("gdmirrorbot.") || embedUrl.contains("boosterx.") -> {
+                                AnizenWebView(sourceName, embedUrl.baseUrl()).getUrl(embedUrl, mainUrl, subtitleCallback, wrappedCallback)
+                            }
+                            else -> loadExtractor(embedUrl, mainUrl, subtitleCallback, wrappedCallback)
                         }
                     }
                 }
@@ -173,17 +189,22 @@ class Anizen : MainAPI() {
     }
 
     private suspend fun fetchEpisodes(dataId: String, fallbackCount: Int): List<Episode> {
-        val response = app.get("$mainUrl/ajax/episodes/$dataId", headers = headers).parsedSafe<EpisodeResponse>()
+        // FIX: Added AJAX header here too
+        val ajaxHeaders = headers + ("X-Requested-With" to "XMLHttpRequest")
+        val response = app.get("$mainUrl/ajax/episodes/$dataId", headers = ajaxHeaders).parsedSafe<EpisodeResponse>()
+        
         val episodes = response?.episodes?.mapNotNull { ep ->
-            val no = ep.no ?: return@mapNotNull null
-            newEpisode(EpisodeData(dataId, no).toString()) {
-                this.name = ep.title ?: "Episode $no"
-                this.episode = no
+            // FIX: Prioritize episodeId (String) over no (Int). Many sites use string IDs for servers.
+            val epValue = ep.episodeId?.takeIf { it.isNotBlank() } ?: ep.no?.toString() ?: return@mapNotNull null
+            newEpisode(EpisodeData(dataId, epValue).toString()) {
+                this.name = ep.title ?: "Episode ${ep.no}"
+                this.episode = ep.no // Keep visual number as Int for UI
             }
         }.orEmpty()
+        
         return episodes.ifEmpty {
             (1..fallbackCount).map { no ->
-                newEpisode(EpisodeData(dataId, no).toString()) {
+                newEpisode(EpisodeData(dataId, no.toString()).toString()) {
                     this.name = "Episode $no"
                     this.episode = no
                 }
@@ -204,7 +225,8 @@ class Anizen : MainAPI() {
         }
     }
 
-    private data class EpisodeData(val dataId: String, val episode: Int) {
+    // FIX: Changed episode from Int to String to support string episode IDs
+    private data class EpisodeData(val dataId: String, val episode: String) {
         override fun toString(): String = "$dataId|$episode"
 
         companion object {
@@ -218,7 +240,8 @@ class Anizen : MainAPI() {
                     .substringAfterLast("/")
                     .takeIf { it.isNotBlank() }
                     ?: return null
-                return EpisodeData(cleanDataId, split.getOrNull(1)?.toIntOrNull() ?: 1)
+                val ep = split.getOrNull(1)?.trim()?.takeIf { it.isNotBlank() } ?: "1"
+                return EpisodeData(cleanDataId, ep)
             }
         }
     }

@@ -3,22 +3,20 @@ package com.laddu100
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.api.Log
 import com.lagradost.cloudstream3.*
+import com.lagradost.cloudstream3.app
+import com.lagradost.cloudstream3.addEpisodes
+import com.lagradost.cloudstream3.Score
 import com.lagradost.cloudstream3.LoadResponse.Companion.addAniListId
 import com.lagradost.cloudstream3.network.WebViewResolver
-import com.lagradost.cloudstream3.plugins.BasePlugin
-import com.lagradost.cloudstream3.plugins.CloudstreamPlugin
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
+import com.lagradost.cloudstream3.utils.AppUtils.toJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.M3u8Helper
 import com.lagradost.cloudstream3.utils.newExtractorLink
-
-@CloudstreamPlugin
-class AnivexaPlugin : BasePlugin() {
-    override fun load() {
-        registerMainAPI(Anivexa())
-    }
-}
+import com.lagradost.nicehttp.RequestBodyTypes
+import okhttp3.MediaType.Companion.toMediaTypeOrNull
+import okhttp3.RequestBody.Companion.toRequestBody
 
 class Anivexa : MainAPI() {
     override var mainUrl = "https://anivexa.vercel.app"
@@ -40,9 +38,14 @@ class Anivexa : MainAPI() {
     )
 
     private suspend fun anilistQuery(query: String, variables: Map<String, Any?>): String {
+        val requestData = mapOf(
+            "query" to query,
+            "variables" to variables
+        ).toJson().toRequestBody(RequestBodyTypes.JSON.toMediaTypeOrNull())
+
         return app.post(
             "https://graphql.anilist.co",
-            json = mapOf("query" to query, "variables" to variables),
+            requestBody = requestData,
             headers = mapOf("Content-Type" to "application/json", "Accept" to "application/json")
         ).text
     }

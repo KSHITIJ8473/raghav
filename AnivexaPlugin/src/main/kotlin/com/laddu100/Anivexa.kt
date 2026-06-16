@@ -124,7 +124,9 @@ class Anivexa : MainAPI() {
         val subEpisodes = mutableListOf<Episode>()
         val dubEpisodes = mutableListOf<Episode>()
         
-        val totalEps = media.episodes ?: 24
+        // Dynamically calculate episodes even if null (for ongoing anime like One Piece)
+        val nextAiring = media.nextAiringEpisode?.episode
+        val totalEps = media.episodes ?: (if (nextAiring != null) nextAiring - 1 else 24)
         val count = if (totalEps > 0) totalEps else 24
 
         if (media.format == "MOVIE") {
@@ -181,80 +183,81 @@ class Anivexa : MainAPI() {
 
         try {
             val resolver = WebViewResolver(
-                interceptUrl = Regex("""^intercept:.*"""),
+                interceptUrl = Regex("""^intercept-(stream|iframe):.*"""),
                 additionalUrls = emptyList(),
                 script = """
-                    const originalFetch = window.fetch;
-                    window.fetch = async function() {
-                        const response = await originalFetch.apply(this, arguments);
-                        const url = arguments[0] || '';
-                        if (typeof url === 'string') {
-                            const clone = response.clone();
-                            clone.text().then(text => {
-                                if (text.includes('.m3u8') || text.includes('megaplay') || text.includes('vidwish') || text.includes('tryembed') || text.includes('vidnest')) {
-                                    window.location.href = 'intercept:api:' + encodeURIComponent(text);
+                    // 1. Intercept XHR to catch raw streams hidden behind workers without .m3u8 extensions
+                    const origOpen = XMLHttpRequest.prototype.open;
+                    XMLHttpRequest.prototype.open = function(method, url) {
+                        this.addEventListener('readystatechange', function() {
+                            if (this.readyState === this.HEADERS_RECEIVED) {
+                                const contentType = this.getResponseHeader('Content-Type');
+                                if (contentType && (contentType.includes('mpegurl') || contentType.includes('m3u8') || contentType.includes('video/mp4'))) {
+                                    const fullUrl = url.startsWith('http') ? url : new URL(url, window.location.href).href;
+                                    window.location.href = 'intercept-stream:' + fullUrl;
                                 }
-                            }).catch(e => {});
+                            }
+                        });
+                        return origOpen.apply(this, arguments);
+                    };
+
+                    // 2. Intercept Fetch for modern players
+                    const origFetch = window.fetch;
+                    window.fetch = async function(...args) {
+                        const url = args[0];
+                        const response = await origFetch.apply(this, args);
+                        const contentType = response.headers.get('Content-Type');
+                        if (contentType && (contentType.includes('mpegurl') || contentType.includes('m3u8') || contentType.includes('video/mp4'))) {
+                            const fullUrl = url.startsWith('http') ? url : new URL(url, window.location.href).href;
+                            window.location.href = 'intercept-stream:' + fullUrl;
                         }
                         return response;
                     };
 
+                    // 3. Fallback: Check iframes and auto-click player
                     let checkInterval = setInterval(function() {
-                        let serverLinks = [];
-                        document.querySelectorAll('a, button, div, iframe').forEach(el => {
-                            let url = el.getAttribute('data-url') || el.getAttribute('href') || el.getAttribute('data-src') || el.src;
-                            if (url && typeof url === 'string' && url.startsWith('http') && !url.includes('anivexa.vercel.app')) {
-                                if (url.includes('megaplay') || url.includes('vidwish') || url.includes('tryembed') || url.includes('vidnest') || url.includes('dropfile') || url.includes('nightslayer') || url.includes('abyss') || url.includes('ryzex')) {
-                                    serverLinks.push(url);
-                                }
+                        document.querySelectorAll('iframe').forEach(ifr => {
+                            let src = ifr.src;
+                            if (src && src.startsWith('http') && !src.includes('anivexa.vercel.app') && !src.includes('google') && !src.includes('disqus')) {
+                                window.location.href = 'intercept-iframe:' + src;
+                                clearInterval(checkInterval);
                             }
                         });
-                        
-                        if (serverLinks.length > 0) {
-                            clearInterval(checkInterval);
-                            window.location.href = 'intercept:servers:' + encodeURIComponent(JSON.stringify(serverLinks));
-                        }
+                        let btn = document.querySelector('button, .vds-play-button, .play-button, .plyr__control');
+                        if(btn) btn.click();
                     }, 500);
                 """.trimIndent(),
                 useOkhttp = false,
-                timeout = 15_000L
+                timeout = 25_000L
             )
             
             val resolved = app.get(watchTargetUrl, referer = mainUrl, interceptor = resolver).url
             
-            if (resolved.startsWith("intercept:servers:")) {
-                val jsonArray = java.net.URLDecoder.decode(resolved.removePrefix("intercept:servers:"), "UTF-8")
-                val urls = parseJson<List<String>>(jsonArray)
-                urls.forEach { url ->
-                    if (url.contains("megaplay.buzz")) AnivexaMegaPlay().getUrl(url, watchTargetUrl, subtitleCallback, callback)
-                    else if (url.contains("vidwish.live")) AnivexaVidWish().getUrl(url, watchTargetUrl, subtitleCallback, callback)
-                    else if (url.contains("vidnest.fun")) AnivexaVidNest().getUrl(url, watchTargetUrl, subtitleCallback, callback)
-                    else loadExtractor(url, watchTargetUrl, subtitleCallback, callback)
-                    linksHarvested = true
+            if (resolved.startsWith("intercept-stream:")) {
+                val streamUrl = resolved.removePrefix("intercept-stream:")
+                
+                val generated = M3u8Helper.generateM3u8("Anivexa ($audioType)", streamUrl, mainUrl)
+                if (generated.isNotEmpty()) {
+                    generated.forEach(callback)
+                } else {
+                    callback(
+                        newExtractorLink(
+                            source = "Anivexa Server",
+                            name = "Anivexa ($audioType)",
+                            url = streamUrl,
+                            type = ExtractorLinkType.M3U8
+                        ) {
+                            this.referer = mainUrl
+                            this.headers = mapOf("Origin" to mainUrl)
+                        }
+                    )
                 }
-            } 
-            else if (resolved.startsWith("intercept:api:")) {
-                val jsonText = java.net.URLDecoder.decode(resolved.removePrefix("intercept:api:"), "UTF-8")
-                val urlRegex = Regex("""(https?://[^\s"'\\]+)""")
-                urlRegex.findAll(jsonText).forEach { match ->
-                    val url = match.value.replace("\\/", "/")
-                    if (url.contains(".m3u8", ignoreCase = true)) {
-                        M3u8Helper.generateM3u8("Anivexa Direct ($audioType)", url, watchTargetUrl).forEach(callback)
-                        linksHarvested = true
-                    } else if (url.contains("megaplay.buzz")) {
-                        AnivexaMegaPlay().getUrl(url, watchTargetUrl, subtitleCallback, callback)
-                        linksHarvested = true
-                    } else if (url.contains("vidwish.live")) {
-                        AnivexaVidWish().getUrl(url, watchTargetUrl, subtitleCallback, callback)
-                        linksHarvested = true
-                    } else if (url.contains("vidnest.fun")) {
-                        AnivexaVidNest().getUrl(url, watchTargetUrl, subtitleCallback, callback)
-                        linksHarvested = true
-                    } else if (url.contains("tryembed") || url.contains("dropfile") || url.contains("nightslayer")) {
-                        loadExtractor(url, watchTargetUrl, subtitleCallback, callback)
-                        linksHarvested = true
-                    }
-                }
+                linksHarvested = true
+                
+            } else if (resolved.startsWith("intercept-iframe:")) {
+                val iframeUrl = resolved.removePrefix("intercept-iframe:")
+                loadExtractor(iframeUrl, watchTargetUrl, subtitleCallback, callback)
+                linksHarvested = true
             }
         } catch (e: Exception) {
             Log.e("Anivexa", "WebView extraction failed: ${e.message}")
@@ -280,6 +283,7 @@ class Anivexa : MainAPI() {
                 id format title { romaji english } description(asHtml: false)
                 coverImage { extraLarge large } bannerImage averageScore
                 seasonYear episodes status genres
+                nextAiringEpisode { episode }
               }
             }
         """.trimIndent()
@@ -355,7 +359,12 @@ data class AnivexaAniListMedia(
     @JsonProperty("genres") val genres: List<String>? = null,
     @JsonProperty("format") val format: String? = null,
     @JsonProperty("description") val description: String? = null,
-    @JsonProperty("bannerImage") val bannerImage: String? = null
+    @JsonProperty("bannerImage") val bannerImage: String? = null,
+    @JsonProperty("nextAiringEpisode") val nextAiringEpisode: AnivexaNextAiring? = null
+)
+
+data class AnivexaNextAiring(
+    @JsonProperty("episode") val episode: Int? = null
 )
 
 data class AnivexaAniListTitle(

@@ -88,13 +88,27 @@ open class AnizenMegaPlay(private val sourceName: String = "MegaPlay") : Extract
 
         runCatching {
             val document = app.get(url, headers = headers).document
+            val html = document.html()
+            
             val id = document.selectFirst("#megaplay-player")?.attr("data-id")?.takeIf { it.isNotBlank() }
-                ?: Regex("""data-id=["'](\d+)""").find(document.html())?.groupValues?.get(1)
+                ?: Regex("""data-id=["'](\d+)""").find(html)?.groupValues?.get(1)
                 ?: document.selectFirst("#megaplay-player")?.attr("data-realid")?.takeIf { it.isNotBlank() }
-                ?: Regex("""data-realid=["'](\d+)""").find(document.html())?.groupValues?.get(1)
+                ?: Regex("""data-realid=["'](\d+)""").find(html)?.groupValues?.get(1)
                 ?: Regex("""/stream/s-\d+/(\d+)""").find(url)?.groupValues?.get(1)
                 ?: return@runCatching
-            val response = app.get("$mainUrl/stream/getSources?id=$id", headers = headers).parsedSafe<Response>()
+
+            // FIX: Scrape the security tokens from the settings object in the HTML
+            val cid = Regex("""cid\s*:\s*'([^']+)'""").find(html)?.groupValues?.get(1) ?: ""
+            val cidu = Regex("""cidu\s*:\s*'([^']+)'""").find(html)?.groupValues?.get(1) ?: ""
+            val type = Regex("""type\s*:\s*'([^']+)'""").find(html)?.groupValues?.get(1) ?: ""
+
+            // Build the API URL with the required tokens
+            var apiUrl = "$mainUrl/stream/getSources?id=$id"
+            if (cid.isNotEmpty()) apiUrl += "&cid=$cid"
+            if (cidu.isNotEmpty()) apiUrl += "&cidu=$cidu"
+            if (type.isNotEmpty()) apiUrl += "&type=$type"
+
+            val response = app.get(apiUrl, headers = headers).parsedSafe<Response>()
                 ?: return@runCatching
             val m3u8 = response.sources?.file ?: return@runCatching
 

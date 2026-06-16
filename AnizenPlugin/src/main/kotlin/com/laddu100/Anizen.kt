@@ -145,14 +145,10 @@ class Anizen : MainAPI() {
                     runCatching {
                         val rawEmbed = server.embed?.takeIf { it.isNotBlank() } ?: server.iframeUrl?.takeIf { it.isNotBlank() }
                         if (rawEmbed != null) {
+                            // FIX: Handle protocol-relative URLs (e.g., //megaplay.buzz)
+                            val embed = if (rawEmbed.startsWith("//")) "https:$rawEmbed" else rawEmbed
                             
-                            // FIX 1: Handle protocol-relative URLs (e.g., //megaplay.buzz)
-                            var embed = if (rawEmbed.startsWith("//")) "https:$rawEmbed" else rawEmbed
-                            
-                            // FIX 2: Append streamKey if the server provides one (Fixes Error 2004)
-                            server.streamKey?.takeIf { it.isNotBlank() }?.let { key ->
-                                embed = if ("?" in embed) "$embed&key=$key" else "$embed?key=$key"
-                            }
+                            // REMOVED: streamKey append. It was breaking embed URLs.
                             
                             val sourceName = listOf(server.serverName, server.type.uppercase())
                                 .filter { it.isNotBlank() }
@@ -172,11 +168,7 @@ class Anizen : MainAPI() {
                                 embed.contains("playerp2p.live") || embed.contains("gdmirrorbot.") || embed.contains("boosterx.") -> {
                                     AnizenWebView(sourceName, embed.baseUrl()).getUrl(embed, mainUrl, subtitleCallback, wrappedCallback)
                                 }
-                                // FIX 3: Force VidStream/VidCloud to use WebView since they fail on default extractors
-                                embed.contains("vidstream") || embed.contains("vidcloud") || embed.contains("vizcloud") || embed.contains("vidplay") ||
-                                server.serverName.contains("vidstream", ignoreCase = true) || server.serverName.contains("vidcloud", ignoreCase = true) -> {
-                                    AnizenWebView(sourceName, embed.baseUrl()).getUrl(embed, mainUrl, subtitleCallback, wrappedCallback)
-                                }
+                                // REMOVED: Forced VidStream WebView. Default loadExtractor is safer.
                                 else -> loadExtractor(embed, mainUrl, subtitleCallback, wrappedCallback)
                             }
                         }

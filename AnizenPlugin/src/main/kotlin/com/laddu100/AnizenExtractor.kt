@@ -79,56 +79,31 @@ open class AnizenMegaPlay(private val sourceName: String = "MegaPlay") : Extract
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        // Headers for fetching the HTML and API Data
-        val ajaxHeaders = mapOf(
+        val headers = mapOf(
             "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:140.0) Gecko/20100101 Firefox/140.0",
             "Accept" to "*/*",
             "X-Requested-With" to "XMLHttpRequest",
             "Referer" to "$mainUrl/"
         )
-        
-        // FIX: Clean, standard headers for the video player. NO ORIGIN HEADER.
-        // CDNs often block requests with an Origin header.
-        val videoHeaders = mapOf(
-            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36",
-            "Accept" to "*/*",
-            "Referer" to "https://megaplay.buzz/"
-        )
 
         runCatching {
-            val document = app.get(url, headers = ajaxHeaders).document
-            val html = document.html()
-            
+            val document = app.get(url, headers = headers).document
             val id = document.selectFirst("#megaplay-player")?.attr("data-id")?.takeIf { it.isNotBlank() }
-                ?: Regex("""data-id=["'](\d+)""").find(html)?.groupValues?.get(1)
+                ?: Regex("""data-id=["'](\d+)""").find(document.html())?.groupValues?.get(1)
                 ?: document.selectFirst("#megaplay-player")?.attr("data-realid")?.takeIf { it.isNotBlank() }
-                ?: Regex("""data-realid=["'](\d+)""").find(html)?.groupValues?.get(1)
+                ?: Regex("""data-realid=["'](\d+)""").find(document.html())?.groupValues?.get(1)
                 ?: Regex("""/stream/s-\d+/(\d+)""").find(url)?.groupValues?.get(1)
                 ?: return@runCatching
-
-            // Scrape the security tokens from the settings object in the HTML
-            val cid = Regex("""cid\s*:\s*["']([^"']+)["']""").find(html)?.groupValues?.get(1) ?: ""
-            val cidu = Regex("""cidu\s*:\s*["']([^"']+)["']""").find(html)?.groupValues?.get(1) ?: ""
-            val type = Regex("""type\s*:\s*["']([^"']+)["']""").find(html)?.groupValues?.get(1) ?: ""
-
-            // Build the API URL with the required tokens
-            var apiUrl = "$mainUrl/stream/getSources?id=$id"
-            if (cid.isNotEmpty()) apiUrl += "&cid=$cid"
-            if (cidu.isNotEmpty()) apiUrl += "&cidu=$cidu"
-            if (type.isNotEmpty()) apiUrl += "&type=$type"
-
-            val response = app.get(apiUrl, headers = ajaxHeaders).parsedSafe<Response>()
+            val response = app.get("$mainUrl/stream/getSources?id=$id", headers = headers).parsedSafe<Response>()
                 ?: return@runCatching
             val m3u8 = response.sources?.file ?: return@runCatching
 
-            // Pass clean videoHeaders to generateM3u8 to fix Remote Error 2004
-            generateM3u8(name, m3u8, "https://megaplay.buzz/", headers = videoHeaders).forEach(callback)
-            
+            generateM3u8(name, m3u8, mainUrl, headers = headers).forEach(callback)
             response.tracks.forEach { track ->
                 val file = track.file ?: return@forEach
                 if (track.kind == "captions" || track.kind == "subtitles") {
                     subtitleCallback(newSubtitleFile(track.label ?: "Subtitle", file) {
-                        this.headers = videoHeaders
+                        this.headers = mapOf("Referer" to "$mainUrl/")
                     })
                 }
             }
@@ -143,7 +118,7 @@ open class AnizenMegaPlay(private val sourceName: String = "MegaPlay") : Extract
             )
             val m3u8 = app.get(url, referer = mainUrl, interceptor = resolver).url
             if (m3u8.contains(".m3u8")) {
-                generateM3u8(name, m3u8, "https://megaplay.buzz/", headers = videoHeaders).forEach(callback)
+                generateM3u8(name, m3u8, mainUrl, headers = headers).forEach(callback)
             }
         }
     }
@@ -219,4 +194,4 @@ open class AnizenAbyss : ExtractorApi() {
 class AnizenRyzex : AnizenAbyss() {
     override var name = "Ryzex"
     override var mainUrl = "https://ryzex.top"
-}
+} 

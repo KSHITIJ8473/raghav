@@ -18,6 +18,7 @@ import com.lagradost.cloudstream3.utils.newExtractorLink
 import com.lagradost.nicehttp.RequestBodyTypes
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.RequestBody.Companion.toRequestBody
+import java.net.URLDecoder
 
 class Anivexa : MainAPI() {
     override var mainUrl = "https://anivexa.vercel.app"
@@ -183,10 +184,10 @@ class Anivexa : MainAPI() {
 
         try {
             val resolver = WebViewResolver(
-                interceptUrl = Regex("""^intercept-(stream|iframe):.*"""),
+                interceptUrl = Regex("""intercept\.local"""),
                 additionalUrls = emptyList(),
                 script = """
-                    // 1. Intercept XHR to catch raw streams hidden behind workers without .m3u8 extensions
+                    // 1. Catch M3U8/MP4 playlists by checking headers on XHR (Bypasses missing extensions!)
                     const origOpen = XMLHttpRequest.prototype.open;
                     XMLHttpRequest.prototype.open = function(method, url) {
                         this.addEventListener('readystatechange', function() {
@@ -194,14 +195,14 @@ class Anivexa : MainAPI() {
                                 const contentType = this.getResponseHeader('Content-Type');
                                 if (contentType && (contentType.includes('mpegurl') || contentType.includes('m3u8') || contentType.includes('video/mp4'))) {
                                     const fullUrl = url.startsWith('http') ? url : new URL(url, window.location.href).href;
-                                    window.location.href = 'intercept-stream:' + fullUrl;
+                                    fetch('https://intercept.local/?stream=' + encodeURIComponent(fullUrl)).catch(e=>{});
                                 }
                             }
                         });
                         return origOpen.apply(this, arguments);
                     };
 
-                    // 2. Intercept Fetch for modern players
+                    // 2. Catch modern Fetch API requests (SvelteKit standard)
                     const origFetch = window.fetch;
                     window.fetch = async function(...args) {
                         const url = args[0];
@@ -209,17 +210,17 @@ class Anivexa : MainAPI() {
                         const contentType = response.headers.get('Content-Type');
                         if (contentType && (contentType.includes('mpegurl') || contentType.includes('m3u8') || contentType.includes('video/mp4'))) {
                             const fullUrl = url.startsWith('http') ? url : new URL(url, window.location.href).href;
-                            window.location.href = 'intercept-stream:' + fullUrl;
+                            fetch('https://intercept.local/?stream=' + encodeURIComponent(fullUrl)).catch(e=>{});
                         }
                         return response;
                     };
 
-                    // 3. Fallback: Check iframes and auto-click player
+                    // 3. Fallback: Catch iframes and auto-click play buttons
                     let checkInterval = setInterval(function() {
                         document.querySelectorAll('iframe').forEach(ifr => {
                             let src = ifr.src;
-                            if (src && src.startsWith('http') && !src.includes('anivexa.vercel.app') && !src.includes('google') && !src.includes('disqus')) {
-                                window.location.href = 'intercept-iframe:' + src;
+                            if (src && src.startsWith('http') && !src.includes('anivexa') && !src.includes('google') && !src.includes('disqus')) {
+                                fetch('https://intercept.local/?iframe=' + encodeURIComponent(src)).catch(e=>{});
                                 clearInterval(checkInterval);
                             }
                         });
@@ -233,31 +234,39 @@ class Anivexa : MainAPI() {
             
             val resolved = app.get(watchTargetUrl, referer = mainUrl, interceptor = resolver).url
             
-            if (resolved.startsWith("intercept-stream:")) {
-                val streamUrl = resolved.removePrefix("intercept-stream:")
+            if (resolved.contains("intercept.local")) {
+                val streamUrlMatch = Regex("""stream=([^&]+)""").find(resolved)
+                val iframeUrlMatch = Regex("""iframe=([^&]+)""").find(resolved)
                 
-                val generated = M3u8Helper.generateM3u8("Anivexa ($audioType)", streamUrl, mainUrl)
-                if (generated.isNotEmpty()) {
-                    generated.forEach(callback)
-                } else {
-                    callback(
-                        newExtractorLink(
-                            source = "Anivexa Server",
-                            name = "Anivexa ($audioType)",
-                            url = streamUrl,
-                            type = ExtractorLinkType.M3U8
-                        ) {
-                            this.referer = mainUrl
-                            this.headers = mapOf("Origin" to mainUrl)
-                        }
-                    )
+                val reqHeaders = mapOf(
+                    "Origin" to mainUrl,
+                    "Referer" to mainUrl,
+                    "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36"
+                )
+                
+                if (streamUrlMatch != null) {
+                    val streamUrl = URLDecoder.decode(streamUrlMatch.groupValues[1], "UTF-8")
+                    val generated = M3u8Helper.generateM3u8("Anivexa ($audioType)", streamUrl, mainUrl, headers = reqHeaders)
+                    if (generated.isNotEmpty()) {
+                        generated.forEach(callback)
+                    } else {
+                        callback(
+                            newExtractorLink(
+                                source = "Anivexa Server",
+                                name = "Anivexa ($audioType)",
+                                url = streamUrl,
+                                type = ExtractorLinkType.M3U8
+                            ) {
+                                this.headers = reqHeaders
+                            }
+                        )
+                    }
+                    linksHarvested = true
+                } else if (iframeUrlMatch != null) {
+                    val iframeUrl = URLDecoder.decode(iframeUrlMatch.groupValues[1], "UTF-8")
+                    loadExtractor(iframeUrl, watchTargetUrl, subtitleCallback, callback)
+                    linksHarvested = true
                 }
-                linksHarvested = true
-                
-            } else if (resolved.startsWith("intercept-iframe:")) {
-                val iframeUrl = resolved.removePrefix("intercept-iframe:")
-                loadExtractor(iframeUrl, watchTargetUrl, subtitleCallback, callback)
-                linksHarvested = true
             }
         } catch (e: Exception) {
             Log.e("Anivexa", "WebView extraction failed: ${e.message}")

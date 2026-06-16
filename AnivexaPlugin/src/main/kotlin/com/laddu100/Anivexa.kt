@@ -18,7 +18,6 @@ import com.lagradost.cloudstream3.utils.newExtractorLink
 import com.lagradost.nicehttp.RequestBodyTypes
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.RequestBody.Companion.toRequestBody
-import java.net.URLDecoder
 
 class Anivexa : MainAPI() {
     override var mainUrl = "https://anivexa.vercel.app"
@@ -179,92 +178,65 @@ class Anivexa : MainAPI() {
         val epNum = parts[1]
         val audioType = parts[2] // "sub" or "dub"
 
+        // This URL forces SvelteKit to load the correct language automatically
         val watchTargetUrl = "$mainUrl/anime.html?id=$animeId&audio=$audioType&ep=$epNum"
         var linksHarvested = false
 
         try {
+            // We removed the aggressive custom JS. We are just passively watching the network 
+            // for the servers Anivexa normally loads.
+            val targetServers = Regex("""(?i)(megaplay\.buzz|vidwish\.live|vidnest\.fun|tryembed|dropfile|nightslayer|abyss|ryzex|workers\.dev|\.m3u8)""")
+            
             val resolver = WebViewResolver(
-                interceptUrl = Regex("""intercept\.local"""),
+                interceptUrl = targetServers,
                 additionalUrls = emptyList(),
-                script = """
-                    // 1. Catch M3U8/MP4 playlists by checking headers on XHR (Bypasses missing extensions!)
-                    const origOpen = XMLHttpRequest.prototype.open;
-                    XMLHttpRequest.prototype.open = function(method, url) {
-                        this.addEventListener('readystatechange', function() {
-                            if (this.readyState === this.HEADERS_RECEIVED) {
-                                const contentType = this.getResponseHeader('Content-Type');
-                                if (contentType && (contentType.includes('mpegurl') || contentType.includes('m3u8') || contentType.includes('video/mp4'))) {
-                                    const fullUrl = url.startsWith('http') ? url : new URL(url, window.location.href).href;
-                                    fetch('https://intercept.local/?stream=' + encodeURIComponent(fullUrl)).catch(e=>{});
-                                }
-                            }
-                        });
-                        return origOpen.apply(this, arguments);
-                    };
-
-                    // 2. Catch modern Fetch API requests (SvelteKit standard)
-                    const origFetch = window.fetch;
-                    window.fetch = async function(...args) {
-                        const url = args[0];
-                        const response = await origFetch.apply(this, args);
-                        const contentType = response.headers.get('Content-Type');
-                        if (contentType && (contentType.includes('mpegurl') || contentType.includes('m3u8') || contentType.includes('video/mp4'))) {
-                            const fullUrl = url.startsWith('http') ? url : new URL(url, window.location.href).href;
-                            fetch('https://intercept.local/?stream=' + encodeURIComponent(fullUrl)).catch(e=>{});
-                        }
-                        return response;
-                    };
-
-                    // 3. Fallback: Catch iframes and auto-click play buttons
-                    let checkInterval = setInterval(function() {
-                        document.querySelectorAll('iframe').forEach(ifr => {
-                            let src = ifr.src;
-                            if (src && src.startsWith('http') && !src.includes('anivexa') && !src.includes('google') && !src.includes('disqus')) {
-                                fetch('https://intercept.local/?iframe=' + encodeURIComponent(src)).catch(e=>{});
-                                clearInterval(checkInterval);
-                            }
-                        });
-                        let btn = document.querySelector('button, .vds-play-button, .play-button, .plyr__control');
-                        if(btn) btn.click();
-                    }, 500);
-                """.trimIndent(),
+                script = "", // No injected scripts! Let SvelteKit run perfectly naturally!
                 useOkhttp = false,
-                timeout = 25_000L
+                timeout = 20_000L
             )
             
+            // Wait for the automatic player to fetch its links
             val resolved = app.get(watchTargetUrl, referer = mainUrl, interceptor = resolver).url
-            
-            if (resolved.contains("intercept.local")) {
-                val streamUrlMatch = Regex("""stream=([^&]+)""").find(resolved)
-                val iframeUrlMatch = Regex("""iframe=([^&]+)""").find(resolved)
-                
-                val reqHeaders = mapOf(
-                    "Origin" to mainUrl,
-                    "Referer" to mainUrl,
-                    "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36"
-                )
-                
-                if (streamUrlMatch != null) {
-                    val streamUrl = URLDecoder.decode(streamUrlMatch.groupValues[1], "UTF-8")
-                    val generated = M3u8Helper.generateM3u8("Anivexa ($audioType)", streamUrl, mainUrl, headers = reqHeaders)
-                    if (generated.isNotEmpty()) {
-                        generated.forEach(callback)
-                    } else {
+
+            if (targetServers.containsMatchIn(resolved)) {
+                // If it caught the Cloudflare worker proxy
+                if (resolved.contains("workers.dev", ignoreCase = true)) {
+                    val workerResponse = app.get(resolved, referer = mainUrl).text
+                    val innerM3u8 = Regex("""(https?://[^\s"'\\]+\.m3u8)""").find(workerResponse)?.value
+                    
+                    if (innerM3u8 != null) {
+                        M3u8Helper.generateM3u8("Anivexa Stream ($audioType)", innerM3u8, mainUrl).forEach(callback)
+                        linksHarvested = true
+                    } else if (workerResponse.contains("#EXTM3U")) {
                         callback(
                             newExtractorLink(
-                                source = "Anivexa Server",
-                                name = "Anivexa ($audioType)",
-                                url = streamUrl,
+                                source = "Anivexa Fast",
+                                name = "Anivexa Fast ($audioType)",
+                                url = resolved,
                                 type = ExtractorLinkType.M3U8
-                            ) {
-                                this.headers = reqHeaders
-                            }
+                            ) { this.referer = mainUrl }
                         )
+                        linksHarvested = true
                     }
+                } 
+                // If it caught a direct m3u8 playlist
+                else if (resolved.contains(".m3u8", ignoreCase = true)) {
+                    M3u8Helper.generateM3u8("Anivexa Direct ($audioType)", resolved, mainUrl).forEach(callback)
                     linksHarvested = true
-                } else if (iframeUrlMatch != null) {
-                    val iframeUrl = URLDecoder.decode(iframeUrlMatch.groupValues[1], "UTF-8")
-                    loadExtractor(iframeUrl, watchTargetUrl, subtitleCallback, callback)
+                }
+                // If it caught a third party server iframe
+                else if (resolved.contains("megaplay.buzz")) {
+                    AnivexaMegaPlay().getUrl(resolved, watchTargetUrl, subtitleCallback, callback)
+                    linksHarvested = true
+                } else if (resolved.contains("vidwish.live")) {
+                    AnivexaVidWish().getUrl(resolved, watchTargetUrl, subtitleCallback, callback)
+                    linksHarvested = true
+                } else if (resolved.contains("vidnest.fun")) {
+                    AnivexaVidNest().getUrl(resolved, watchTargetUrl, subtitleCallback, callback)
+                    linksHarvested = true
+                } else {
+                    // Fallback for standard extractors
+                    loadExtractor(resolved, watchTargetUrl, subtitleCallback, callback)
                     linksHarvested = true
                 }
             }

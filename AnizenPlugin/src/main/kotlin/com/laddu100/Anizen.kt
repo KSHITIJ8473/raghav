@@ -89,7 +89,7 @@ class Anizen : MainAPI() {
             .firstOrNull { it.text().trim() in listOf("Premiered:", "Date aired:") }
             ?.nextElementSibling()?.text()
             ?.let { Regex("""\d{4}""").find(it)?.value?.toIntOrNull() }
-        val dataId = document.selectFirst("div[data-data-id]")?.attr("data-data-id")?.takeIf { it.isNotBlank() }
+        val dataId = document.selectFirst("div[data-data-ID]")?.attr("data-data-id")?.takeIf { it.isNotBlank() }
             ?: url.substringBefore("?").substringBefore("#").removeSuffix("/").substringAfterLast("/")
         val totalEpisodes = document.select("span")
             .firstOrNull { it.text().trim() == "Episodes:" }
@@ -143,12 +143,17 @@ class Anizen : MainAPI() {
             response.servers.sortedBy { it.priority() }.map { server ->
                 async {
                     runCatching {
-                        val embed = server.embed?.takeIf { it.isNotBlank() } ?: server.iframeUrl?.takeIf { it.isNotBlank() }
-                        if (embed != null) {
+                        val rawEmbed = server.embed?.takeIf { it.isNotBlank() } ?: server.iframeUrl?.takeIf { it.isNotBlank() }
+                        if (rawEmbed != null) {
+                            
+                            // FIX: Ensure URL starts with https:// if it's a protocol-relative URL
+                            val embed = if (rawEmbed.startsWith("//")) "https:$rawEmbed" else rawEmbed
+                            
                             val sourceName = listOf(server.serverName, server.type.uppercase())
                                 .filter { it.isNotBlank() }
                                 .distinct()
                                 .joinToString(" ")
+                                
                             when {
                                 embed.contains("ryzex.top") -> {
                                     AnizenRyzex().apply { name = sourceName }.getUrl(embed, mainUrl, subtitleCallback, wrappedCallback)
@@ -162,6 +167,13 @@ class Anizen : MainAPI() {
                                 embed.contains("playerp2p.live") || embed.contains("gdmirrorbot.") || embed.contains("boosterx.") -> {
                                     AnizenWebView(sourceName, embed.baseUrl()).getUrl(embed, mainUrl, subtitleCallback, wrappedCallback)
                                 }
+                                // --- NEW FIX: Catch VidStream/VidCloud servers ---
+                                // We check both the URL and the serverName provided by the API
+                                embed.contains("vidstream") || embed.contains("vidcloud") || embed.contains("vizcloud") || embed.contains("vidplay") ||
+                                server.serverName.contains("vidstream", ignoreCase = true) || server.serverName.contains("vidcloud", ignoreCase = true) -> {
+                                    AnizenWebView(sourceName, embed.baseUrl()).getUrl(embed, mainUrl, subtitleCallback, wrappedCallback)
+                                }
+                                // -----------------------------------------------
                                 else -> loadExtractor(embed, mainUrl, subtitleCallback, wrappedCallback)
                             }
                         }

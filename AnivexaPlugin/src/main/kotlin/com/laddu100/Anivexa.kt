@@ -10,7 +10,6 @@ import com.lagradost.cloudstream3.LoadResponse.Companion.addAniListId
 import com.lagradost.cloudstream3.network.WebViewResolver
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.AppUtils.toJson
-import com.lagradost.cloudstream3.utils.ExtractorApi
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.M3u8Helper
@@ -185,7 +184,6 @@ class Anivexa : MainAPI() {
                 interceptUrl = Regex("""^intercept:.*"""),
                 additionalUrls = emptyList(),
                 script = """
-                    // 1. Hijack the SvelteKit API Fetch to instantly grab the server JSON!
                     const originalFetch = window.fetch;
                     window.fetch = async function() {
                         const response = await originalFetch.apply(this, arguments);
@@ -193,7 +191,6 @@ class Anivexa : MainAPI() {
                         if (typeof url === 'string') {
                             const clone = response.clone();
                             clone.text().then(text => {
-                                // If the API responds with server links, redirect to Kotlin!
                                 if (text.includes('.m3u8') || text.includes('megaplay') || text.includes('vidwish') || text.includes('tryembed') || text.includes('vidnest')) {
                                     window.location.href = 'intercept:api:' + encodeURIComponent(text);
                                 }
@@ -202,7 +199,6 @@ class Anivexa : MainAPI() {
                         return response;
                     };
 
-                    // 2. Fallback: Search the DOM for injected server iframes/buttons
                     let checkInterval = setInterval(function() {
                         let serverLinks = [];
                         document.querySelectorAll('a, button, div, iframe').forEach(el => {
@@ -226,7 +222,6 @@ class Anivexa : MainAPI() {
             
             val resolved = app.get(watchTargetUrl, referer = mainUrl, interceptor = resolver).url
             
-            // Decrypt the intercepted API call
             if (resolved.startsWith("intercept:servers:")) {
                 val jsonArray = java.net.URLDecoder.decode(resolved.removePrefix("intercept:servers:"), "UTF-8")
                 val urls = parseJson<List<String>>(jsonArray)
@@ -329,42 +324,6 @@ class Anivexa : MainAPI() {
             }
         """.trimIndent()
     }
-}
-
-// ── CUSTOM EMBED EXTRACTORS TO BYPASS CLOUDFLARE ──
-open class AnivexaMegaPlay(private val sourceName: String = "MegaPlay") : ExtractorApi() {
-    override val name = sourceName
-    override val mainUrl = "https://megaplay.buzz"
-    override val requiresReferer = false
-
-    override suspend fun getUrl(
-        url: String,
-        referer: String?,
-        subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Unit
-    ) {
-        try {
-            val resolver = WebViewResolver(
-                interceptUrl = Regex("""(?i)\.m3u8"""),
-                additionalUrls = emptyList(),
-                script = """document.querySelector('.jw-icon-display, .vds-play-button')?.click();""",
-                useOkhttp = false,
-                timeout = 15_000L
-            )
-            val resolved = app.get(url, referer = referer ?: "https://anivexa.vercel.app/", interceptor = resolver).url
-            if (resolved.contains(".m3u8")) {
-                M3u8Helper.generateM3u8(name, resolved, mainUrl).forEach(callback)
-            }
-        } catch (e: Exception) {}
-    }
-}
-
-class AnivexaVidWish : AnivexaMegaPlay("VidWish") {
-    override val mainUrl = "https://vidwish.live"
-}
-
-class AnivexaVidNest : AnivexaMegaPlay("VidNest") {
-    override val mainUrl = "https://vidnest.fun"
 }
 
 // ── DATA CLASSES FOR JSON METADATA ──

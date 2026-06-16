@@ -176,65 +176,51 @@ class Anivexa : MainAPI() {
         
         val animeId = parts[0]
         val epNum = parts[1]
-        val audioType = parts[2] // "sub" or "dub"
+        val audioType = parts[2]
 
         val watchTargetUrl = "$mainUrl/anime.html?id=$animeId&audio=$audioType&ep=$epNum"
         var linksHarvested = false
 
         try {
             val resolver = WebViewResolver(
-                interceptUrl = Regex("""^anivexa-(stream|iframe)://"""),
+                interceptUrl = Regex("""anivexa-intercept://"""),
                 additionalUrls = emptyList(),
                 script = """
                     (function() {
-                        // 1. Passive Spy on Internal Worker Streams (Checks headers, ignores missing extensions)
-                        const origOpen = XMLHttpRequest.prototype.open;
-                        const origSend = XMLHttpRequest.prototype.send;
-                        XMLHttpRequest.prototype.open = function(method, url) {
-                            this._url = url;
-                            return origOpen.apply(this, arguments);
-                        };
-                        XMLHttpRequest.prototype.send = function() {
-                            this.addEventListener('load', function() {
-                                const ct = this.getResponseHeader('Content-Type') || '';
-                                if (ct.includes('mpegurl') || ct.includes('m3u8') || this._url.includes('.m3u8')) {
-                                    window.top.location.href = 'anivexa-stream://' + encodeURIComponent(this._url);
-                                }
-                            });
-                            return origSend.apply(this, arguments);
-                        };
-
-                        const origFetch = window.fetch;
+                        const originalFetch = window.fetch;
                         window.fetch = async function(...args) {
                             const url = args[0] || '';
-                            const response = await origFetch.apply(this, args);
-                            const clone = response.clone();
-                            const ct = clone.headers.get('Content-Type') || '';
+                            const response = await originalFetch.apply(this, args);
+                            
+                            // Check if the URL is the Cloudflare worker proxy, M3U8, or external iframe
                             if (typeof url === 'string') {
-                                if (ct.includes('mpegurl') || ct.includes('m3u8') || url.includes('.m3u8')) {
-                                    window.top.location.href = 'anivexa-stream://' + encodeURIComponent(url);
+                                if (url.includes('workers.dev') || url.includes('megaplay') || url.includes('vidwish') || url.includes('vidnest') || url.includes('.m3u8')) {
+                                    window.top.location.href = 'anivexa-intercept://' + encodeURIComponent(url);
                                 }
                             }
                             return response;
                         };
 
-                        // 2. Click Play (if blocked) & Catch Third-Party External Server Iframes
-                        let checks = 0;
-                        let checkInterval = setInterval(function() {
-                            checks++;
-                            if (checks > 40) clearInterval(checkInterval);
-                            
+                        const origOpen = XMLHttpRequest.prototype.open;
+                        XMLHttpRequest.prototype.open = function(method, url) {
+                            if (url.includes('workers.dev') || url.includes('megaplay') || url.includes('vidwish') || url.includes('vidnest') || url.includes('.m3u8')) {
+                                window.top.location.href = 'anivexa-intercept://' + encodeURIComponent(url);
+                            }
+                            return origOpen.apply(this, arguments);
+                        };
+
+                        // Ensure UI interactions do not block fetching
+                        setInterval(function() {
                             let btn = document.querySelector('.vds-play-button, .play-button, button[aria-label="Play"]');
                             if(btn) btn.click();
                             
                             document.querySelectorAll('iframe').forEach(ifr => {
                                 let src = ifr.src;
                                 if (src && !src.includes('anivexa') && !src.includes('google') && !src.includes('disqus')) {
-                                    clearInterval(checkInterval);
-                                    window.top.location.href = 'anivexa-iframe://' + encodeURIComponent(src);
+                                    window.top.location.href = 'anivexa-intercept://' + encodeURIComponent(src);
                                 }
                             });
-                        }, 500);
+                        }, 800);
                     })();
                 """.trimIndent(),
                 useOkhttp = false,
@@ -243,41 +229,45 @@ class Anivexa : MainAPI() {
             
             val resolvedUrl = app.get(watchTargetUrl, referer = mainUrl, interceptor = resolver).url
             
-            if (resolvedUrl.startsWith("anivexa-stream://")) {
-                val streamUrl = URLDecoder.decode(resolvedUrl.removePrefix("anivexa-stream://"), "UTF-8")
+            if (resolvedUrl.startsWith("anivexa-intercept://")) {
+                val streamUrl = URLDecoder.decode(resolvedUrl.removePrefix("anivexa-intercept://"), "UTF-8")
                 
                 val reqHeaders = mapOf(
                     "Origin" to mainUrl,
                     "Referer" to "$mainUrl/",
                     "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36"
                 )
-                
-                val generated = M3u8Helper.generateM3u8("Anivexa Server ($audioType)", streamUrl, mainUrl, headers = reqHeaders)
-                if (generated.isNotEmpty()) {
-                    generated.forEach(callback)
+
+                if (streamUrl.contains("workers.dev") || streamUrl.contains(".m3u8")) {
+                    val m3u8Links = M3u8Helper.generateM3u8("Anivexa Proxy", streamUrl, mainUrl, headers = reqHeaders)
+                    if (m3u8Links.isNotEmpty()) {
+                        m3u8Links.forEach(callback)
+                    } else {
+                        callback(
+                            newExtractorLink(
+                                source = "Anivexa Server",
+                                name = "Anivexa ($audioType)",
+                                url = streamUrl,
+                                type = ExtractorLinkType.M3U8
+                            ) {
+                                this.headers = reqHeaders
+                            }
+                        )
+                    }
+                    linksHarvested = true
+                } else if (streamUrl.contains("megaplay")) {
+                    AnivexaMegaPlay().getUrl(streamUrl, watchTargetUrl, subtitleCallback, callback)
+                    linksHarvested = true
+                } else if (streamUrl.contains("vidwish")) {
+                    AnivexaVidWish().getUrl(streamUrl, watchTargetUrl, subtitleCallback, callback)
+                    linksHarvested = true
+                } else if (streamUrl.contains("vidnest")) {
+                    AnivexaVidNest().getUrl(streamUrl, watchTargetUrl, subtitleCallback, callback)
+                    linksHarvested = true
                 } else {
-                    callback(
-                        newExtractorLink(
-                            source = "Anivexa Server",
-                            name = "Anivexa ($audioType)",
-                            url = streamUrl,
-                            type = ExtractorLinkType.M3U8
-                        ) {
-                            this.headers = reqHeaders
-                        }
-                    )
+                    loadExtractor(streamUrl, watchTargetUrl, subtitleCallback, callback)
+                    linksHarvested = true
                 }
-                linksHarvested = true
-                
-            } else if (resolvedUrl.startsWith("anivexa-iframe://")) {
-                val iframeUrl = URLDecoder.decode(resolvedUrl.removePrefix("anivexa-iframe://"), "UTF-8")
-                
-                if (iframeUrl.contains("megaplay")) AnivexaMegaPlay().getUrl(iframeUrl, watchTargetUrl, subtitleCallback, callback)
-                else if (iframeUrl.contains("vidwish")) AnivexaVidWish().getUrl(iframeUrl, watchTargetUrl, subtitleCallback, callback)
-                else if (iframeUrl.contains("vidnest")) AnivexaVidNest().getUrl(iframeUrl, watchTargetUrl, subtitleCallback, callback)
-                else loadExtractor(iframeUrl, watchTargetUrl, subtitleCallback, callback)
-                
-                linksHarvested = true
             }
         } catch (e: Exception) {
             Log.e("Anivexa", "WebView extraction failed: ${e.message}")

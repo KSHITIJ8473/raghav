@@ -181,7 +181,6 @@ class Anivexa : MainAPI() {
         var linksHarvested = false
 
         try {
-            // The magic fix: Wrapping the regex in .* forces CloudStream to catch the ENTIRE URL natively!
             val targetServers = Regex("""(?i).*(workers\.dev|megaplay\.buzz|vidwish\.live|vidnest\.fun|tryembed|dropfile|nightslayer|abyss|ryzex|\.m3u8).*""")
             
             val resolver = WebViewResolver(
@@ -200,7 +199,6 @@ class Anivexa : MainAPI() {
                 timeout = 25_000L
             )
             
-            // CloudStream natively intercepts the raw Cloudflare M3U8 string you found!
             val resolvedUrl = app.get(watchTargetUrl, referer = mainUrl, interceptor = resolver).url
             
             val reqHeaders = mapOf(
@@ -219,9 +217,11 @@ class Anivexa : MainAPI() {
                             source = "Anivexa Server",
                             name = "Anivexa ($audioType)",
                             url = resolvedUrl,
-                            referer = mainUrl,
                             type = ExtractorLinkType.M3U8
-                        ) { this.headers = reqHeaders }
+                        ) { 
+                            this.headers = reqHeaders 
+                            this.referer = mainUrl
+                        }
                     )
                 }
                 linksHarvested = true

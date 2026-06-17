@@ -177,16 +177,8 @@ class Anivexa : MainAPI() {
                 val subList = providers[bestSubProvider]!!.episodes!!.sub ?: emptyList()
                 subList.forEach { ep ->
                     val epNum = ep.number ?: return@forEach
-                    // Format: anilistId|sub|prov1:epId1|prov2:epId2|...
-                    val parts = mutableListOf(anilistId.toString(), "sub")
-                    for (provName in providerOrder) {
-                        val provEps = providers[provName]?.episodes ?: continue
-                        val subMatch = provEps.sub?.firstOrNull { it.number == epNum }
-                        if (subMatch?.id != null) {
-                            parts.add("$provName:${subMatch.id}")
-                        }
-                    }
-                    subEpisodes.add(newEpisode(parts.joinToString("|")) {
+                    // Simple format: anilistId|sub|epNum (short, won't be truncated)
+                    subEpisodes.add(newEpisode("$anilistId|sub|$epNum") {
                         this.name = ep.title ?: "Episode $epNum"
                         this.episode = epNum
                         this.description = ep.description
@@ -210,24 +202,13 @@ class Anivexa : MainAPI() {
                 val dubList = providers[bestDubProvider]!!.episodes!!.dub ?: emptyList()
                 dubList.forEach { ep ->
                     val epNum = ep.number ?: return@forEach
-                    // Format: anilistId|dub|prov1:epId1|prov2:epId2|...
-                    val parts = mutableListOf(anilistId.toString(), "dub")
-                    for (provName in providerOrder) {
-                        val provEps = providers[provName]?.episodes ?: continue
-                        val dubMatch = provEps.dub?.firstOrNull { it.number == epNum }
-                        if (dubMatch?.id != null) {
-                            parts.add("$provName:${dubMatch.id}")
-                        }
-                    }
-                    // Only add if we have at least one provider with dub
-                    if (parts.size > 2) {
-                        dubEpisodes.add(newEpisode(parts.joinToString("|")) {
-                            this.name = ep.title ?: "Episode $epNum"
-                            this.episode = epNum
-                            this.description = ep.description
-                            this.posterUrl = ep.image
-                        })
-                    }
+                    // Simple format: anilistId|dub|epNum (short, won't be truncated)
+                    dubEpisodes.add(newEpisode("$anilistId|dub|$epNum") {
+                        this.name = ep.title ?: "Episode $epNum"
+                        this.episode = epNum
+                        this.description = ep.description
+                        this.posterUrl = ep.image
+                    })
                 }
             }
         } catch (e: Exception) {
@@ -254,31 +235,45 @@ class Anivexa : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        // Format: anilistId|sub|prov1:epId1|prov2:epId2|...
-        // or:     anilistId|dub|prov1:epId1|prov2:epId2|...
+        // Format: anilistId|sub|epNum or anilistId|dub|epNum
         val parts = data.split("|")
         if (parts.size < 3) return false
 
         val anilistId = parts[0].toIntOrNull() ?: return false
         val audioType = parts[1] // "sub" or "dub"
-        val providerEntries = parts.drop(2) // ["prov1:epId1", "prov2:epId2", ...]
+        val epNum = parts[2].toIntOrNull() ?: return false
+
+        // Fetch fresh episodes data to get all provider episode IDs
+        val episodesText = try {
+            AnivexaApi.apiGet("/api/anime/episodes/$anilistId")
+        } catch (e: Exception) {
+            Log.e("Anivexa", "Failed to fetch episodes: ${e.message}")
+            return false
+        }
+
+        val episodesData = try {
+            parseJson<AnivexaEpisodesResponse>(episodesText)
+        } catch (e: Exception) {
+            Log.e("Anivexa", "Failed to parse episodes: ${e.message}")
+            return false
+        }
+
+        val providers = episodesData.providers ?: return false
 
         var foundAnySources = false
         val seenUrls = mutableSetOf<String>()
 
-        for (entry in providerEntries) {
-            val colonIdx = entry.indexOf(':')
-            if (colonIdx < 0) continue
-            val provider = entry.substring(0, colonIdx)
-            val episodeId = entry.substring(colonIdx + 1)
+        // Try each provider in priority order
+        for (provName in providerOrder) {
+            val provData = providers[provName]?.episodes ?: continue
+            val epList = if (audioType == "sub") provData.sub else provData.dub
+            val ep = epList?.firstOrNull { it.number == epNum } ?: continue
+            val episodeId = ep.id ?: continue
 
-            if (provider.isEmpty() || episodeId.isEmpty()) continue
+            val displayName = providerDisplayNames[provName] ?: provName
 
             try {
-                val displayName = providerDisplayNames[provider] ?: provider
-
                 // The episode ID is the full path like "watch/animepahe/101922/sub/animepahe-1"
-                // So we call /api/anime/{episodeId}
                 val watchJson = AnivexaApi.apiGet("/api/anime/$episodeId")
                 val watchData = parseJson<AnivexaWatchResponse>(watchJson)
 
@@ -380,14 +375,14 @@ class Anivexa : MainAPI() {
                                 foundAnySources = true
                             } catch (_: Exception) {
                                 // Fallback to webview
-                                AnivexaWebView(provider, embedUrl).getUrl(
+                                AnivexaWebView(provName, embedUrl).getUrl(
                                     embedUrl, referer, subtitleCallback, callback
                                 )
                                 foundAnySources = true
                             }
                         }
                     } catch (e: Exception) {
-                        Log.e("Anivexa", "Embed extraction failed for $provider: ${e.message}")
+                        Log.e("Anivexa", "Embed extraction failed for $provName: ${e.message}")
                     }
                 }
 
@@ -399,7 +394,7 @@ class Anivexa : MainAPI() {
                     )
                 }
             } catch (e: Exception) {
-                Log.e("Anivexa", "Provider $provider failed: ${e.message}")
+                Log.e("Anivexa", "Provider $provName failed: ${e.message}")
             }
         }
 

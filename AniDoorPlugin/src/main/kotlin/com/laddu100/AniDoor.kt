@@ -40,6 +40,7 @@ class AniDoor : MainAPI() {
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val query = when (request.data) {
             "trending" -> TRENDING_QUERY
+            "airing" -> AIRING_QUERY
             "popular" -> POPULAR_QUERY
             "upcoming" -> UPCOMING_QUERY
             "top" -> TOP_QUERY
@@ -219,12 +220,15 @@ class AniDoor : MainAPI() {
         val epNum = parts[3].toIntOrNull() ?: 1
         val isMovie = parts[4].toBoolean()
 
-        // FIX: malId "0" is not valid — treat it as empty
         val validMalId = if (malId == "0" || malId.isBlank()) null else malId
         val isDubRequest = (dubOrSub == "dub")
 
+        // Fetch live sources.json, fall back to embedded defaults
         val sourcesJsonText = try {
-            val res = app.get("https://anidoor.me/assets/sources.json")
+            val res = app.get(
+                "https://anidoor.me/assets/sources.json",
+                headers = mapOf("User-Agent" to USER_AGENT, "Accept" to "application/json")
+            )
             if (res.code == 200 && res.text.trimStart().startsWith("[")) res.text else null
         } catch (e: Exception) { null } ?: DEFAULT_SOURCES_JSON
 
@@ -234,22 +238,38 @@ class AniDoor : MainAPI() {
             try { parseJson<List<AniDoorSourceConfig>>(DEFAULT_SOURCES_JSON) } catch (_: Exception) { emptyList() }
         }
 
-        if (sources.isEmpty()) return false
-
-        val wantType = if (isMovie) "movie" else "anime"
-        val filteredSources = sources.filter { s ->
-            (s.type == null || s.type.equals(wantType, ignoreCase = true)) && (s.dub ?: false) == isDubRequest
+        if (sources.isEmpty()) {
+            Log.e("AniDoor", "No sources available")
+            return false
         }
 
-        if (filteredSources.isEmpty()) return false
+        val wantType = if (isMovie) "movie" else "anime"
 
-        var anyLinkFound = false
+        // Filter by type AND strict sub/dub matching
+        val filteredSources = sources.filter { s ->
+            (s.type == null || s.type.equals(wantType, ignoreCase = true)) &&
+            (s.dub ?: false) == isDubRequest
+        }
+
+        Log.d("AniDoor", "Request: $dubOrSub ep=$epNum type=$wantType → ${filteredSources.size} sources matched")
+
+        if (filteredSources.isEmpty()) {
+            Log.e("AniDoor", "No sources matched for $dubOrSub / $wantType")
+            return false
+        }
+
+        // Track actual links found via wrapper callback
+        var linkCount = 0
+        val trackingCallback: (ExtractorLink) -> Unit = { link ->
+            linkCount++
+            callback(link)
+        }
 
         filteredSources.forEach { source ->
             val path = source.path ?: return@forEach
             val base = source.base ?: return@forEach
 
-            // FIX: Skip sources that need MAL ID when it's not available (Prevents Dropfile Remote Errors)
+            // Skip sources that need MAL ID when it's not available
             if (path.contains("{mal}") && validMalId == null) {
                 Log.d("AniDoor", "Skipping ${source.id}: requires MAL ID but none available")
                 return@forEach
@@ -267,35 +287,35 @@ class AniDoor : MainAPI() {
             try {
                 when {
                     embedUrl.contains("megaplay.buzz") -> {
-                        AniDoorMegaPlay().getUrl(embedUrl, "https://anidoor.me/", subtitleCallback, callback)
+                        AniDoorMegaPlay().getUrl(embedUrl, "https://anidoor.me/", subtitleCallback, trackingCallback)
                     }
                     embedUrl.contains("tryembed.us.cc") -> {
-                        AniDoorTryEmbed().getUrl(embedUrl, "https://anidoor.me/", subtitleCallback, callback)
+                        AniDoorTryEmbed().getUrl(embedUrl, "https://anidoor.me/", subtitleCallback, trackingCallback)
                     }
                     embedUrl.contains("vidnest.fun") -> {
-                        AniDoorVidnest().getUrl(embedUrl, "https://anidoor.me/", subtitleCallback, callback)
+                        AniDoorVidnest().getUrl(embedUrl, "https://anidoor.me/", subtitleCallback, trackingCallback)
                     }
                     embedUrl.contains("dropfile.cc") -> {
-                        AniDoorDropfile().getUrl(embedUrl, "https://anidoor.me/", subtitleCallback, callback)
+                        AniDoorDropfile().getUrl(embedUrl, "https://anidoor.me/", subtitleCallback, trackingCallback)
                     }
                     embedUrl.contains("nightslayer.workers.dev") -> {
-                        AniDoorHD().getUrl(embedUrl, "https://anidoor.me/", subtitleCallback, callback)
+                        AniDoorHD().getUrl(embedUrl, "https://anidoor.me/", subtitleCallback, trackingCallback)
                     }
                     else -> {
-                        loadExtractor(embedUrl, "https://anidoor.me/", subtitleCallback, callback)
+                        loadExtractor(embedUrl, "https://anidoor.me/", subtitleCallback, trackingCallback)
                     }
                 }
-                anyLinkFound = true
             } catch (e: Exception) {
                 Log.d("AniDoor", "Extractor failed for ${source.id}: ${e.message}")
             }
         }
 
-        return anyLinkFound
+        Log.d("AniDoor", "Total links found: $linkCount for $dubOrSub ep=$epNum")
+        return linkCount > 0
     }
 
     companion object {
-        // Updated fallback sources - matches exactly what anidoor.me currently serves
+        // Fallback sources - matches exactly what anidoor.me currently serves
         private val DEFAULT_SOURCES_JSON = """
             [
                 {"id":"vidnest-ap-sub","name":"S1","base":"https://vidnest.fun","path":"/animepahe/{al}/{e}/sub","type":"anime","dub":false,"default":true},
@@ -365,6 +385,19 @@ class AniDoor : MainAPI() {
             query (${'$'}page: Int) {
               Page(page: ${'$'}page, perPage: 20) {
                 media(type: ANIME, sort: TRENDING_DESC, isAdult: false) {
+                  id
+                  title { romaji english }
+                  coverImage { extraLarge large }
+                  format
+                }
+              }
+            }
+        """.trimIndent()
+
+        private val AIRING_QUERY = """
+            query (${'$'}page: Int) {
+              Page(page: ${'$'}page, perPage: 20) {
+                media(type: ANIME, status: RELEASING, sort: POPULARITY_DESC, isAdult: false) {
                   id
                   title { romaji english }
                   coverImage { extraLarge large }

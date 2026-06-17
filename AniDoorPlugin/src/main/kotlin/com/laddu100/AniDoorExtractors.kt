@@ -2,7 +2,6 @@ package com.laddu100
 
 import android.util.Base64
 import com.fasterxml.jackson.annotation.JsonProperty
-import com.google.gson.JsonParser
 import com.lagradost.api.Log
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.USER_AGENT
@@ -17,11 +16,11 @@ import com.lagradost.cloudstream3.utils.M3u8Helper
 import com.lagradost.cloudstream3.utils.newExtractorLink
 import com.lagradost.cloudstream3.utils.getQualityFromName
 
-// ── CUSTOM MEGAPLAY EXTRACTOR (USING WEBVIEW TO BYPASS CLOUDFLARE) ──
+// ── MEGAPLAY EXTRACTOR (API-FIRST WITH WEBVIEW FALLBACK) ──
 open class AniDoorMegaPlay : ExtractorApi() {
     override val name = "MegaPlay"
     override val mainUrl = "https://megaplay.buzz"
-    override val requiresReferer = true
+    override val requiresReferer = false
 
     override suspend fun getUrl(
         url: String,
@@ -29,32 +28,81 @@ open class AniDoorMegaPlay : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        try {
-            val resolver = WebViewResolver(
-                interceptUrl = Regex("""(?i)\.m3u8"""),
-                additionalUrls = listOf(Regex("""(?i)\.m3u8""")),
-                script = """document.querySelector('button,[role="button"],.jw-icon-display,.vds-play-button')?.click();""",
-                useOkhttp = false,
-                timeout = 20_000L
-            )
-            
-            val resolved = app.get(url, referer = referer ?: "https://anidoor.me/", interceptor = resolver).url
-            
-            if (resolved.contains(".m3u8")) {
-                val playbackHeaders = mapOf(
-                    "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36",
-                    "Accept" to "*/*",
-                    "Referer" to "$mainUrl/"
-                )
-                M3u8Helper.generateM3u8(name, resolved, mainUrl, headers = playbackHeaders).forEach(callback)
+        val headers = mapOf(
+            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:140.0) Gecko/20100101 Firefox/140.0",
+            "Accept" to "*/*",
+            "X-Requested-With" to "XMLHttpRequest",
+            "Referer" to "$mainUrl/"
+        )
+
+        runCatching {
+            // Try API-first approach (like Anivexa does)
+            val document = app.get(url, headers = headers).document
+            val id = document.selectFirst("#megaplay-player")?.attr("data-id")?.takeIf { it.isNotBlank() }
+                ?: Regex("""data-id=["'](\d+)""").find(document.html())?.groupValues?.get(1)
+                ?: document.selectFirst("#megaplay-player")?.attr("data-realid")?.takeIf { it.isNotBlank() }
+                ?: Regex("""data-realid=["'](\d+)""").find(document.html())?.groupValues?.get(1)
+                ?: Regex("""/stream/s-\d+/(\d+)""").find(url)?.groupValues?.get(1)
+                ?: return@runCatching
+
+            val response = app.get(
+                "$mainUrl/stream/getSources?id=$id",
+                headers = headers
+            ).parsedSafe<MegaPlayResponse>() ?: return@runCatching
+
+            val m3u8 = response.sources?.file ?: return@runCatching
+
+            M3u8Helper.generateM3u8(name, m3u8, mainUrl, headers = headers).forEach(callback)
+
+            response.tracks.forEach { track ->
+                val file = track.file ?: return@forEach
+                if (track.kind == "captions" || track.kind == "subtitles") {
+                    subtitleCallback(
+                        newSubtitleFile(track.label ?: "Subtitle", file) {
+                            this.headers = mapOf("Referer" to "$mainUrl/")
+                        }
+                    )
+                }
             }
-        } catch (e: Exception) {
-            Log.e("MegaPlay", "WebView extraction failed: ${e.message}")
+        }.onFailure { error ->
+            Log.e(name, "API extraction failed, trying WebView: ${error.message}")
+            // WebView fallback
+            try {
+                val resolver = WebViewResolver(
+                    interceptUrl = Regex("""(?i)\.m3u8"""),
+                    additionalUrls = listOf(Regex("""(?i)\.m3u8""")),
+                    script = """document.querySelector('button,[role="button"],.jw-icon-display,.vds-play-button')?.click();""",
+                    useOkhttp = false,
+                    timeout = 20_000L
+                )
+                val resolved = app.get(url, referer = referer ?: "https://anidoor.me/", interceptor = resolver).url
+                if (resolved.contains(".m3u8")) {
+                    val playbackHeaders = mapOf(
+                        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36",
+                        "Accept" to "*/*",
+                        "Referer" to "$mainUrl/"
+                    )
+                    M3u8Helper.generateM3u8(name, resolved, mainUrl, headers = playbackHeaders).forEach(callback)
+                }
+            } catch (e2: Exception) {
+                Log.e(name, "WebView fallback also failed: ${e2.message}")
+            }
         }
     }
+
+    data class MegaPlayResponse(
+        @JsonProperty("sources") val sources: MegaPlaySources? = null,
+        @JsonProperty("tracks") val tracks: List<MegaPlayTrack> = emptyList()
+    )
+    data class MegaPlaySources(@JsonProperty("file") val file: String? = null)
+    data class MegaPlayTrack(
+        @JsonProperty("file") val file: String? = null,
+        @JsonProperty("label") val label: String? = null,
+        @JsonProperty("kind") val kind: String? = null
+    )
 }
 
-// ── CUSTOM TRYEMBED EXTRACTOR ────────────────────────────────────────
+// ── TRYEMBED EXTRACTOR ──
 open class AniDoorTryEmbed : ExtractorApi() {
     override val name = "TryEmbed"
     override val mainUrl = "https://tryembed.us.cc"
@@ -107,6 +155,7 @@ open class AniDoorTryEmbed : ExtractorApi() {
             "Referer" to "$mainUrl/",
         )
 
+        // Try to find payload in page
         val payloadRegex = Regex("""RAW_PAYLOAD\s*=\s*["']([^"']+)["']""")
         val payloadMatch = payloadRegex.find(html)
         var responseData = if (payloadMatch != null) {
@@ -126,6 +175,7 @@ open class AniDoorTryEmbed : ExtractorApi() {
             }
         }
 
+        // Try API endpoints if page parsing failed
         if (responseData?.providers == null && responseData?.sources == null) {
             val pathParts = url.substringAfter("$mainUrl/embed/anime/").split("/")
             if (pathParts.size >= 3) {
@@ -156,8 +206,12 @@ open class AniDoorTryEmbed : ExtractorApi() {
             }
         }
 
-        if (responseData == null) { return }
+        if (responseData == null) {
+            Log.d("TryEmbed", "No response data found for $url")
+            return
+        }
 
+        // Process providers
         responseData.providers?.forEach { provider ->
             if (provider.status != "ready") return@forEach
             val qualities = provider.qualities ?: return@forEach
@@ -172,6 +226,7 @@ open class AniDoorTryEmbed : ExtractorApi() {
             }
         }
 
+        // Process direct sources
         responseData.sources?.forEach { source ->
             val fileUrl = source.file ?: return@forEach
             val label = source.label ?: source.type ?: "Auto"
@@ -186,11 +241,11 @@ open class AniDoorTryEmbed : ExtractorApi() {
     }
 }
 
-// ── CUSTOM VIDNEST EXTRACTOR (USING WEBVIEW TO BYPASS CLOUDFLARE) ──
+// ── VIDNEST EXTRACTOR (API-FIRST WITH WEBVIEW FALLBACK) ──
 open class AniDoorVidnest : ExtractorApi() {
     override val name = "VidNest"
     override val mainUrl = "https://vidnest.fun"
-    override val requiresReferer = true
+    override val requiresReferer = false
 
     override suspend fun getUrl(
         url: String,
@@ -198,32 +253,88 @@ open class AniDoorVidnest : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        try {
-            val resolver = WebViewResolver(
-                interceptUrl = Regex("""(?i)\.m3u8"""),
-                additionalUrls = listOf(Regex("""(?i)\.m3u8""")),
-                script = """document.querySelector('button,[role="button"],.jw-icon-display,.vds-play-button')?.click();""",
-                useOkhttp = false,
-                timeout = 15_000L
-            )
-            
-            val resolved = app.get(url, referer = referer ?: "https://anidoor.me/", interceptor = resolver).url
-            
-            if (resolved.contains(".m3u8")) {
-                val playbackHeaders = mapOf(
-                    "User-Agent" to USER_AGENT,
-                    "Accept" to "*/*",
-                    "Referer" to "https://megaplay.buzz/" 
-                )
-                M3u8Helper.generateM3u8(name, resolved, "https://megaplay.buzz/", headers = playbackHeaders).forEach(callback)
+        // Vidnest uses the same megaplay API structure
+        val headers = mapOf(
+            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:140.0) Gecko/20100101 Firefox/140.0",
+            "Accept" to "*/*",
+            "X-Requested-With" to "XMLHttpRequest",
+            "Referer" to "$mainUrl/"
+        )
+
+        runCatching {
+            val document = app.get(url, headers = headers).document
+            val id = document.selectFirst("#megaplay-player")?.attr("data-id")?.takeIf { it.isNotBlank() }
+                ?: Regex("""data-id=["'](\d+)""").find(document.html())?.groupValues?.get(1)
+                ?: document.selectFirst("#megaplay-player")?.attr("data-realid")?.takeIf { it.isNotBlank() }
+                ?: Regex("""data-realid=["'](\d+)""").find(document.html())?.groupValues?.get(1)
+                ?: Regex("""/stream/s-\d+/(\d+)""").find(url)?.groupValues?.get(1)
+                ?: return@runCatching
+
+            // Try getSources on vidnest
+            val apiBase = if (url.contains("vidnest.fun")) "https://vidnest.fun" else "https://megaplay.buzz"
+            val response = app.get(
+                "$apiBase/stream/getSources?id=$id",
+                headers = headers
+            ).parsedSafe<MegaPlayResponse>() ?: return@runCatching
+
+            val m3u8 = response.sources?.file ?: return@runCatching
+
+            M3u8Helper.generateM3u8(name, m3u8, apiBase, headers = headers).forEach(callback)
+
+            response.tracks.forEach { track ->
+                val file = track.file ?: return@forEach
+                if (track.kind == "captions" || track.kind == "subtitles") {
+                    subtitleCallback(
+                        newSubtitleFile(track.label ?: "Subtitle", file) {
+                            this.headers = mapOf("Referer" to "$apiBase/")
+                        }
+                    )
+                }
             }
-        } catch (e: Exception) {
-            Log.e("VidNest", "WebView extraction failed: ${e.message}")
+        }.onFailure { error ->
+            Log.e(name, "API extraction failed, trying WebView: ${error.message}")
+            // WebView fallback
+            try {
+                val resolver = WebViewResolver(
+                    interceptUrl = Regex("""(?i)\.m3u8"""),
+                    additionalUrls = listOf(Regex("""(?i)\.m3u8""")),
+                    script = """document.querySelector('button,[role="button"],.jw-icon-display,.vds-play-button')?.click();""",
+                    useOkhttp = false,
+                    timeout = 15_000L
+                )
+                val resolved = app.get(url, referer = referer ?: "https://anidoor.me/", interceptor = resolver).url
+                if (resolved.contains(".m3u8")) {
+                    // FIXED: Use the correct referer for vidnest content
+                    val resolvedReferer = if (resolved.contains("megaplay.buzz")) "https://megaplay.buzz/"
+                        else if (resolved.contains("vidnest.fun")) "https://vidnest.fun/"
+                        else mainUrl
+                    val playbackHeaders = mapOf(
+                        "User-Agent" to USER_AGENT,
+                        "Accept" to "*/*",
+                        "Referer" to resolvedReferer
+                    )
+                    M3u8Helper.generateM3u8(name, resolved, resolvedReferer, headers = playbackHeaders).forEach(callback)
+                }
+            } catch (e2: Exception) {
+                Log.e(name, "WebView fallback also failed: ${e2.message}")
+            }
         }
     }
+
+    // Reuse MegaPlay API response types
+    data class MegaPlayResponse(
+        @JsonProperty("sources") val sources: MegaPlaySources? = null,
+        @JsonProperty("tracks") val tracks: List<MegaPlayTrack> = emptyList()
+    )
+    data class MegaPlaySources(@JsonProperty("file") val file: String? = null)
+    data class MegaPlayTrack(
+        @JsonProperty("file") val file: String? = null,
+        @JsonProperty("label") val label: String? = null,
+        @JsonProperty("kind") val kind: String? = null
+    )
 }
 
-// ── CUSTOM DROPFILE EXTRACTOR (FIXED SUSPEND LOOP) ──────────────────
+// ── DROPFILE EXTRACTOR ──
 open class AniDoorDropfile : ExtractorApi() {
     override val name = "DropFile"
     override val mainUrl = "https://dropfile.cc"
@@ -243,10 +354,12 @@ open class AniDoorDropfile : ExtractorApi() {
             Regex("""(https?://[^\s"'<>]+\.mp4[^\s"'<>]*)"""),
         )
 
+        val seenUrls = mutableSetOf<String>()
         for (regex in regexes) {
             for (match in regex.findAll(html)) {
-                val link = match.groupValues[1]
+                val link = match.groupValues[1].trim()
                 if (!link.startsWith("http")) continue
+                if (!seenUrls.add(link)) continue
 
                 val refererForLink = when {
                     link.contains("streamzone1.site") || link.contains("cinewave2.site") -> "https://megaplay.buzz/"
@@ -270,7 +383,7 @@ open class AniDoorDropfile : ExtractorApi() {
     }
 }
 
-// ── CUSTOM HD EXTRACTOR (FIXED SUSPEND LOOP) ────────────────────────
+// ── HD (NIGHTSLAYER) EXTRACTOR ──
 open class AniDoorHD : ExtractorApi() {
     override val name = "HD"
     override val mainUrl = "https://stream.nightslayer.workers.dev"
@@ -290,10 +403,12 @@ open class AniDoorHD : ExtractorApi() {
             Regex("""(https?://[^\s"'<>]+\.mp4[^\s"'<>]*)"""),
         )
 
+        val seenUrls = mutableSetOf<String>()
         for (regex in regexes) {
             for (match in regex.findAll(html)) {
-                val link = match.groupValues[1]
+                val link = match.groupValues[1].trim()
                 if (!link.startsWith("http")) continue
+                if (!seenUrls.add(link)) continue
 
                 val refererForLink = when {
                     link.contains("streamzone1.site") || link.contains("cinewave2.site") -> "https://megaplay.buzz/"

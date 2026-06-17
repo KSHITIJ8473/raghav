@@ -24,14 +24,11 @@ import com.lagradost.cloudstream3.newHomePageResponse
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
-import com.lagradost.cloudstream3.utils.newExtractorLink
 import com.lagradost.cloudstream3.utils.loadExtractor
-import kotlinx.coroutines.async
+import com.lagradost.cloudstream3.utils.newExtractorLink
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
-import org.jsoup.Jsoup
 import org.jsoup.nodes.Element
 
 class Reanime : MainAPI() {
@@ -128,11 +125,11 @@ class Reanime : MainAPI() {
                 app.get(url).text
             }
             val data = parseJson<ReanimeSearchResponse>(response)
-            data.results.mapNotNull { item ->
+            data.results?.mapNotNull { item ->
                 val anime = item.anime ?: return@mapNotNull null
                 val slug = anime.animeId ?: return@mapNotNull null
                 val title = anime.title?.english ?: anime.title?.romaji ?: return@mapNotNull null
-                val coverImage = anime.coverImage?.extraLarge ?: anime.coverImage?.large ?: ""
+                val coverImage = anime.coverImage?.extraLarge ?: anime.coverImage?.large ?: anime.cover_image?.extraLarge ?: anime.cover_image?.large ?: ""
                 val subEps = anime.subbed
                 val dubEps = anime.dubbed
                 val format = anime.format?.lowercase() ?: ""
@@ -152,7 +149,7 @@ class Reanime : MainAPI() {
                         subEpisodes = subEps
                     )
                 }
-            }
+            } ?: emptyList()
         } catch (e: Exception) {
             emptyList()
         }
@@ -207,13 +204,13 @@ class Reanime : MainAPI() {
             val episodesList = data.data ?: emptyList()
             
             episodesList.mapNotNull { ep ->
-                val epNum = ep.episodeNumber ?: return@mapNotNull null
+                val epNum = ep.episode_number ?: return@mapNotNull null
                 val title = ep.title?.takeIf { it.isNotBlank() } ?: "Episode $epNum"
                 
                 newEpisode("$slug|$epNum") {
                     this.name = title
                     this.episode = epNum
-                    this.posterUrl = fixUrl(ep.thumbnail)
+                    this.posterUrl = ep.thumbnail?.let { fixUrl(it) }
                 }
             }
         } catch (e: Exception) {
@@ -337,7 +334,7 @@ class Reanime : MainAPI() {
         val id: String? = null,
         val title: ReanimeAnimeTitle? = null,
         val coverImage: ReanimeCoverImage? = null,
-        val cover_image: ReanimeCoverImage? = null,
+        @JsonProperty("cover_image") val cover_image: ReanimeCoverImage? = null,
         val subbed: Int? = 0,
         val dubbed: Int? = 0,
         val format: String? = null,
@@ -371,7 +368,7 @@ class Reanime : MainAPI() {
         val title: String? = null,
         val thumbnail: String? = null,
         val description: String? = null,
-        val is_filler: Boolean? = false,
+        @JsonProperty("is_filler") val isFiller: Boolean? = false,
         val aired: String? = null
     )
 

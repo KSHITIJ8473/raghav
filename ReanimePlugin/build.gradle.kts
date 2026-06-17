@@ -9,7 +9,8 @@ cloudstream {
     tvTypes = listOf(
         "Anime",
         "AnimeMovie",
-        "OVA"
+        "OVA",
+        "TvSeries"
     )
     iconUrl = "https://reanime.to/logo.png"
 }

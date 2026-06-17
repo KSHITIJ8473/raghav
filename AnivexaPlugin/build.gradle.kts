@@ -2,7 +2,7 @@ version = 1
 
 cloudstream {
     language = "en"
-    description = "Anime from Anivexa with Sub and Dub support"
+    description = "DONT INSTALL (UNDER DEVELOPMENT)"
     authors = listOf("KSHITIJ8473")
 
     status = 1

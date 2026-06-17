@@ -35,23 +35,37 @@ open class AniDoorMegaPlay : ExtractorApi() {
             "Referer" to "$mainUrl/"
         )
 
-        runCatching {
-            // Try API-first approach (like Anivexa does)
+        // FIXED: Use try/catch instead of runCatching so fallback always triggers
+        try {
             val document = app.get(url, headers = headers).document
+            val html = document.html()
+
+            // Try multiple patterns to extract the player ID
             val id = document.selectFirst("#megaplay-player")?.attr("data-id")?.takeIf { it.isNotBlank() }
-                ?: Regex("""data-id=["'](\d+)""").find(document.html())?.groupValues?.get(1)
                 ?: document.selectFirst("#megaplay-player")?.attr("data-realid")?.takeIf { it.isNotBlank() }
-                ?: Regex("""data-realid=["'](\d+)""").find(document.html())?.groupValues?.get(1)
+                ?: Regex("""data-id\s*=\s*["'](\d+)["']""").find(html)?.groupValues?.get(1)
+                ?: Regex("""data-realid\s*=\s*["'](\d+)["']""").find(html)?.groupValues?.get(1)
                 ?: Regex("""/stream/s-\d+/(\d+)""").find(url)?.groupValues?.get(1)
-                ?: return@runCatching
+                ?: Regex(""""id"\s*:\s*(\d+)""").find(html)?.groupValues?.get(1)
+
+            if (id == null) {
+                Log.d(name, "No player ID found in HTML, falling back to WebView")
+                throw Exception("No player ID found")
+            }
+
+            Log.d(name, "Found player ID: $id, calling API")
 
             val response = app.get(
                 "$mainUrl/stream/getSources?id=$id",
                 headers = headers
-            ).parsedSafe<MegaPlayResponse>() ?: return@runCatching
+            ).parsedSafe<MegaPlayResponse>()
 
-            val m3u8 = response.sources?.file ?: return@runCatching
+            if (response == null || response.sources?.file == null) {
+                Log.d(name, "API returned no sources, falling back to WebView")
+                throw Exception("API returned no sources")
+            }
 
+            val m3u8 = response.sources!!.file!!
             M3u8Helper.generateM3u8(name, m3u8, mainUrl, headers = headers).forEach(callback)
 
             response.tracks.forEach { track ->
@@ -64,16 +78,16 @@ open class AniDoorMegaPlay : ExtractorApi() {
                     )
                 }
             }
-        }.onFailure { error ->
+        } catch (error: Exception) {
             Log.e(name, "API extraction failed, trying WebView: ${error.message}")
             // WebView fallback
             try {
                 val resolver = WebViewResolver(
                     interceptUrl = Regex("""(?i)\.m3u8"""),
                     additionalUrls = listOf(Regex("""(?i)\.m3u8""")),
-                    script = """document.querySelector('button,[role="button"],.jw-icon-display,.vds-play-button')?.click();""",
+                    script = """document.querySelector('button,[role="button"],.jw-icon-display,.vds-play-button,.plyr__control--overlaid')?.click();""",
                     useOkhttp = false,
-                    timeout = 20_000L
+                    timeout = 25_000L
                 )
                 val resolved = app.get(url, referer = referer ?: "https://anidoor.me/", interceptor = resolver).url
                 if (resolved.contains(".m3u8")) {
@@ -110,7 +124,9 @@ open class AniDoorTryEmbed : ExtractorApi() {
 
     data class TryEmbedResponse(
         @JsonProperty("providers") val providers: List<TryEmbedProvider>? = null,
-        @JsonProperty("sources") val sources: List<TryEmbedSourceAlt>? = null
+        @JsonProperty("sources") val sources: List<TryEmbedSourceAlt>? = null,
+        @JsonProperty("selectedProvider") val selectedProvider: TryEmbedProvider? = null,
+        @JsonProperty("captions") val captions: List<TryEmbedCaption>? = null
     )
     data class TryEmbedProvider(
         @JsonProperty("id") val id: String? = null,
@@ -121,12 +137,19 @@ open class AniDoorTryEmbed : ExtractorApi() {
     data class TryEmbedQuality(
         @JsonProperty("name") val name: String? = null,
         @JsonProperty("token") val token: String? = null,
-        @JsonProperty("fallbackToken") val fallbackToken: String? = null
+        @JsonProperty("fallbackToken") val fallbackToken: String? = null,
+        @JsonProperty("directUrl") val directUrl: String? = null,
+        @JsonProperty("isM3U8") val isM3U8: Boolean? = null
     )
     data class TryEmbedSourceAlt(
         @JsonProperty("file") val file: String? = null,
         @JsonProperty("type") val type: String? = null,
         @JsonProperty("label") val label: String? = null
+    )
+    data class TryEmbedCaption(
+        @JsonProperty("file") val file: String? = null,
+        @JsonProperty("label") val label: String? = null,
+        @JsonProperty("kind") val kind: String? = null
     )
 
     override suspend fun getUrl(
@@ -141,92 +164,126 @@ open class AniDoorTryEmbed : ExtractorApi() {
             "Referer" to embedReferer
         )
 
+        // Step 1: Visit embed page to get cookies and extract payload
         val pageRes = app.get(url, headers = pageHeaders)
         val html = pageRes.text
 
+        // Extract cookies for API auth
         val cookies = pageRes.okhttpResponse.headers("Set-Cookie")
         val tryembedAuth = cookies.firstOrNull { it.contains("tryembed_auth=") }
             ?.substringBefore(";")?.substringAfter("tryembed_auth=")
+
+        Log.d(name, "Got cookies: tryembed_auth=${tryembedAuth?.take(10)}...")
 
         val playbackHeaders = mapOf(
             "User-Agent" to USER_AGENT,
             "Accept" to "*/*",
             "Origin" to mainUrl,
-            "Referer" to "$mainUrl/",
+            "Referer" to url,
         )
 
-        // Try to find payload in page
+        // Step 2: Extract payload from embed page
         val payloadRegex = Regex("""RAW_PAYLOAD\s*=\s*["']([^"']+)["']""")
         val payloadMatch = payloadRegex.find(html)
-        var responseData = if (payloadMatch != null) {
+        val payloadMeta = if (payloadMatch != null) {
             try {
-                val base64Payload = payloadMatch.groupValues[1]
-                val decodedBytes = Base64.decode(base64Payload, Base64.DEFAULT)
+                val decodedBytes = Base64.decode(payloadMatch.groupValues[1], Base64.DEFAULT)
                 val decodedJson = String(decodedBytes, Charsets.UTF_8)
-                parseJson<TryEmbedResponse>(decodedJson)
+                parseJson<TryEmbedPayloadMeta>(decodedJson)
             } catch (e: Exception) { null }
         } else null
 
-        if (responseData?.providers == null && responseData?.sources == null) {
-            val jsonRegex = Regex("""(?:window\.__DATA__|streamData)\s*=\s*(\{.+?\})\s*;""")
-            val jsonMatch = jsonRegex.find(html)
-            if (jsonMatch != null) {
-                try { responseData = parseJson<TryEmbedResponse>(jsonMatch.groupValues[1]) } catch (_: Exception) {}
+        // Step 3: Build API URL from payload or URL path
+        var responseData: TryEmbedResponse? = null
+        val pathParts = url.substringAfter("$mainUrl/embed/anime/").split("/")
+        val alId = payloadMeta?.meta?.anilistId ?: pathParts.getOrNull(0) ?: ""
+        val episode = payloadMeta?.meta?.episode?.toString() ?: pathParts.getOrNull(1) ?: "1"
+        val audio = payloadMeta?.meta?.audio ?: pathParts.getOrNull(2) ?: "sub"
+
+        // Step 4: Call API with cookies
+        if (alId.isNotBlank()) {
+            val apiHeaders = mutableMapOf(
+                "User-Agent" to USER_AGENT,
+                "Referer" to url,
+                "Origin" to mainUrl,
+                "Sec-Fetch-Mode" to "cors",
+                "Sec-Fetch-Site" to "same-origin",
+                "Sec-Fetch-Dest" to "empty",
+                "Accept" to "application/json, */*"
+            )
+            // CRITICAL: Cookie must be sent with API request
+            if (tryembedAuth != null) {
+                apiHeaders["Cookie"] = "tryembed_auth=$tryembedAuth"
             }
-        }
 
-        // Try API endpoints if page parsing failed
-        if (responseData?.providers == null && responseData?.sources == null) {
-            val pathParts = url.substringAfter("$mainUrl/embed/anime/").split("/")
-            if (pathParts.size >= 3) {
-                val alId = pathParts[0]
-                val episode = pathParts[1]
-                val audio = pathParts[2]
-
-                val apiHeaders = mutableMapOf(
-                    "User-Agent" to USER_AGENT, "Referer" to url, "Origin" to mainUrl,
-                    "Sec-Fetch-Mode" to "cors", "Sec-Fetch-Site" to "same-origin",
-                    "Sec-Fetch-Dest" to "empty", "Accept" to "*/*"
-                )
-                if (tryembedAuth != null) { apiHeaders["Cookie"] = "tryembed_auth=$tryembedAuth" }
-
-                val apiUrls = listOf(
-                    "$mainUrl/api/stream_data?id=$alId&episode=$episode&audio=$audio",
-                    "$mainUrl/api/source?id=$alId&episode=$episode&audio=$audio",
-                    "$mainUrl/api/stream?id=$alId&episode=$episode&audio=$audio",
-                )
-
-                for (apiUrl in apiUrls) {
-                    try {
-                        val apiRes = app.get(apiUrl, headers = apiHeaders)
-                        val parsed = parseJson<TryEmbedResponse>(apiRes.text)
-                        if (parsed.providers != null || parsed.sources != null) { responseData = parsed; break }
-                    } catch (e: Exception) { Log.d("TryEmbed", "API attempt failed: ${e.message}") }
-                }
+            val apiUrl = "$mainUrl/api/stream_data?id=$alId&episode=$episode&audio=$audio"
+            try {
+                val apiRes = app.get(apiUrl, headers = apiHeaders)
+                Log.d(name, "API response: HTTP ${apiRes.code}, len=${apiRes.text.length}")
+                responseData = parseJson<TryEmbedResponse>(apiRes.text)
+            } catch (e: Exception) {
+                Log.e(name, "API call failed: ${e.message}")
             }
         }
 
         if (responseData == null) {
-            Log.d("TryEmbed", "No response data found for $url")
+            Log.e(name, "No response data from API for $url")
             return
         }
 
-        // Process providers
-        responseData.providers?.forEach { provider ->
-            if (provider.status != "ready") return@forEach
+        // Step 5: Collect all providers (including selectedProvider)
+        val allProviders = mutableListOf<TryEmbedProvider>()
+        responseData.providers?.let { allProviders.addAll(it) }
+        responseData.selectedProvider?.let { allProviders.add(it) }
+
+        // Step 6: Process providers
+        allProviders.forEach { provider ->
+            if (provider.status != "ready") {
+                Log.d(name, "Provider ${provider.id}/${provider.name} status=${provider.status}, skipping")
+                return@forEach
+            }
             val qualities = provider.qualities ?: return@forEach
-            val serverName = provider.name ?: name
+            val serverName = provider.name ?: provider.id ?: name
+
             for (quality in qualities) {
-                val token = quality.token ?: quality.fallbackToken ?: continue
                 val qualityLabel = quality.name ?: "Auto"
-                val m3u8Url = "$mainUrl/s/$token.m3u8"
-                callback(newExtractorLink(serverName, "$serverName - $qualityLabel", m3u8Url, ExtractorLinkType.M3U8) {
-                    this.referer = "$mainUrl/"; this.headers = playbackHeaders
-                })
+
+                // FIXED: Handle directUrl format (used by dub/Timi server)
+                val directUrl = quality.directUrl
+                if (directUrl != null) {
+                    val isM3u8 = quality.isM3U8 ?: directUrl.contains(".m3u8")
+                    if (isM3u8) {
+                        M3u8Helper.generateM3u8(
+                            serverName, directUrl, "$mainUrl/", headers = playbackHeaders
+                        ).forEach(callback)
+                    } else {
+                        callback(newExtractorLink(
+                            serverName, "$serverName - $qualityLabel", directUrl,
+                            ExtractorLinkType.VIDEO
+                        ) {
+                            this.referer = "$mainUrl/"
+                            this.headers = playbackHeaders
+                        })
+                    }
+                    continue
+                }
+
+                // Handle token-based format (used by sub/Alpha server)
+                val token = quality.token ?: quality.fallbackToken
+                if (token != null) {
+                    val m3u8Url = "$mainUrl/s/$token.m3u8"
+                    callback(newExtractorLink(
+                        serverName, "$serverName - $qualityLabel", m3u8Url,
+                        ExtractorLinkType.M3U8
+                    ) {
+                        this.referer = "$mainUrl/"
+                        this.headers = playbackHeaders
+                    })
+                }
             }
         }
 
-        // Process direct sources
+        // Step 7: Process direct sources (fallback)
         responseData.sources?.forEach { source ->
             val fileUrl = source.file ?: return@forEach
             val label = source.label ?: source.type ?: "Auto"
@@ -238,7 +295,27 @@ open class AniDoorTryEmbed : ExtractorApi() {
                 })
             }
         }
+
+        // Step 8: Process captions/subtitles
+        responseData.captions?.forEach { caption ->
+            val file = caption.file ?: return@forEach
+            subtitleCallback(
+                newSubtitleFile(caption.label ?: "Subtitle", file) {
+                    this.headers = mapOf("Referer" to "$mainUrl/")
+                }
+            )
+        }
     }
+
+    data class TryEmbedPayloadMeta(
+        @JsonProperty("meta") val meta: TryEmbedMeta? = null
+    )
+    data class TryEmbedMeta(
+        @JsonProperty("type") val type: String? = null,
+        @JsonProperty("anilist_id") val anilistId: String? = null,
+        @JsonProperty("episode") val episode: Int? = null,
+        @JsonProperty("audio") val audio: String? = null
+    )
 }
 
 // ── VIDNEST EXTRACTOR (API-FIRST WITH WEBVIEW FALLBACK) ──
@@ -253,7 +330,6 @@ open class AniDoorVidnest : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        // Vidnest uses the same megaplay API structure
         val headers = mapOf(
             "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:140.0) Gecko/20100101 Firefox/140.0",
             "Accept" to "*/*",
@@ -261,24 +337,47 @@ open class AniDoorVidnest : ExtractorApi() {
             "Referer" to "$mainUrl/"
         )
 
-        runCatching {
+        // FIXED: Use try/catch so WebView fallback always triggers on failure
+        try {
             val document = app.get(url, headers = headers).document
-            val id = document.selectFirst("#megaplay-player")?.attr("data-id")?.takeIf { it.isNotBlank() }
-                ?: Regex("""data-id=["'](\d+)""").find(document.html())?.groupValues?.get(1)
-                ?: document.selectFirst("#megaplay-player")?.attr("data-realid")?.takeIf { it.isNotBlank() }
-                ?: Regex("""data-realid=["'](\d+)""").find(document.html())?.groupValues?.get(1)
-                ?: Regex("""/stream/s-\d+/(\d+)""").find(url)?.groupValues?.get(1)
-                ?: return@runCatching
+            val html = document.html()
 
-            // VidNest currently renders MegaPlay player ids, but its own getSources route 404s.
-            // Query MegaPlay directly so both sub and dub VidNest embeds resolve instead of falling back to WebView only.
+            // Try to find player ID - VidNest is a Next.js app, data-id may be in RSC payloads
+            var id: String? = document.selectFirst("#megaplay-player")?.attr("data-id")?.takeIf { it.isNotBlank() }
+                ?: document.selectFirst("#megaplay-player")?.attr("data-realid")?.takeIf { it.isNotBlank() }
+                ?: Regex("""data-id\s*=\s*["'](\d+)["']""").find(html)?.groupValues?.get(1)
+                ?: Regex("""data-realid\s*=\s*["'](\d+)["']""").find(html)?.groupValues?.get(1)
+                ?: Regex("""/stream/s-\d+/(\d+)""").find(url)?.groupValues?.get(1)
+
+            // Also search RSC (React Server Component) payloads
+            if (id == null) {
+                val rscChunks = Regex("""self\.__next_f\.push\((\[.*?\])\s*\)""", RegexOption.DOT_MATCHES_ALL)
+                    .findAll(html).map { it.groupValues[1] }.toList()
+                val rscText = rscChunks.joinToString(" ")
+                id = Regex("""data-id["']?\s*:\s*["']?(\d+)""").find(rscText)?.groupValues?.get(1)
+                    ?: Regex(""""id"\s*:\s*(\d{2,6})""").find(rscText)?.groupValues?.get(1)
+            }
+
+            if (id == null) {
+                Log.d(name, "No player ID found in VidNest HTML/RSC, falling back to WebView")
+                throw Exception("No player ID found")
+            }
+
+            Log.d(name, "Found VidNest player ID: $id")
+
+            // Query MegaPlay API directly since VidNest proxies their player
             val apiBase = "https://megaplay.buzz"
             val response = app.get(
                 "$apiBase/stream/getSources?id=$id",
                 headers = headers + mapOf("Referer" to "$apiBase/"),
-            ).parsedSafe<MegaPlayResponse>() ?: return@runCatching
+            ).parsedSafe<VidNestMegaPlayResponse>()
 
-            val m3u8 = response.sources?.file ?: return@runCatching
+            if (response == null || response.sources?.file == null) {
+                Log.d(name, "MegaPlay API returned no sources for VidNest ID $id, falling back to WebView")
+                throw Exception("API returned no sources")
+            }
+
+            val m3u8 = response.sources!!.file!!
             val playbackHeaders = mapOf(
                 "User-Agent" to USER_AGENT,
                 "Accept" to "*/*",
@@ -297,20 +396,19 @@ open class AniDoorVidnest : ExtractorApi() {
                     )
                 }
             }
-        }.onFailure { error ->
+        } catch (error: Exception) {
             Log.e(name, "API extraction failed, trying WebView: ${error.message}")
             // WebView fallback
             try {
                 val resolver = WebViewResolver(
                     interceptUrl = Regex("""(?i)\.m3u8"""),
                     additionalUrls = listOf(Regex("""(?i)\.m3u8""")),
-                    script = """document.querySelector('button,[role="button"],.jw-icon-display,.vds-play-button')?.click();""",
+                    script = """document.querySelector('button,[role="button"],.jw-icon-display,.vds-play-button,.plyr__control--overlaid')?.click();""",
                     useOkhttp = false,
-                    timeout = 15_000L
+                    timeout = 25_000L
                 )
                 val resolved = app.get(url, referer = referer ?: "https://anidoor.me/", interceptor = resolver).url
                 if (resolved.contains(".m3u8")) {
-                    // FIXED: Use the correct referer for vidnest content
                     val resolvedReferer = if (resolved.contains("megaplay.buzz")) "https://megaplay.buzz/"
                         else if (resolved.contains("vidnest.fun")) "https://vidnest.fun/"
                         else mainUrl
@@ -327,13 +425,13 @@ open class AniDoorVidnest : ExtractorApi() {
         }
     }
 
-    // Reuse MegaPlay API response types
-    data class MegaPlayResponse(
-        @JsonProperty("sources") val sources: MegaPlaySources? = null,
-        @JsonProperty("tracks") val tracks: List<MegaPlayTrack> = emptyList()
+    // VidNest reuses MegaPlay API response types (renamed to avoid conflict)
+    data class VidNestMegaPlayResponse(
+        @JsonProperty("sources") val sources: VidNestMegaPlaySources? = null,
+        @JsonProperty("tracks") val tracks: List<VidNestMegaPlayTrack> = emptyList()
     )
-    data class MegaPlaySources(@JsonProperty("file") val file: String? = null)
-    data class MegaPlayTrack(
+    data class VidNestMegaPlaySources(@JsonProperty("file") val file: String? = null)
+    data class VidNestMegaPlayTrack(
         @JsonProperty("file") val file: String? = null,
         @JsonProperty("label") val label: String? = null,
         @JsonProperty("kind") val kind: String? = null

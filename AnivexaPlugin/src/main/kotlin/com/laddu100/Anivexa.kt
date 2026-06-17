@@ -386,8 +386,8 @@ class Anivexa : MainAPI() {
                                 foundAnySources = true
                             }
                         }
-                    } catch (_: Exception) {
-                        Log.e("Anivexa", "Embed extraction failed for $provider: ${_}")
+                    } catch (e: Exception) {
+                        Log.e("Anivexa", "Embed extraction failed for $provider: ${e.message}")
                     }
                 }
 

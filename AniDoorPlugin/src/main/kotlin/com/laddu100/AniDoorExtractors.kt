@@ -270,16 +270,22 @@ open class AniDoorVidnest : ExtractorApi() {
                 ?: Regex("""/stream/s-\d+/(\d+)""").find(url)?.groupValues?.get(1)
                 ?: return@runCatching
 
-            // Try getSources on vidnest
-            val apiBase = if (url.contains("vidnest.fun")) "https://vidnest.fun" else "https://megaplay.buzz"
+            // VidNest currently renders MegaPlay player ids, but its own getSources route 404s.
+            // Query MegaPlay directly so both sub and dub VidNest embeds resolve instead of falling back to WebView only.
+            val apiBase = "https://megaplay.buzz"
             val response = app.get(
                 "$apiBase/stream/getSources?id=$id",
-                headers = headers
+                headers = headers + mapOf("Referer" to "$apiBase/"),
             ).parsedSafe<MegaPlayResponse>() ?: return@runCatching
 
             val m3u8 = response.sources?.file ?: return@runCatching
+            val playbackHeaders = mapOf(
+                "User-Agent" to USER_AGENT,
+                "Accept" to "*/*",
+                "Referer" to "$apiBase/",
+            )
 
-            M3u8Helper.generateM3u8(name, m3u8, apiBase, headers = headers).forEach(callback)
+            M3u8Helper.generateM3u8(name, m3u8, apiBase, headers = playbackHeaders).forEach(callback)
 
             response.tracks.forEach { track ->
                 val file = track.file ?: return@forEach

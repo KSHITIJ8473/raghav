@@ -21,6 +21,7 @@ import com.lagradost.cloudstream3.newAnimeLoadResponse
 import com.lagradost.cloudstream3.newAnimeSearchResponse
 import com.lagradost.cloudstream3.newEpisode
 import com.lagradost.cloudstream3.newHomePageResponse
+import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.newExtractorLink
@@ -126,7 +127,7 @@ class Reanime : MainAPI() {
             val response = withContext(Dispatchers.IO) {
                 app.get(url).text
             }
-            val data = app.parseJson<SearchResponse>(response)
+            val data = parseJson<ReanimeSearchResponse>(response)
             data.results.mapNotNull { item ->
                 val anime = item.anime ?: return@mapNotNull null
                 val slug = anime.animeId ?: return@mapNotNull null
@@ -179,8 +180,6 @@ class Reanime : MainAPI() {
             else -> null
         }
 
-        val position = doc.selectFirst("[class*=position], .position")?.text()?.trim()
-
         val tvType = when (typeStr.lowercase()) {
             "movie", "film" -> TvType.AnimeMovie
             "ova", "ona", "special" -> TvType.OVA
@@ -195,7 +194,7 @@ class Reanime : MainAPI() {
             this.plot = plot
             this.tags = tags
             this.showStatus = showStatus
-            if (subbed != null && subEpisodes != null) addEpisodes(DubStatus.Subbed, episodes)
+            addEpisodes(DubStatus.Subbed, episodes)
         }
     }
 
@@ -204,14 +203,12 @@ class Reanime : MainAPI() {
             val response = withContext(Dispatchers.IO) {
                 app.get("$mainUrl/api/episodes/$slug").text
             }
-            val data = app.parseJson<EpisodesResponse>(response)
+            val data = parseJson<ReanimeEpisodesResponse>(response)
             val episodesList = data.data ?: emptyList()
             
             episodesList.mapNotNull { ep ->
                 val epNum = ep.episodeNumber ?: return@mapNotNull null
                 val title = ep.title?.takeIf { it.isNotBlank() } ?: "Episode $epNum"
-                val hasSub = true
-                val hasDub = false
                 
                 newEpisode("$slug|$epNum") {
                     this.name = title
@@ -242,7 +239,7 @@ class Reanime : MainAPI() {
         }
 
         val apiData = try {
-            app.parseJson<WatchResponse>(response)
+            parseJson<ReanimeWatchResponse>(response)
         } catch (e: Exception) {
             null
         } ?: return@coroutineScope false
@@ -325,22 +322,22 @@ class Reanime : MainAPI() {
     // ─── Data Models ──────────────────────────────────────────────────────────
 
     @JsonIgnoreProperties(ignoreUnknown = true)
-    data class SearchResponse(
-        val results: List<SearchResult>? = null
+    data class ReanimeSearchResponse(
+        val results: List<ReanimeSearchResult>? = null
     )
 
     @JsonIgnoreProperties(ignoreUnknown = true)
-    data class SearchResult(
-        val anime: SearchAnime? = null
+    data class ReanimeSearchResult(
+        val anime: ReanimeSearchAnime? = null
     )
 
     @JsonIgnoreProperties(ignoreUnknown = true)
-    data class SearchAnime(
+    data class ReanimeSearchAnime(
         val animeId: String? = null,
         val id: String? = null,
-        val title: AnimeTitle? = null,
-        val coverImage: CoverImage? = null,
-        val cover_image: CoverImage? = null,
+        val title: ReanimeAnimeTitle? = null,
+        val coverImage: ReanimeCoverImage? = null,
+        val cover_image: ReanimeCoverImage? = null,
         val subbed: Int? = 0,
         val dubbed: Int? = 0,
         val format: String? = null,
@@ -348,27 +345,27 @@ class Reanime : MainAPI() {
     )
 
     @JsonIgnoreProperties(ignoreUnknown = true)
-    data class AnimeTitle(
+    data class ReanimeAnimeTitle(
         val english: String? = null,
         val romaji: String? = null,
         val native: String? = null
     )
 
     @JsonIgnoreProperties(ignoreUnknown = true)
-    data class CoverImage(
+    data class ReanimeCoverImage(
         val extraLarge: String? = null,
         val large: String? = null,
         val medium: String? = null
     )
 
     @JsonIgnoreProperties(ignoreUnknown = true)
-    data class EpisodesResponse(
-        val data: List<EpisodeData>? = null,
+    data class ReanimeEpisodesResponse(
+        val data: List<ReanimeEpisodeData>? = null,
         val total: Int? = 0
     )
 
     @JsonIgnoreProperties(ignoreUnknown = true)
-    data class EpisodeData(
+    data class ReanimeEpisodeData(
         val episodeId: String? = null,
         val episode_number: Int? = 0,
         val title: String? = null,
@@ -379,39 +376,39 @@ class Reanime : MainAPI() {
     )
 
     @JsonIgnoreProperties(ignoreUnknown = true)
-    data class WatchResponse(
+    data class ReanimeWatchResponse(
         val success: Boolean? = false,
-        val anime: WatchAnimeInfo? = null,
-        val episodeSources: List<SourceGroup>? = null
+        val anime: ReanimeWatchAnimeInfo? = null,
+        val episodeSources: List<ReanimeSourceGroup>? = null
     )
 
     @JsonIgnoreProperties(ignoreUnknown = true)
-    data class WatchAnimeInfo(
+    data class ReanimeWatchAnimeInfo(
         val animeId: String? = null,
-        val title: WatchTitle? = null,
-        val coverImage: WatchCover? = null
+        val title: ReanimeWatchTitle? = null,
+        val coverImage: ReanimeWatchCover? = null
     )
 
     @JsonIgnoreProperties(ignoreUnknown = true)
-    data class WatchTitle(
+    data class ReanimeWatchTitle(
         val english: String? = null,
         val romaji: String? = null
     )
 
     @JsonIgnoreProperties(ignoreUnknown = true)
-    data class WatchCover(
+    data class ReanimeWatchCover(
         val extraLarge: String? = null,
         val large: String? = null
     )
 
     @JsonIgnoreProperties(ignoreUnknown = true)
-    data class SourceGroup(
+    data class ReanimeSourceGroup(
         val releaseType: String? = null,
-        val episodeSources: List<EpisodeSourceItem>? = null
+        val episodeSources: List<ReanimeEpisodeSourceItem>? = null
     )
 
     @JsonIgnoreProperties(ignoreUnknown = true)
-    data class EpisodeSourceItem(
+    data class ReanimeEpisodeSourceItem(
         val url: String? = null,
         val embedUrl: String? = null,
         val name: String? = null,

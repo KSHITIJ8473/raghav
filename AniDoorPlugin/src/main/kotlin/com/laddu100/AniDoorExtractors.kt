@@ -102,20 +102,30 @@ open class AniDoorMegaPlay : ExtractorApi() {
             try {
                 val resolver = WebViewResolver(
                     interceptUrl = Regex("""(?i)\.m3u8"""),
-                    additionalUrls = listOf(Regex("""(?i)\.m3u8""")),
-                    script = """document.querySelector('button,[role="button"],.jw-icon-display,.vds-play-button,.plyr__control--overlaid')?.click();""",
+                    additionalUrls = listOf(Regex("""(?i)\.m3u8"""), Regex("""(?i)\.mp4""")),
+                    script = """document.querySelector('button,[role="button"],.jw-icon-display,.vds-play-button,.plyr__control--overlaid,.plyr__control--play')?.click();""",
                     useOkhttp = false,
                     timeout = 25_000L
                 )
                 val resolved = app.get(url, referer = referer ?: "https://anidoor.me/", interceptor = resolver).url
-                if (resolved.contains(".m3u8")) {
+                if (resolved.contains(".m3u8") || resolved.contains(".mp4")) {
                     val playbackHeaders = mapOf(
                         "User-Agent" to USER_AGENT,
                         "Accept" to "*/*",
                         "Origin" to mainUrl,
                         "Referer" to "$mainUrl/"
                     )
-                    M3u8Helper.generateM3u8(name, resolved, mainUrl, headers = playbackHeaders).forEach(callback)
+                    if (resolved.contains(".m3u8")) {
+                        M3u8Helper.generateM3u8(name, resolved, mainUrl, headers = playbackHeaders).forEach(callback)
+                    } else {
+                        callback(
+                            newExtractorLink(source = name, name = name, url = resolved, type = ExtractorLinkType.VIDEO) {
+                                this.referer = "$mainUrl/"
+                                this.headers = playbackHeaders
+                                this.quality = getQualityFromName(name)
+                            }
+                        )
+                    }
                 }
             } catch (e2: Exception) {
                 Log.e(name, "WebView fallback also failed: ${e2.message}")
@@ -246,7 +256,44 @@ open class AniDoorTryEmbed : ExtractorApi() {
         }
 
         if (responseData == null) {
-            Log.e(name, "No response data from API for $url")
+            Log.e(name, "No response data from API for $url, trying WebView fallback")
+            // WebView fallback for TryEmbed
+            try {
+                val resolver = WebViewResolver(
+                    interceptUrl = Regex("""(?i)\.m3u8"""),
+                    additionalUrls = listOf(Regex("""(?i)\.m3u8"""), Regex("""(?i)\.mp4""")),
+                    script = """document.querySelector('button,[role="button"],.jw-icon-display,.vds-play-button,.plyr__control--overlaid,.plyr__control--play')?.click();""",
+                    useOkhttp = false,
+                    timeout = 30_000L
+                )
+                val resolved = app.get(url, referer = referer ?: "https://anidoor.me/", interceptor = resolver).url
+                if (resolved.contains(".m3u8") || resolved.contains(".mp4")) {
+                    val resolvedReferer = when {
+                        resolved.contains("tryembed.us.cc") -> "https://tryembed.us.cc/"
+                        resolved.contains("megaplay.buzz") -> "https://megaplay.buzz/"
+                        resolved.contains("vidnest.fun") -> "https://vidnest.fun/"
+                        else -> mainUrl
+                    }
+                    val playbackHeaders = mapOf(
+                        "User-Agent" to USER_AGENT,
+                        "Accept" to "*/*",
+                        "Referer" to resolvedReferer
+                    )
+                    if (resolved.contains(".m3u8")) {
+                        M3u8Helper.generateM3u8(name, resolved, resolvedReferer, headers = playbackHeaders).forEach(callback)
+                    } else {
+                        callback(
+                            newExtractorLink(source = name, name = name, url = resolved, type = ExtractorLinkType.VIDEO) {
+                                this.referer = resolvedReferer
+                                this.headers = playbackHeaders
+                                this.quality = getQualityFromName(name)
+                            }
+                        )
+                    }
+                }
+            } catch (e2: Exception) {
+                Log.e(name, "WebView fallback also failed: ${e2.message}")
+            }
             return
         }
 
@@ -386,8 +433,9 @@ open class AniDoorVidnest : ExtractorApi() {
 
             // Query MegaPlay API directly since VidNest proxies their player
             val apiBase = "https://megaplay.buzz"
+            val type = if (url.contains("/dub", ignoreCase = true)) "dub" else "sub"
             val response = app.get(
-                "$apiBase/stream/getSources?id=$id",
+                "$apiBase/stream/getSources?id=$id&type=$type",
                 headers = headers + mapOf("Referer" to "$apiBase/"),
             ).parsedSafe<VidNestMegaPlayResponse>()
 
@@ -421,13 +469,13 @@ open class AniDoorVidnest : ExtractorApi() {
             try {
                 val resolver = WebViewResolver(
                     interceptUrl = Regex("""(?i)\.m3u8"""),
-                    additionalUrls = listOf(Regex("""(?i)\.m3u8""")),
-                    script = """document.querySelector('button,[role="button"],.jw-icon-display,.vds-play-button,.plyr__control--overlaid')?.click();""",
+                    additionalUrls = listOf(Regex("""(?i)\.m3u8"""), Regex("""(?i)\.mp4""")),
+                    script = """document.querySelector('button,[role="button"],.jw-icon-display,.vds-play-button,.plyr__control--overlaid,.plyr__control--play')?.click();""",
                     useOkhttp = false,
                     timeout = 25_000L
                 )
                 val resolved = app.get(url, referer = referer ?: "https://anidoor.me/", interceptor = resolver).url
-                if (resolved.contains(".m3u8")) {
+                if (resolved.contains(".m3u8") || resolved.contains(".mp4")) {
                     val resolvedReferer = if (resolved.contains("megaplay.buzz")) "https://megaplay.buzz/"
                         else if (resolved.contains("vidnest.fun")) "https://vidnest.fun/"
                         else mainUrl
@@ -436,7 +484,17 @@ open class AniDoorVidnest : ExtractorApi() {
                         "Accept" to "*/*",
                         "Referer" to resolvedReferer
                     )
-                    M3u8Helper.generateM3u8(name, resolved, resolvedReferer, headers = playbackHeaders).forEach(callback)
+                    if (resolved.contains(".m3u8")) {
+                        M3u8Helper.generateM3u8(name, resolved, resolvedReferer, headers = playbackHeaders).forEach(callback)
+                    } else {
+                        callback(
+                            newExtractorLink(source = name, name = name, url = resolved, type = ExtractorLinkType.VIDEO) {
+                                this.referer = resolvedReferer
+                                this.headers = playbackHeaders
+                                this.quality = getQualityFromName(name)
+                            }
+                        )
+                    }
                 }
             } catch (e2: Exception) {
                 Log.e(name, "WebView fallback also failed: ${e2.message}")
@@ -470,37 +528,88 @@ open class AniDoorDropfile : ExtractorApi() {
         callback: (ExtractorLink) -> Unit
     ) {
         val pageHeaders = mapOf("User-Agent" to USER_AGENT, "Referer" to (referer ?: "https://anidoor.me/"))
-        val html = app.get(url, headers = pageHeaders).text
 
-        val regexes = listOf(
-            Regex("""(https?://[^\s"'<>]+\.m3u8[^\s"'<>]*)"""),
-            Regex("""(https?://[^\s"'<>]+\.mp4[^\s"'<>]*)"""),
-        )
+        // Try API-first approach with WebView fallback
+        try {
+            val html = app.get(url, headers = pageHeaders).text
 
-        val seenUrls = mutableSetOf<String>()
-        for (regex in regexes) {
-            for (match in regex.findAll(html)) {
-                val link = match.groupValues[1].trim()
-                if (!link.startsWith("http")) continue
-                if (!seenUrls.add(link)) continue
+            val regexes = listOf(
+                Regex("""(https?://[^\s"'<>]+\.m3u8[^\s"'<>]*)"""),
+                Regex("""(https?://[^\s"'<>]+\.mp4[^\s"'<>]*)"""),
+            )
 
-                val refererForLink = when {
-                    link.contains("streamzone1.site") || link.contains("cinewave2.site") -> "https://megaplay.buzz/"
-                    else -> mainUrl
+            val seenUrls = mutableSetOf<String>()
+            var foundLinks = false
+            for (regex in regexes) {
+                for (match in regex.findAll(html)) {
+                    val link = match.groupValues[1].trim()
+                    if (!link.startsWith("http")) continue
+                    if (!seenUrls.add(link)) continue
+
+                    val refererForLink = when {
+                        link.contains("streamzone1.site") || link.contains("cinewave2.site") -> "https://megaplay.buzz/"
+                        else -> mainUrl
+                    }
+                    val headersForLink = mapOf("User-Agent" to USER_AGENT, "Referer" to refererForLink)
+
+                    if (link.contains(".m3u8")) {
+                        M3u8Helper.generateM3u8(name, link, refererForLink, headers = headersForLink).forEach(callback)
+                        foundLinks = true
+                    } else if (link.contains(".mp4")) {
+                        callback(
+                            newExtractorLink(source = name, name = name, url = link, type = ExtractorLinkType.VIDEO) {
+                                this.referer = refererForLink
+                                this.headers = headersForLink
+                                this.quality = getQualityFromName(name)
+                            }
+                        )
+                        foundLinks = true
+                    }
                 }
-                val headersForLink = mapOf("User-Agent" to USER_AGENT, "Referer" to refererForLink)
+            }
 
-                if (link.contains(".m3u8")) {
-                    M3u8Helper.generateM3u8(name, link, refererForLink, headers = headersForLink).forEach(callback)
-                } else if (link.contains(".mp4")) {
-                    callback(
-                        newExtractorLink(source = name, name = name, url = link, type = ExtractorLinkType.VIDEO) {
-                            this.referer = refererForLink
-                            this.headers = headersForLink
-                            this.quality = getQualityFromName(name)
-                        }
+            if (foundLinks) return
+            Log.d(name, "No direct links found in HTML, trying WebView fallback")
+            throw Exception("No direct links found")
+        } catch (error: Exception) {
+            Log.e(name, "Direct extraction failed, trying WebView: ${error.message}")
+            // WebView fallback
+            try {
+                val resolver = WebViewResolver(
+                    interceptUrl = Regex("""(?i)\.m3u8"""),
+                    additionalUrls = listOf(Regex("""(?i)\.m3u8"""), Regex("""(?i)\.mp4""")),
+                    script = """document.querySelector('button,[role="button"],.jw-icon-display,.vds-play-button,.plyr__control--overlaid,.plyr__control--play')?.click();""",
+                    useOkhttp = false,
+                    timeout = 30_000L
+                )
+                val resolved = app.get(url, referer = referer ?: "https://anidoor.me/", interceptor = resolver).url
+                if (resolved.contains(".m3u8") || resolved.contains(".mp4(".mp4")) {
+                    val resolvedReferer = when {
+                        resolved.contains("megaplay.buzz") -> "https://megaplay.buzz/"
+                        resolved.contains("streamzone1.site") -> "https://megaplay.buzz/"
+                        resolved.contains("cinewave2.site") -> "https://megaplay.buzz/"
+                        resolved.contains("dropfile.cc") -> "https://dropfile.cc/"
+                        else -> mainUrl
+                    }
+                    val playbackHeaders = mapOf(
+                        "User-Agent" to USER_AGENT,
+                        "Accept" to "*/*",
+                        "Referer" to resolvedReferer
                     )
+                    if (resolved.contains(".m3u8")) {
+                        M3u8Helper.generateM3u8(name, resolved, resolvedReferer, headers = playbackHeaders).forEach(callback)
+                    } else {
+                        callback(
+                            newExtractorLink(source = name, name = name, url = resolved, type = ExtractorLinkType.VIDEO) {
+                                this.referer = resolvedReferer
+                                this.headers = playbackHeaders
+                                this.quality = getQualityFromName(name)
+                            }
+                        )
+                    }
                 }
+            } catch (e2: Exception) {
+                Log.e(name, "WebView fallback also failed: ${e2.message}")
             }
         }
     }
@@ -519,37 +628,88 @@ open class AniDoorHD : ExtractorApi() {
         callback: (ExtractorLink) -> Unit
     ) {
         val pageHeaders = mapOf("User-Agent" to USER_AGENT, "Referer" to (referer ?: "https://anidoor.me/"))
-        val html = app.get(url, headers = pageHeaders).text
 
-        val regexes = listOf(
-            Regex("""(https?://[^\s"'<>]+\.m3u8[^\s"'<>]*)"""),
-            Regex("""(https?://[^\s"'<>]+\.mp4[^\s"'<>]*)"""),
-        )
+        // Try API-first approach with WebView fallback
+        try {
+            val html = app.get(url, headers = pageHeaders).text
 
-        val seenUrls = mutableSetOf<String>()
-        for (regex in regexes) {
-            for (match in regex.findAll(html)) {
-                val link = match.groupValues[1].trim()
-                if (!link.startsWith("http")) continue
-                if (!seenUrls.add(link)) continue
+            val regexes = listOf(
+                Regex("""(https?://[^\s"'<>]+\.m3u8[^\s"'<>]*)"""),
+                Regex("""(https?://[^\s"'<>]+\.mp4[^\s"'<>]*)"""),
+            )
 
-                val refererForLink = when {
-                    link.contains("streamzone1.site") || link.contains("cinewave2.site") -> "https://megaplay.buzz/"
-                    else -> mainUrl
+            val seenUrls = mutableSetOf<String>()
+            var foundLinks = false
+            for (regex in regexes) {
+                for (match in regex.findAll(html)) {
+                    val link = match.groupValues[1].trim()
+                    if (!link.startsWith("http")) continue
+                    if (!seenUrls.add(link)) continue
+
+                    val refererForLink = when {
+                        link.contains("streamzone1.site") || link.contains("cinewave2.site") -> "https://megaplay.buzz/"
+                        else -> mainUrl
+                    }
+                    val headersForLink = mapOf("User-Agent" to USER_AGENT, "Referer" to refererForLink)
+
+                    if (link.contains(".m3u8")) {
+                        M3u8Helper.generateM3u8(name, link, refererForLink, headers = headersForLink).forEach(callback)
+                        foundLinks = true
+                    } else if (link.contains(".mp4")) {
+                        callback(
+                            newExtractorLink(source = name, name = name, url = link, type = ExtractorLinkType.VIDEO) {
+                                this.referer = refererForLink
+                                this.headers = headersForLink
+                                this.quality = getQualityFromName(name)
+                            }
+                        )
+                        foundLinks = true
+                    }
                 }
-                val headersForLink = mapOf("User-Agent" to USER_AGENT, "Referer" to refererForLink)
+            }
 
-                if (link.contains(".m3u8")) {
-                    M3u8Helper.generateM3u8(name, link, refererForLink, headers = headersForLink).forEach(callback)
-                } else if (link.contains(".mp4")) {
-                    callback(
-                        newExtractorLink(source = name, name = name, url = link, type = ExtractorLinkType.VIDEO) {
-                            this.referer = refererForLink
-                            this.headers = headersForLink
-                            this.quality = getQualityFromName(name)
-                        }
+            if (foundLinks) return
+            Log.d(name, "No direct links found in HTML, trying WebView fallback")
+            throw Exception("No direct links found")
+        } catch (error: Exception) {
+            Log.e(name, "Direct extraction failed, trying WebView: ${error.message}")
+            // WebView fallback
+            try {
+                val resolver = WebViewResolver(
+                    interceptUrl = Regex("""(?i)\.m3u8"""),
+                    additionalUrls = listOf(Regex("""(?i)\.m3u8"""), Regex("""(?i)\.mp4""")),
+                    script = """document.querySelector('button,[role="button"],.jw-icon-display,.vds-play-button,.plyr__control--overlaid,.plyr__control--play')?.click();""",
+                    useOkhttp = false,
+                    timeout = 30_000L
+                )
+                val resolved = app.get(url, referer = referer ?: "https://anidoor.me/", interceptor = resolver).url
+                if (resolved.contains(".m3u8") || resolved.contains(".mp4")) {
+                    val resolvedReferer = when {
+                        resolved.contains("megaplay.buzz") -> "https://megaplay.buzz/"
+                        resolved.contains("streamzone1.site") -> "https://megaplay.buzz/"
+                        resolved.contains("cinewave2.site") -> "https://megaplay.buzz/"
+                        resolved.contains("nightslayer.workers.dev") -> "https://stream.nightslayer.workers.dev/"
+                        else -> mainUrl
+                    }
+                    val playbackHeaders = mapOf(
+                        "User-Agent" to USER_AGENT,
+                        "Accept" to "*/*",
+                        "Referer" to resolvedReferer
                     )
+                    if (resolved.contains(".m3u8")) {
+                        M3u8Helper.generateM3u8(name, resolved, resolvedReferer, headers = playbackHeaders).forEach(callback)
+                    } else {
+                        callback(
+                            newExtractorLink(source = name, name = name, url = resolved, type = ExtractorLinkType.VIDEO) {
+                                this.referer = resolvedReferer
+                                this.headers = playbackHeaders
+                                this.quality = getQualityFromName(name)
+                            }
+                        )
+                    }
                 }
+            } catch (e2: Exception) {
+                Log.e(name, "WebView fallback also failed: ${e2.message}")
             }
         }
     }

@@ -14,6 +14,8 @@ import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.M3u8Helper
 import com.lagradost.cloudstream3.utils.newExtractorLink
 
+private const val ANIDB_REFERER = "https://anidoor.me/"
+
 // ── MEGAPLAY EXTRACTOR (WebView-first for SPAs) ──
 open class AniDoorMegaPlay : ExtractorApi() {
     override val name = "MegaPlay"
@@ -45,7 +47,7 @@ open class AniDoorMegaPlay : ExtractorApi() {
                 useOkhttp = false,
                 timeout = 35000L
             )
-            val resolved = app.get(url, referer = referer ?: "https://anidoor.me/", interceptor = resolver).url
+            val resolved = app.get(url, referer = ANIDB_REFERER, interceptor = resolver).url
             if (resolved.contains(".m3u8")) {
                 val headers = mapOf(
                     "User-Agent" to USER_AGENT,
@@ -91,7 +93,7 @@ open class AniDoorVidnest : ExtractorApi() {
                 useOkhttp = false,
                 timeout = 35000L
             )
-            val resolved = app.get(url, referer = referer ?: "https://anidoor.me/", interceptor = resolver).url
+            val resolved = app.get(url, referer = ANIDB_REFERER, interceptor = resolver).url
             if (resolved.contains(".m3u8")) {
                 val headers = mapOf(
                     "User-Agent" to USER_AGENT,
@@ -156,7 +158,7 @@ open class AniDoorTryEmbed : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        val headers = mapOf("User-Agent" to USER_AGENT, "Referer" to (referer ?: "https://anidoor.me/"))
+        val headers = mapOf("User-Agent" to USER_AGENT, "Referer" to (referer ?: ANIDB_REFERER))
         val page = app.get(url, headers = headers)
         val html = page.text
 
@@ -202,7 +204,7 @@ open class AniDoorTryEmbed : ExtractorApi() {
         response?.let { addLinks(it, callback) }
     }
 
-    private fun addLinks(response: TryEmbedResponse, callback: (ExtractorLink) -> Unit) {
+    private suspend fun addLinks(response: TryEmbedResponse, callback: (ExtractorLink) -> Unit) {
         val headers = mapOf("User-Agent" to USER_AGENT, "Referer" to "$mainUrl/")
 
         val providers = mutableListOf<Provider>()
@@ -240,7 +242,7 @@ open class AniDoorDropfile : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        val headers = mapOf("User-Agent" to USER_AGENT, "Referer" to (referer ?: "https://anidoor.me/"))
+        val headers = mapOf("User-Agent" to USER_AGENT, "Referer" to (referer ?: ANIDB_REFERER))
         val html = app.get(url, headers = headers).text
 
         Regex("(https?://[^\\s\"'<>]+\\.(?:m3u8|mp4)[^\\s\"'<>]*)")
@@ -270,7 +272,7 @@ open class AniDoorHD : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        val headers = mapOf("User-Agent" to USER_AGENT, "Referer" to (referer ?: "https://anidoor.me/"))
+        val headers = mapOf("User-Agent" to USER_AGENT, "Referer" to (referer ?: ANIDB_REFERER))
         val html = app.get(url, headers = headers).text
 
         Regex("(https?://[^\\s\"'<>]+\\.(?:m3u8|mp4)[^\\s\"'<>]*)")

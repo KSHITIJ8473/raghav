@@ -6,6 +6,8 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.M3u8Helper
+import com.lagradost.cloudstream3.utils.loadExtractor
+import com.lagradost.cloudstream3.LoadResponse.Companion.addAniListId
 import java.net.URI
 
 class AniDoor : MainAPI() {
@@ -220,21 +222,19 @@ class AniDoor : MainAPI() {
 
         val wantType = if (isMovie) "movie" else "anime"
 
-        // Filter sources: prefer strict dub/sub match, fallback to all sources if dub has nothing
         var filteredSources = sources.filter { s ->
             (s.type == null || s.type.equals(wantType, ignoreCase = true)) &&
             (s.dub ?: false) == isDubRequest
         }
 
-        // CRITICAL: Fallback to all sources if dub request fails (common when dub unavailable)
         if (filteredSources.isEmpty() && isDubRequest) {
-            Log.d(name, "No dub sources found, trying all sources as fallback")
+            Log.d("AniDoor", "No dub sources found, trying all sources as fallback")
             filteredSources = sources.filter { s ->
                 s.type == null || s.type.equals(wantType, ignoreCase = true)
             }
         }
 
-        Log.d(name, "Loading $dubOrSub ep=$epNum type=$wantType sources=${filteredSources.size}")
+        Log.d("AniDoor", "Loading $dubOrSub ep=$epNum type=$wantType sources=${filteredSources.size}")
 
         var linkCount = 0
         val trackingCallback: (ExtractorLink) -> Unit = { link ->
@@ -264,7 +264,7 @@ class AniDoor : MainAPI() {
                     else -> loadExtractor(embedUrl, "https://anidoor.me/", subtitleCallback, trackingCallback)
                 }
             } catch (e: Exception) {
-                Log.d(name, "Extractor failed: ${e.message}")
+                Log.d("AniDoor", "Extractor failed: ${e.message}")
             }
         }
 
@@ -302,9 +302,9 @@ class AniDoor : MainAPI() {
         """.trimIndent()
 
         private val SEARCH_MUTATION = """
-            query ($search: String, $page: Int) {
-              Page(page: $page, perPage: 20) {
-                media(search: $search, type: ANIME, isAdult: false) {
+            query (\$search: String, \$page: Int) {
+              Page(page: \$page, perPage: 20) {
+                media(search: \$search, type: ANIME, isAdult: false) {
                   id
                   title { romaji english }
                   coverImage { extraLarge large }
@@ -315,8 +315,8 @@ class AniDoor : MainAPI() {
         """.trimIndent()
 
         private val INFO_QUERY = """
-            query ($id: Int) {
-              Media(id: $id, type: ANIME) {
+            query (\$id: Int) {
+              Media(id: \$id, type: ANIME) {
                 id
                 idMal
                 format
@@ -334,8 +334,8 @@ class AniDoor : MainAPI() {
         """.trimIndent()
 
         private val TRENDING_QUERY = """
-            query ($page: Int) {
-              Page(page: $page, perPage: 20) {
+            query (\$page: Int) {
+              Page(page: \$page, perPage: 20) {
                 media(type: ANIME, sort: TRENDING_DESC, isAdult: false) {
                   id
                   title { romaji english }
@@ -347,8 +347,8 @@ class AniDoor : MainAPI() {
         """.trimIndent()
 
         private val AIRING_QUERY = """
-            query ($page: Int) {
-              Page(page: $page, perPage: 20) {
+            query (\$page: Int) {
+              Page(page: \$page, perPage: 20) {
                 media(type: ANIME, status: RELEASING, sort: POPULARITY_DESC, isAdult: false) {
                   id
                   title { romaji english }
@@ -360,8 +360,8 @@ class AniDoor : MainAPI() {
         """.trimIndent()
 
         private val POPULAR_QUERY = """
-            query ($page: Int) {
-              Page(page: $page, perPage: 20) {
+            query (\$page: Int) {
+              Page(page: \$page, perPage: 20) {
                 media(type: ANIME, sort: POPULARITY_DESC, isAdult: false) {
                   id
                   title { romaji english }
@@ -373,8 +373,8 @@ class AniDoor : MainAPI() {
         """.trimIndent()
 
         private val UPCOMING_QUERY = """
-            query ($page: Int) {
-              Page(page: $page, perPage: 20) {
+            query (\$page: Int) {
+              Page(page: \$page, perPage: 20) {
                 media(type: ANIME, status: NOT_YET_RELEASED, sort: POPULARITY_DESC, isAdult: false) {
                   id
                   title { romaji english }
@@ -386,8 +386,8 @@ class AniDoor : MainAPI() {
         """.trimIndent()
 
         private val TOP_QUERY = """
-            query ($page: Int) {
-              Page(page: $page, perPage: 20) {
+            query (\$page: Int) {
+              Page(page: \$page, perPage: 20) {
                 media(type: ANIME, sort: SCORE_DESC, isAdult: false) {
                   id
                   title { romaji english }
@@ -400,7 +400,6 @@ class AniDoor : MainAPI() {
     }
 }
 
-// ── DATA CLASSES ─────────────────────────────
 data class AniListSearchResponse(
     @JsonProperty("data") val data: AniListSearchData? = null
 )

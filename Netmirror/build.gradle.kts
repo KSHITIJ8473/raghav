@@ -14,7 +14,7 @@ dependencies {
 }
 
 cloudstream {
-    language = "ta"
+    language = "eng"
     // All of these properties are optional, you can safely remove them
 
     description = "Netmirror - Netflix, PrimeVideo, Disney+ Hotstar Contents in Multiple Languages"

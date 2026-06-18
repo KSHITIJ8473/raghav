@@ -17,7 +17,7 @@ cloudstream {
     language = "en"
     // All of these properties are optional, you can safely remove them
 
-    description = "Netmirror - Netflix, PrimeVideo, Disney+ Hotstar Contents in Multiple Languages"
+    description = "Netmirror - Netflix, PrimeVideo, Disney+"
     authors = listOf("KSHITIJ8473")
 
     /**

@@ -26,33 +26,31 @@ open class AniDoorMegaPlay : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        // WebView is needed for SPA pages
         tryWebView(url, callback)
     }
 
     private suspend fun tryWebView(url: String, callback: (ExtractorLink) -> Unit) {
         try {
             val resolver = WebViewResolver(
-                interceptUrl = Regex("""(?i)\.m3u8"""),
-                additionalUrls = listOf(Regex("""(?i)\.m3u8""")),
+                interceptUrl = Regex("(?i)\\.m3u8"),
+                additionalUrls = listOf(Regex("(?i)\\.m3u8")),
                 script = """
-                    // Auto-click play button and wait for player
                     const clickPlay = () => {
-                        const btn = document.querySelector('button,[role="button"],.jw-icon-display,.vjs-big-play-button,.plyr__control--overlaid');
+                        const btn = document.querySelector("button,[role='button'],.jw-icon-display,.vjs-big-play-button,.plyr__control--overlaid");
                         if (btn) btn.click();
                     };
                     clickPlay();
                     setTimeout(clickPlay, 2000);
                 """.trimIndent(),
                 useOkhttp = false,
-                timeout = 35_000L
+                timeout = 35000L
             )
             val resolved = app.get(url, referer = referer ?: "https://anidoor.me/", interceptor = resolver).url
             if (resolved.contains(".m3u8")) {
                 val headers = mapOf(
                     "User-Agent" to USER_AGENT,
                     "Accept" to "*/*",
-                    "Referer" to (if (resolved.contains("megaplay.buzz")) "https://megaplay.buzz/" else url)
+                    "Referer" to if (resolved.contains("megaplay.buzz")) "https://megaplay.buzz/" else url
                 )
                 M3u8Helper.generateM3u8(name, resolved, headers["Referer"]!!, headers = headers).forEach(callback)
             }
@@ -80,25 +78,25 @@ open class AniDoorVidnest : ExtractorApi() {
     private suspend fun tryWebView(url: String, callback: (ExtractorLink) -> Unit) {
         try {
             val resolver = WebViewResolver(
-                interceptUrl = Regex("""(?i)\.m3u8"""),
-                additionalUrls = listOf(Regex("""(?i)\.m3u8""")),
+                interceptUrl = Regex("(?i)\\.m3u8"),
+                additionalUrls = listOf(Regex("(?i)\\.m3u8")),
                 script = """
                     const clickPlay = () => {
-                        const btn = document.querySelector('button,[role="button"],.jw-icon-display,.vjs-big-play-button,.plyr__control--overlaid');
+                        const btn = document.querySelector("button,[role='button'],.jw-icon-display,.vjs-big-play-button,.plyr__control--overlaid");
                         if (btn) btn.click();
                     };
                     clickPlay();
                     setTimeout(clickPlay, 2000);
                 """.trimIndent(),
                 useOkhttp = false,
-                timeout = 35_000L
+                timeout = 35000L
             )
             val resolved = app.get(url, referer = referer ?: "https://anidoor.me/", interceptor = resolver).url
             if (resolved.contains(".m3u8")) {
                 val headers = mapOf(
                     "User-Agent" to USER_AGENT,
                     "Accept" to "*/*",
-                    "Referer" to (if (resolved.contains("megaplay.buzz")) "https://megaplay.buzz/" else url)
+                    "Referer" to if (resolved.contains("megaplay.buzz")) "https://megaplay.buzz/" else url
                 )
                 M3u8Helper.generateM3u8(name, resolved, headers["Referer"]!!, headers = headers).forEach(callback)
             }
@@ -162,12 +160,11 @@ open class AniDoorTryEmbed : ExtractorApi() {
         val page = app.get(url, headers = headers)
         val html = page.text
 
-        // Extract payload for API call
         var alId: String? = null
-        var episode: String = "1"
-        var audio: String = "sub"
+        var episode = "1"
+        var audio = "sub"
 
-        Regex("""RAW_PAYLOAD\s*=\s*["']([^"']+)["']""").find(html)?.groupValues?.get(1)?.let { payload ->
+        Regex("RAW_PAYLOAD\\s*=\\s*[\"']([^\"']+)[\"']").find(html)?.groupValues?.get(1)?.let { payload ->
             try {
                 val decoded = String(Base64.decode(payload, Base64.DEFAULT), Charsets.UTF_8)
                 parseJson<PayloadMeta>(decoded).meta?.let {
@@ -182,7 +179,6 @@ open class AniDoorTryEmbed : ExtractorApi() {
 
         alId ?: url.substringAfter("/embed/anime/").split("/").getOrNull(0) ?: return
 
-        // Get auth cookie
         val authCookie = page.okhttpResponse.headers("Set-Cookie")
             .firstOrNull { it.contains("tryembed_auth=") }
             ?.substringBefore(";")
@@ -247,7 +243,7 @@ open class AniDoorDropfile : ExtractorApi() {
         val headers = mapOf("User-Agent" to USER_AGENT, "Referer" to (referer ?: "https://anidoor.me/"))
         val html = app.get(url, headers = headers).text
 
-        Regex("""(https?://[^\s"'<>]+\.(?:m3u8|mp4)[^\s"'<>]*)""")
+        Regex("(https?://[^\\s\"'<>]+\\.(?:m3u8|mp4)[^\\s\"'<>]*)")
             .findAll(html)
             .mapNotNull { it.groupValues[1].trim() }
             .filter { it.startsWith("http") }
@@ -277,7 +273,7 @@ open class AniDoorHD : ExtractorApi() {
         val headers = mapOf("User-Agent" to USER_AGENT, "Referer" to (referer ?: "https://anidoor.me/"))
         val html = app.get(url, headers = headers).text
 
-        Regex("""(https?://[^\s"'<>]+\.(?:m3u8|mp4)[^\s"'<>]*)""")
+        Regex("(https?://[^\\s\"'<>]+\\.(?:m3u8|mp4)[^\\s\"'<>]*)")
             .findAll(html)
             .mapNotNull { it.groupValues[1].trim() }
             .filter { it.startsWith("http") }

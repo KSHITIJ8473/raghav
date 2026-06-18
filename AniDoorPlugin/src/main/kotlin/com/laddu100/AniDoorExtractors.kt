@@ -583,7 +583,7 @@ open class AniDoorDropfile : ExtractorApi() {
                     timeout = 30_000L
                 )
                 val resolved = app.get(url, referer = referer ?: "https://anidoor.me/", interceptor = resolver).url
-                if (resolved.contains(".m3u8") || resolved.contains(".mp4(".mp4")) {
+                if (resolved.contains(".m3u8") || resolved.contains(".mp4")) {
                     val resolvedReferer = when {
                         resolved.contains("megaplay.buzz") -> "https://megaplay.buzz/"
                         resolved.contains("streamzone1.site") -> "https://megaplay.buzz/"

@@ -238,7 +238,7 @@ class DamiTVProvider : MainAPI() {
         // Fallback: scrape homepage and filter by query
         val doc = fetchDocument("$mainUrl/") ?: return emptyList()
         return extractAllEventLinks(doc).filter { item ->
-            item.name?.contains(query, ignoreCase = true) == true
+            item.name.contains(query, ignoreCase = true)
         }
     }
 

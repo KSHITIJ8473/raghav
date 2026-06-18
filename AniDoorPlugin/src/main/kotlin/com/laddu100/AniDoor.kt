@@ -1,11 +1,9 @@
 package com.laddu100
 
 import com.fasterxml.jackson.annotation.JsonProperty
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
-import com.lagradost.cloudstream3.utils.M3u8Helper
 import com.lagradost.cloudstream3.utils.loadExtractor
 import com.lagradost.cloudstream3.LoadResponse.Companion.addAniListId
 import java.net.URI
@@ -41,7 +39,6 @@ class AniDoor : MainAPI() {
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val query = when (request.data) {
             "trending" -> TRENDING_QUERY
-            "airing" -> AIRING_QUERY
             "popular" -> POPULAR_QUERY
             "upcoming" -> UPCOMING_QUERY
             "top" -> TOP_QUERY
@@ -84,11 +81,13 @@ class AniDoor : MainAPI() {
         val uri = URI(url)
         val queryParams = uri.query?.split("&")?.associate {
             val split = it.split("=")
-            split.getOrNull(0) to split.getOrNull(1)
+            val key = split.getOrNull(0) ?: ""
+            val value = split.getOrNull(1) ?: ""
+            key to value
         } ?: emptyMap()
-
-        val anilistId = queryParams["al"]?.toIntOrNull()
-            ?: Regex("""al=(\d+)""").find(url)?.groupValues?.get(1)?.toIntOrNull()
+        
+        val anilistId = queryParams["al"]?.toIntOrNull() 
+            ?: Regex("""al=(\d+)""").find(url)?.groupValues?.get(1)?.toIntOrNull() 
             ?: return null
 
         val variables = mapOf("id" to anilistId)
@@ -119,7 +118,8 @@ class AniDoor : MainAPI() {
         val episodesList = mutableListOf<Episode>()
 
         if (media.format == "MOVIE") {
-            episodesList.add(newEpisode("$anilistId|$malId|1|true") {
+            val dataStr = "$anilistId|$malId|1|true"
+            episodesList.add(newEpisode(dataStr) {
                 this.name = title
                 this.episode = 1
             })
@@ -133,17 +133,23 @@ class AniDoor : MainAPI() {
                     aniZipEps.forEach { (epKey, epData) ->
                         val epNum = epKey.toIntOrNull() ?: return@forEach
                         val epTitle = epData.title?.get("en") ?: epData.title?.get("x-jat") ?: "Episode $epNum"
-                        episodesList.add(newEpisode("$anilistId|$malId|$epNum|false") {
+                        val epDesc = epData.overview ?: epData.summary
+                        val epThumb = epData.image
+                        val dataStr = "$anilistId|$malId|$epNum|false"
+
+                        episodesList.add(newEpisode(dataStr) {
                             this.name = epTitle
                             this.episode = epNum
-                            this.posterUrl = epData.image
+                            this.description = epDesc
+                            this.posterUrl = epThumb
                         })
                     }
                 } else {
                     val totalEps = media.episodes ?: 0
                     val count = if (totalEps > 0) totalEps else 12
                     for (i in 1..count) {
-                        episodesList.add(newEpisode("$anilistId|$malId|$i|false") {
+                        val dataStr = "$anilistId|$malId|$i|false"
+                        episodesList.add(newEpisode(dataStr) {
                             this.name = "Episode $i"
                             this.episode = i
                         })
@@ -153,11 +159,30 @@ class AniDoor : MainAPI() {
                 val totalEps = media.episodes ?: 0
                 val count = if (totalEps > 0) totalEps else 12
                 for (i in 1..count) {
-                    episodesList.add(newEpisode("$anilistId|$malId|$i|false") {
+                    val dataStr = "$anilistId|$malId|$i|false"
+                    episodesList.add(newEpisode(dataStr) {
                         this.name = "Episode $i"
                         this.episode = i
                     })
                 }
+            }
+        }
+
+        val subEpisodes = episodesList.map { ep ->
+            newEpisode("sub|${ep.data}") {
+                this.name = ep.name
+                this.episode = ep.episode
+                this.description = ep.description
+                this.posterUrl = ep.posterUrl
+            }
+        }
+
+        val dubEpisodes = episodesList.map { ep ->
+            newEpisode("dub|${ep.data}") {
+                this.name = ep.name
+                this.episode = ep.episode
+                this.description = ep.description
+                this.posterUrl = ep.posterUrl
             }
         }
 
@@ -170,22 +195,8 @@ class AniDoor : MainAPI() {
             if (animeScore != null) this.score = Score.from10((animeScore / 10.0).toString())
             this.showStatus = showStatus
             addAniListId(anilistId)
-            if (episodesList.isNotEmpty()) {
-                addEpisodes(DubStatus.Subbed, episodesList.map { ep ->
-                    newEpisode("sub|${ep.data}") {
-                        this.name = ep.name
-                        this.episode = ep.episode
-                        this.posterUrl = ep.posterUrl
-                    }
-                })
-                addEpisodes(DubStatus.Dubbed, episodesList.map { ep ->
-                    newEpisode("dub|${ep.data}") {
-                        this.name = ep.name
-                        this.episode = ep.episode
-                        this.posterUrl = ep.posterUrl
-                    }
-                })
-            }
+            if (subEpisodes.isNotEmpty()) addEpisodes(DubStatus.Subbed, subEpisodes)
+            if (dubEpisodes.isNotEmpty()) addEpisodes(DubStatus.Dubbed, dubEpisodes)
         }
     }
 
@@ -204,107 +215,106 @@ class AniDoor : MainAPI() {
         val epNum = parts[3].toIntOrNull() ?: 1
         val isMovie = parts[4].toBoolean()
 
-        val validMalId = if (malId == "0" || malId.isBlank()) null else malId
-        val isDubRequest = (dubOrSub == "dub")
-
-        val sources = try {
-            app.get("https://anidoor.me/assets/sources.json", headers = mapOf(
-                "User-Agent" to USER_AGENT,
-                "Accept" to "application/json"
-            )).takeIf { it.code == 200 }?.let {
-                parseJson<List<AniDoorSourceConfig>>(it.text)
-            } ?: parseJson<List<AniDoorSourceConfig>>(DEFAULT_SOURCES_JSON)
-        } catch (_: Exception) {
-            parseJson<List<AniDoorSourceConfig>>(DEFAULT_SOURCES_JSON)
+        val sourcesJsonText = try {
+            app.get("https://anidoor.me/assets/sources.json").text
+        } catch (e: Exception) {
+            """[
+                {"id":"vidnest-ap-sub","name":"S1","base":"https://vidnest.fun","path":"/animepahe/{al}/{e}/sub","dub":false},
+                {"id":"vidnest-ap-movie-sub","name":"S1","base":"https://vidnest.fun","path":"/animepahe/{al}/1/sub","dub":false},
+                {"id":"vidnest-ap-dub","name":"D1","base":"https://vidnest.fun","path":"/animepahe/{al}/{e}/dub","dub":true},
+                {"id":"vidnest-ap-movie-dub","name":"D1","base":"https://vidnest.fun","path":"/animepahe/{al}/1/dub","dub":true},
+                {"id":"megaplay-sub","name":"S2","base":"https://megaplay.buzz","path":"/stream/ani/{al}/{e}/sub","dub":false},
+                {"id":"megaplay-movie-sub","name":"S2","base":"https://megaplay.buzz","path":"/stream/ani/{al}/1/sub","dub":false},
+                {"id":"megaplay-dub","name":"D2","base":"https://megaplay.buzz","path":"/stream/ani/{al}/{e}/dub","dub":true},
+                {"id":"megaplay-movie-dub","name":"D2","base":"https://megaplay.buzz","path":"/stream/ani/{al}/1/dub","dub":true},
+                {"id":"megaplay-sub-alt","name":"S2(alt)","base":"https://megaplay.buzz","path":"/stream/mal/{mal}/{e}/sub","dub":false},
+                {"id":"megaplay-movie-sub-alt","name":"S2(alt)","base":"https://megaplay.buzz","path":"/stream/mal/{mal}/1/sub","dub":false},
+                {"id":"megaplay-dub-alt","name":"D2(alt)","base":"https://megaplay.buzz","path":"/stream/mal/{mal}/{e}/dub","dub":true},
+                {"id":"megaplay-movie-dub-alt","name":"D2(alt)","base":"https://megaplay.buzz","path":"/stream/mal/{mal}/1/dub","dub":true},
+                {"id":"vidnest-anime-sub","name":"S3","base":"https://vidnest.fun","path":"/anime/{al}/{e}/sub","dub":false},
+                {"id":"vidnest-anime-movie-sub","name":"S3","base":"https://vidnest.fun","path":"/anime/{al}/1/sub","dub":false},
+                {"id":"vidnest-anime-dub","name":"D3","base":"https://vidnest.fun","path":"/anime/{al}/{e}/dub","dub":true},
+                {"id":"vidnest-anime-movie-dub","name":"D3","base":"https://vidnest.fun","path":"/anime/{al}/1/dub","dub":true},
+                {"id":"tryembed-sub","name":"S4","base":"https://tryembed.us.cc","path":"/embed/anime/{al}/{e}/sub","dub":false},
+                {"id":"tryembed-movie-sub","name":"S4","base":"https://tryembed.us.cc","path":"/embed/anime/{al}/1/sub","dub":false},
+                {"id":"tryembed-dub","name":"D4","base":"https://tryembed.us.cc","path":"/embed/anime/{al}/{e}/dub","dub":true},
+                {"id":"tryembed-movie-dub","name":"D4","base":"https://tryembed.us.cc","path":"/embed/anime/{al}/1/dub","dub":true}
+            ]"""
         }
 
-        if (sources.isEmpty()) return false
+        val sources = try {
+            parseJson<List<AniDoorSourceConfig>>(sourcesJsonText)
+        } catch (e: Exception) {
+            emptyList()
+        }
 
         val wantType = if (isMovie) "movie" else "anime"
+        val filteredSources = sources.filter { s ->
+            // Live sources.json has no "type" field; infer from path: if path has {e} it's anime, else movie
+            val pathType = if (s.path?.contains("{e}") == true) "anime" else "movie"
+            (s.type ?: pathType).equals(wantType, ignoreCase = true)
+        }
 
-        var filteredSources = sources.filter { s ->
-            (s.type == null || s.type.equals(wantType, ignoreCase = true)) &&
+        val isDubRequest = (dubOrSub == "dub")
+        val audioFilteredSources = filteredSources.filter { s ->
             (s.dub ?: false) == isDubRequest
         }
 
-        if (filteredSources.isEmpty() && isDubRequest) {
-            Log.d("AniDoor", "No dub sources found, trying all sources as fallback")
-            filteredSources = sources.filter { s ->
-                s.type == null || s.type.equals(wantType, ignoreCase = true)
-            }
-        }
-
-        Log.d("AniDoor", "Loading $dubOrSub ep=$epNum type=$wantType sources=${filteredSources.size}")
-
-        var linkCount = 0
-        val trackingCallback: (ExtractorLink) -> Unit = { link ->
-            linkCount++
-            callback(link)
-        }
-
-        filteredSources.forEach { source ->
+        var found = false
+        audioFilteredSources.forEach { source ->
             val path = source.path ?: return@forEach
             val base = source.base ?: return@forEach
 
-            if (path.contains("{mal}") && validMalId == null) return@forEach
+            if (path.contains("{mal}") && (malId == "0" || malId.isBlank())) {
+                return@forEach
+            }
 
-            val embedUrl = base + path
+            val resolvedPath = path
                 .replace("{al}", alId)
-                .replace("{mal}", validMalId ?: "0")
+                .replace("{mal}", malId)
                 .replace("{s}", "1")
                 .replace("{e}", epNum.toString())
 
-            try {
-                when {
-                    embedUrl.contains("megaplay.buzz") -> AniDoorMegaPlay().getUrl(embedUrl, "https://anidoor.me/", subtitleCallback, trackingCallback)
-                    embedUrl.contains("tryembed.us.cc") -> AniDoorTryEmbed().getUrl(embedUrl, "https://anidoor.me/", subtitleCallback, trackingCallback)
-                    embedUrl.contains("vidnest.fun") -> AniDoorVidnest().getUrl(embedUrl, "https://anidoor.me/", subtitleCallback, trackingCallback)
-                    embedUrl.contains("dropfile.cc") -> AniDoorDropfile().getUrl(embedUrl, "https://anidoor.me/", subtitleCallback, trackingCallback)
-                    embedUrl.contains("nightslayer.workers.dev") -> AniDoorHD().getUrl(embedUrl, "https://anidoor.me/", subtitleCallback, trackingCallback)
-                    else -> loadExtractor(embedUrl, "https://anidoor.me/", subtitleCallback, trackingCallback)
+            val embedUrl = base + resolvedPath
+
+            val loaded = try {
+                if (embedUrl.contains("megaplay.buzz") || embedUrl.contains("tryembed.us.cc") || embedUrl.contains("vidnest.fun")) {
+                    false
+                } else {
+                    loadExtractor(embedUrl, "https://anidoor.me/", subtitleCallback, callback)
                 }
             } catch (e: Exception) {
-                Log.d("AniDoor", "Extractor failed: ${e.message}")
+                false
+            }
+
+            if (loaded) {
+                found = true
+            } else {
+                try {
+                    if (embedUrl.contains("megaplay.buzz")) {
+                        AniDoorMegaPlay().getUrl(embedUrl, "https://anidoor.me/", subtitleCallback, callback)
+                        found = true
+                    } else if (embedUrl.contains("tryembed.us.cc")) {
+                        AniDoorTryEmbed().getUrl(embedUrl, "https://anidoor.me/", subtitleCallback, callback)
+                        found = true
+                    } else if (embedUrl.contains("vidnest.fun")) {
+                        AniDoorVidnest().getUrl(embedUrl, "https://anidoor.me/", subtitleCallback, callback)
+                        found = true
+                    }
+                } catch (e: Exception) {
+                    // ignore
+                }
             }
         }
 
-        return linkCount > 0
+        return found
     }
 
     companion object {
-        private val DEFAULT_SOURCES_JSON = """
-            [
-                {"id":"vidnest-ap-sub","name":"S1","base":"https://vidnest.fun","path":"/animepahe/{al}/{e}/sub","type":"anime","dub":false,"default":true},
-                {"id":"vidnest-ap-movie-sub","name":"S1","base":"https://vidnest.fun","path":"/animepahe/{al}/1/sub","type":"movie","dub":false,"default":true},
-                {"id":"vidnest-ap-dub","name":"D1","base":"https://vidnest.fun","path":"/animepahe/{al}/{e}/dub","type":"anime","dub":true,"default":false},
-                {"id":"vidnest-ap-movie-dub","name":"D1","base":"https://vidnest.fun","path":"/animepahe/{al}/1/dub","type":"movie","dub":true,"default":false},
-                {"id":"megaplay-sub","name":"S2","base":"https://megaplay.buzz","path":"/stream/ani/{al}/{e}/sub","type":"anime","dub":false,"default":false},
-                {"id":"megaplay-movie-sub","name":"S2","base":"https://megaplay.buzz","path":"/stream/ani/{al}/1/sub","type":"movie","dub":false,"default":false},
-                {"id":"megaplay-dub","name":"D2","base":"https://megaplay.buzz","path":"/stream/ani/{al}/{e}/dub","type":"anime","dub":true,"default":false},
-                {"id":"megaplay-movie-dub","name":"D2","base":"https://megaplay.buzz","path":"/stream/ani/{al}/1/dub","type":"movie","dub":true,"default":false},
-                {"id":"vidnest-anime-sub","name":"S3","base":"https://vidnest.fun","path":"/anime/{al}/{e}/sub","type":"anime","dub":false,"default":false},
-                {"id":"vidnest-anime-movie-sub","name":"S3","base":"https://vidnest.fun","path":"/anime/{al}/1/sub","type":"movie","dub":false,"default":false},
-                {"id":"vidnest-anime-dub","name":"D3","base":"https://vidnest.fun","path":"/anime/{al}/{e}/dub","type":"anime","dub":true,"default":false},
-                {"id":"vidnest-anime-movie-dub","name":"D3","base":"https://vidnest.fun","path":"/anime/{al}/1/dub","type":"movie","dub":true,"default":false},
-                {"id":"dropfile-cc-sub","name":"S4","base":"https://dropfile.cc","path":"/player/tv/mal-{mal}/1/{e}?audio=sub&lang=en&color=%237c6fe0","type":"anime","dub":false,"default":false},
-                {"id":"dropfile-cc-movie-sub","name":"S4","base":"https://dropfile.cc","path":"/player/tv/mal-{mal}/1/1?audio=sub&lang=en&color=%237c6fe0","type":"movie","dub":false,"default":false},
-                {"id":"dropfile-cc-dub","name":"D4","base":"https://dropfile.cc","path":"/player/tv/mal-{mal}/1/{e}?audio=dub&lang=en&color=%237c6fe0","type":"anime","dub":true,"default":false},
-                {"id":"dropfile-cc-movie-dub","name":"D4","base":"https://dropfile.cc","path":"/player/tv/mal-{mal}/1/1?audio=dub&lang=en&color=%237c6fe0","type":"movie","dub":true,"default":false},
-                {"id":"hd-sub","name":"HD","base":"https://stream.nightslayer.workers.dev","path":"/player/{al}/{e}/sub","type":"anime","dub":false,"default":false},
-                {"id":"hd-movie-sub","name":"HD","base":"https://stream.nightslayer.workers.dev","path":"/player/{al}/1/sub","type":"movie","dub":false,"default":false},
-                {"id":"hd-dub","name":"HD","base":"https://stream.nightslayer.workers.dev","path":"/player/{al}/{e}/dub","type":"anime","dub":true,"default":false},
-                {"id":"hd-movie-dub","name":"HD","base":"https://stream.nightslayer.workers.dev","path":"/player/{al}/1/dub","type":"movie","dub":true,"default":false},
-                {"id":"tryembed-sub","name":"S5","base":"https://tryembed.us.cc","path":"/embed/anime/{al}/{e}/sub","type":"anime","dub":false,"default":false},
-                {"id":"tryembed-movie-sub","name":"S5","base":"https://tryembed.us.cc","path":"/embed/anime/{al}/1/sub","type":"movie","dub":false,"default":false},
-                {"id":"tryembed-dub","name":"D5","base":"https://tryembed.us.cc","path":"/embed/anime/{al}/{e}/dub","type":"anime","dub":true,"default":false},
-                {"id":"tryembed-movie-dub","name":"D5","base":"https://tryembed.us.cc","path":"/embed/anime/{al}/1/dub","type":"movie","dub":true,"default":false}
-            ]
-        """.trimIndent()
-
         private val SEARCH_MUTATION = """
-            query (\$search: String, \$page: Int) {
-              Page(page: \$page, perPage: 20) {
-                media(search: \$search, type: ANIME, isAdult: false) {
+            query (${'$'}search: String, ${'$'}page: Int) {
+              Page(page: ${'$'}page, perPage: 20) {
+                media(search: ${'$'}search, type: ANIME, isAdult: false) {
                   id
                   title { romaji english }
                   coverImage { extraLarge large }
@@ -315,8 +325,8 @@ class AniDoor : MainAPI() {
         """.trimIndent()
 
         private val INFO_QUERY = """
-            query (\$id: Int) {
-              Media(id: \$id, type: ANIME) {
+            query (${'$'}id: Int) {
+              Media(id: ${'$'}id, type: ANIME) {
                 id
                 idMal
                 format
@@ -334,8 +344,8 @@ class AniDoor : MainAPI() {
         """.trimIndent()
 
         private val TRENDING_QUERY = """
-            query (\$page: Int) {
-              Page(page: \$page, perPage: 20) {
+            query (${'$'}page: Int) {
+              Page(page: ${'$'}page, perPage: 20) {
                 media(type: ANIME, sort: TRENDING_DESC, isAdult: false) {
                   id
                   title { romaji english }
@@ -346,22 +356,9 @@ class AniDoor : MainAPI() {
             }
         """.trimIndent()
 
-        private val AIRING_QUERY = """
-            query (\$page: Int) {
-              Page(page: \$page, perPage: 20) {
-                media(type: ANIME, status: RELEASING, sort: POPULARITY_DESC, isAdult: false) {
-                  id
-                  title { romaji english }
-                  coverImage { extraLarge large }
-                  format
-                }
-              }
-            }
-        """.trimIndent()
-
         private val POPULAR_QUERY = """
-            query (\$page: Int) {
-              Page(page: \$page, perPage: 20) {
+            query (${'$'}page: Int) {
+              Page(page: ${'$'}page, perPage: 20) {
                 media(type: ANIME, sort: POPULARITY_DESC, isAdult: false) {
                   id
                   title { romaji english }
@@ -373,8 +370,8 @@ class AniDoor : MainAPI() {
         """.trimIndent()
 
         private val UPCOMING_QUERY = """
-            query (\$page: Int) {
-              Page(page: \$page, perPage: 20) {
+            query (${'$'}page: Int) {
+              Page(page: ${'$'}page, perPage: 20) {
                 media(type: ANIME, status: NOT_YET_RELEASED, sort: POPULARITY_DESC, isAdult: false) {
                   id
                   title { romaji english }
@@ -386,8 +383,8 @@ class AniDoor : MainAPI() {
         """.trimIndent()
 
         private val TOP_QUERY = """
-            query (\$page: Int) {
-              Page(page: \$page, perPage: 20) {
+            query (${'$'}page: Int) {
+              Page(page: ${'$'}page, perPage: 20) {
                 media(type: ANIME, sort: SCORE_DESC, isAdult: false) {
                   id
                   title { romaji english }
@@ -400,6 +397,7 @@ class AniDoor : MainAPI() {
     }
 }
 
+// ── DATA CLASSES FOR JACKSON PARSING ──────────────────────────────────
 data class AniListSearchResponse(
     @JsonProperty("data") val data: AniListSearchData? = null
 )
@@ -459,6 +457,5 @@ data class AniDoorSourceConfig(
     @JsonProperty("base") val base: String? = null,
     @JsonProperty("path") val path: String? = null,
     @JsonProperty("type") val type: String? = null,
-    @JsonProperty("dub") val dub: Boolean? = null,
-    @JsonProperty("default") val default: Boolean? = null
+    @JsonProperty("dub") val dub: Boolean? = null
 )

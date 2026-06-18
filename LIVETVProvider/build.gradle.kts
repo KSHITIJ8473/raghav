@@ -13,7 +13,7 @@ dependencies {
 }
 
 cloudstream {
-    language = "ta"
+    language = "en"
     description = "Watch LIVE TV channels & sports via LIVE TV"
     authors = listOf("KSHITIJ8473")
 
@@ -30,5 +30,5 @@ cloudstream {
     )
     requiresResources = true
 
-    iconUrl = "https://www.google.com/s2/favicons?domain=livetv.top&sz=%size%"
+    iconUrl = "https://myeventartist.com/wp-content/uploads/2023/09/Play-with-Colors.jpg"
 }

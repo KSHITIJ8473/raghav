@@ -215,38 +215,54 @@ class AniDoor : MainAPI() {
         val epNum = parts[3].toIntOrNull() ?: 1
         val isMovie = parts[4].toBoolean()
 
-        val sourcesJsonText = try {
-            app.get("https://anidoor.me/assets/sources.json").text
-        } catch (e: Exception) {
-            """[
-                {"id":"vidnest-ap-sub","name":"S1","base":"https://vidnest.fun","path":"/animepahe/{al}/{e}/sub","dub":false},
-                {"id":"vidnest-ap-movie-sub","name":"S1","base":"https://vidnest.fun","path":"/animepahe/{al}/1/sub","dub":false},
-                {"id":"vidnest-ap-dub","name":"D1","base":"https://vidnest.fun","path":"/animepahe/{al}/{e}/dub","dub":true},
-                {"id":"vidnest-ap-movie-dub","name":"D1","base":"https://vidnest.fun","path":"/animepahe/{al}/1/dub","dub":true},
-                {"id":"megaplay-sub","name":"S2","base":"https://megaplay.buzz","path":"/stream/ani/{al}/{e}/sub","dub":false},
-                {"id":"megaplay-movie-sub","name":"S2","base":"https://megaplay.buzz","path":"/stream/ani/{al}/1/sub","dub":false},
-                {"id":"megaplay-dub","name":"D2","base":"https://megaplay.buzz","path":"/stream/ani/{al}/{e}/dub","dub":true},
-                {"id":"megaplay-movie-dub","name":"D2","base":"https://megaplay.buzz","path":"/stream/ani/{al}/1/dub","dub":true},
-                {"id":"megaplay-sub-alt","name":"S2(alt)","base":"https://megaplay.buzz","path":"/stream/mal/{mal}/{e}/sub","dub":false},
-                {"id":"megaplay-movie-sub-alt","name":"S2(alt)","base":"https://megaplay.buzz","path":"/stream/mal/{mal}/1/sub","dub":false},
-                {"id":"megaplay-dub-alt","name":"D2(alt)","base":"https://megaplay.buzz","path":"/stream/mal/{mal}/{e}/dub","dub":true},
-                {"id":"megaplay-movie-dub-alt","name":"D2(alt)","base":"https://megaplay.buzz","path":"/stream/mal/{mal}/1/dub","dub":true},
-                {"id":"vidnest-anime-sub","name":"S3","base":"https://vidnest.fun","path":"/anime/{al}/{e}/sub","dub":false},
-                {"id":"vidnest-anime-movie-sub","name":"S3","base":"https://vidnest.fun","path":"/anime/{al}/1/sub","dub":false},
-                {"id":"vidnest-anime-dub","name":"D3","base":"https://vidnest.fun","path":"/anime/{al}/{e}/dub","dub":true},
-                {"id":"vidnest-anime-movie-dub","name":"D3","base":"https://vidnest.fun","path":"/anime/{al}/1/dub","dub":true},
-                {"id":"tryembed-sub","name":"S4","base":"https://tryembed.us.cc","path":"/embed/anime/{al}/{e}/sub","dub":false},
-                {"id":"tryembed-movie-sub","name":"S4","base":"https://tryembed.us.cc","path":"/embed/anime/{al}/1/sub","dub":false},
-                {"id":"tryembed-dub","name":"D4","base":"https://tryembed.us.cc","path":"/embed/anime/{al}/{e}/dub","dub":true},
-                {"id":"tryembed-movie-dub","name":"D4","base":"https://tryembed.us.cc","path":"/embed/anime/{al}/1/dub","dub":true}
-            ]"""
-        }
+        // Hardcoded fallback sources (always used as baseline)
+        val hardcodedSourcesJson = """[
+            {"id":"vidnest-ap-sub","name":"S1","base":"https://vidnest.fun","path":"/animepahe/{al}/{e}/sub","dub":false},
+            {"id":"vidnest-ap-movie-sub","name":"S1","base":"https://vidnest.fun","path":"/animepahe/{al}/1/sub","dub":false},
+            {"id":"vidnest-ap-dub","name":"D1","base":"https://vidnest.fun","path":"/animepahe/{al}/{e}/dub","dub":true},
+            {"id":"vidnest-ap-movie-dub","name":"D1","base":"https://vidnest.fun","path":"/animepahe/{al}/1/dub","dub":true},
+            {"id":"megaplay-sub","name":"S2","base":"https://megaplay.buzz","path":"/stream/ani/{al}/{e}/sub","dub":false},
+            {"id":"megaplay-movie-sub","name":"S2","base":"https://megaplay.buzz","path":"/stream/ani/{al}/1/sub","dub":false},
+            {"id":"megaplay-dub","name":"D2","base":"https://megaplay.buzz","path":"/stream/ani/{al}/{e}/dub","dub":true},
+            {"id":"megaplay-movie-dub","name":"D2","base":"https://megaplay.buzz","path":"/stream/ani/{al}/1/dub","dub":true},
+            {"id":"megaplay-sub-alt","name":"S2(alt)","base":"https://megaplay.buzz","path":"/stream/mal/{mal}/{e}/sub","dub":false},
+            {"id":"megaplay-movie-sub-alt","name":"S2(alt)","base":"https://megaplay.buzz","path":"/stream/mal/{mal}/1/sub","dub":false},
+            {"id":"megaplay-dub-alt","name":"D2(alt)","base":"https://megaplay.buzz","path":"/stream/mal/{mal}/{e}/dub","dub":true},
+            {"id":"megaplay-movie-dub-alt","name":"D2(alt)","base":"https://megaplay.buzz","path":"/stream/mal/{mal}/1/dub","dub":true},
+            {"id":"vidnest-anime-sub","name":"S3","base":"https://vidnest.fun","path":"/anime/{al}/{e}/sub","dub":false},
+            {"id":"vidnest-anime-movie-sub","name":"S3","base":"https://vidnest.fun","path":"/anime/{al}/1/sub","dub":false},
+            {"id":"vidnest-anime-dub","name":"D3","base":"https://vidnest.fun","path":"/anime/{al}/{e}/dub","dub":true},
+            {"id":"vidnest-anime-movie-dub","name":"D3","base":"https://vidnest.fun","path":"/anime/{al}/1/dub","dub":true},
+            {"id":"tryembed-sub","name":"S4","base":"https://tryembed.us.cc","path":"/embed/anime/{al}/{e}/sub","dub":false},
+            {"id":"tryembed-movie-sub","name":"S4","base":"https://tryembed.us.cc","path":"/embed/anime/{al}/1/sub","dub":false},
+            {"id":"tryembed-dub","name":"D4","base":"https://tryembed.us.cc","path":"/embed/anime/{al}/{e}/dub","dub":true},
+            {"id":"tryembed-movie-dub","name":"D4","base":"https://tryembed.us.cc","path":"/embed/anime/{al}/1/dub","dub":true}
+        ]"""
 
-        val sources = try {
-            parseJson<List<AniDoorSourceConfig>>(sourcesJsonText)
+        // Parse hardcoded sources as the baseline
+        val hardcodedSources = try {
+            parseJson<List<AniDoorSourceConfig>>(hardcodedSourcesJson)
         } catch (e: Exception) {
             emptyList()
         }
+
+        // Try to fetch live sources.json and merge with hardcoded (dedup by id)
+        val liveSources = try {
+            val liveJson = app.get("https://anidoor.me/assets/sources.json").text
+            parseJson<List<AniDoorSourceConfig>>(liveJson)
+        } catch (e: Exception) {
+            emptyList()
+        }
+
+        // Merge: start with hardcoded, add live entries with new ids not already present
+        val hardcodedIds = hardcodedSources.mapNotNull { it.id }.toSet()
+        val mergedSources = hardcodedSources.toMutableList()
+        for (liveSource in liveSources) {
+            if (liveSource.id != null && liveSource.id !in hardcodedIds) {
+                mergedSources.add(liveSource)
+            }
+        }
+        val sources = mergedSources
 
         val wantType = if (isMovie) "movie" else "anime"
         val filteredSources = sources.filter { s ->
@@ -261,6 +277,19 @@ class AniDoor : MainAPI() {
         }
 
         var found = false
+        var linkCount = 0
+        var subCount = 0
+
+        // Wrapper callback that tracks actual link delivery
+        val trackingCallback: (ExtractorLink) -> Unit = { link ->
+            linkCount++
+            callback(link)
+        }
+        val trackingSubCallback: (SubtitleFile) -> Unit = { sub ->
+            subCount++
+            subtitleCallback(sub)
+        }
+
         audioFilteredSources.forEach { source ->
             val path = source.path ?: return@forEach
             val base = source.base ?: return@forEach
@@ -277,29 +306,31 @@ class AniDoor : MainAPI() {
 
             val embedUrl = base + resolvedPath
 
+            val beforeCount = linkCount
+
             val loaded = try {
                 if (embedUrl.contains("megaplay.buzz") || embedUrl.contains("tryembed.us.cc") || embedUrl.contains("vidnest.fun")) {
                     false
                 } else {
-                    loadExtractor(embedUrl, "https://anidoor.me/", subtitleCallback, callback)
+                    loadExtractor(embedUrl, "https://anidoor.me/", trackingSubCallback, trackingCallback)
                 }
             } catch (e: Exception) {
                 false
             }
 
             if (loaded) {
-                found = true
+                if (linkCount > beforeCount) found = true
             } else {
                 try {
                     if (embedUrl.contains("megaplay.buzz")) {
-                        AniDoorMegaPlay().getUrl(embedUrl, "https://anidoor.me/", subtitleCallback, callback)
-                        found = true
+                        AniDoorMegaPlay().getUrl(embedUrl, "https://anidoor.me/", trackingSubCallback, trackingCallback)
+                        if (linkCount > beforeCount) found = true
                     } else if (embedUrl.contains("tryembed.us.cc")) {
-                        AniDoorTryEmbed().getUrl(embedUrl, "https://anidoor.me/", subtitleCallback, callback)
-                        found = true
+                        AniDoorTryEmbed().getUrl(embedUrl, "https://anidoor.me/", trackingSubCallback, trackingCallback)
+                        if (linkCount > beforeCount) found = true
                     } else if (embedUrl.contains("vidnest.fun")) {
-                        AniDoorVidnest().getUrl(embedUrl, "https://anidoor.me/", subtitleCallback, callback)
-                        found = true
+                        AniDoorVidnest().getUrl(embedUrl, "https://anidoor.me/", trackingSubCallback, trackingCallback)
+                        if (linkCount > beforeCount) found = true
                     }
                 } catch (e: Exception) {
                     // ignore

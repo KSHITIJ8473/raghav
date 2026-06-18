@@ -41,11 +41,53 @@ open class AniDoorMegaPlay : ExtractorApi() {
 
         val pageRes = app.get(url, headers = pageHeaders)
         val doc = pageRes.document
+        val pageHtml = pageRes.text
+
+        // Try multiple selectors to find the stream ID
+        var streamId: String? = null
+
+        // 1. Try #megaplay-player element
         val playerEl = doc.selectFirst("#megaplay-player")
-        val streamId = playerEl?.attr("data-id")
+        streamId = playerEl?.attr("data-id")
             ?: playerEl?.attr("data-realid")
-            ?: Regex("""/stream/s-\d+/(\d+)/""").find(url)?.groupValues?.get(1)
-            ?: return
+
+        // 2. Try other common player elements
+        if (streamId.isNullOrBlank()) {
+            streamId = doc.selectFirst("[data-id]")?.attr("data-id")
+        }
+
+        // 3. Extract from page HTML via regex patterns
+        if (streamId.isNullOrBlank()) {
+            val patterns = listOf(
+                Regex("""data-id\s*=\s*["'](\d+)["']"""),
+                Regex("""data-realid\s*=\s*["'](\d+)["']"""),
+                Regex("""streamId\s*[:=]\s*["']?(\d+)["']?"""),
+                Regex("""id\s*[:=]\s*["']?(\d+)["']?"""),
+                Regex("""/stream/s-\d+/(\d+)/"""),
+                Regex("""getSources\?id=(\d+)""")
+            )
+            for (pattern in patterns) {
+                val match = pattern.find(pageHtml)
+                if (match != null) {
+                    streamId = match.groupValues[1]
+                    break
+                }
+            }
+        }
+
+        // 4. Extract from URL as last resort (URL pattern: /stream/ani/{al}/{e}/{type})
+        if (streamId.isNullOrBlank()) {
+            val urlMatch = Regex("""/stream/(?:ani|mal)/(\d+)/""").find(url)
+            if (urlMatch != null) {
+                // Got the AniList/MAL ID from URL, use it as fallback stream ID
+                streamId = urlMatch.groupValues[1]
+            }
+        }
+
+        if (streamId.isNullOrBlank()) {
+            Log.e("MegaPlay", "Could not find stream ID for URL: $url")
+            return
+        }
 
         val type = if (url.contains("/dub", ignoreCase = true)) "dub" else "sub"
 
@@ -71,7 +113,7 @@ open class AniDoorMegaPlay : ExtractorApi() {
                 referer = url
             ).text
         } catch (e: Exception) {
-            Log.e("MegaPlay", "getSources failed: ${e.message}")
+            Log.e("MegaPlay", "getSources failed for id=$streamId: ${e.message}")
             return
         }
 

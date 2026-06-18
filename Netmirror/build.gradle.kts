@@ -35,5 +35,5 @@ cloudstream {
 
     requiresResources = true
 
-    iconUrl = "https://github.com/NivinCNC/CNCVerse-Cloud-Stream-Extension/raw/refs/heads/master/CNC%20Verse/icon.png"
+    iconUrl = "https://www.zilliondesigns.com/blog/wp-content/uploads/feature-img-min-1280x720.png"
 }

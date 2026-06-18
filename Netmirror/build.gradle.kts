@@ -1,5 +1,5 @@
 // use an integer for version numbers
-version = 82
+version = 81
 
 android {
     buildFeatures {
@@ -7,11 +7,17 @@ android {
     }
 }
 
+dependencies {
+    implementation("androidx.core:core:1.16.0")
+    implementation("androidx.appcompat:appcompat:1.7.0")
+    implementation("com.google.android.material:material:1.12.0")
+}
+
 cloudstream {
-    language = "ta"
+    language = "en"
     // All of these properties are optional, you can safely remove them
 
-    description = "Netmirror - Netflix, PrimeVideo, Disney+ Hotstar Contents in Multiple Languages"
+    description = "Netmirror - Netflix, PrimeVideo, Disney+"
     authors = listOf("KSHITIJ8473")
 
     /**
@@ -27,5 +33,7 @@ cloudstream {
         "TvSeries"
     )
 
-    iconUrl = "https://github.com/NivinCNC/CNCVerse-Cloud-Stream-Extension/raw/refs/heads/master/CNC%20Verse/icon.png"
+    requiresResources = true
+
+    iconUrl = "https://www.zilliondesigns.com/blog/wp-content/uploads/feature-img-min-1280x720.png"
 }

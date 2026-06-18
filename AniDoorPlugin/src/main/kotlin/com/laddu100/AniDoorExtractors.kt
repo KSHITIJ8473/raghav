@@ -51,18 +51,17 @@ open class AniDoorMegaPlay : ExtractorApi() {
         streamId = playerEl?.attr("data-id")
             ?: playerEl?.attr("data-realid")
 
-        // 2. Try other common player elements
+        // 2. Try other common player elements with data-id
         if (streamId.isNullOrBlank()) {
             streamId = doc.selectFirst("[data-id]")?.attr("data-id")
         }
 
-        // 3. Extract from page HTML via regex patterns
+        // 3. Extract from page HTML via regex patterns (only from actual stream pages)
         if (streamId.isNullOrBlank()) {
             val patterns = listOf(
                 Regex("""data-id\s*=\s*["'](\d+)["']"""),
                 Regex("""data-realid\s*=\s*["'](\d+)["']"""),
                 Regex("""streamId\s*[:=]\s*["']?(\d+)["']?"""),
-                Regex("""id\s*[:=]\s*["']?(\d+)["']?"""),
                 Regex("""/stream/s-\d+/(\d+)/"""),
                 Regex("""getSources\?id=(\d+)""")
             )
@@ -70,22 +69,17 @@ open class AniDoorMegaPlay : ExtractorApi() {
                 val match = pattern.find(pageHtml)
                 if (match != null) {
                     streamId = match.groupValues[1]
+                    Log.d("MegaPlay", "Found stream ID via pattern: ${match.value}")
                     break
                 }
             }
         }
 
-        // 4. Extract from URL as last resort (URL pattern: /stream/ani/{al}/{e}/{type})
+        // IMPORTANT: Do NOT extract AniList/MAL ID from URL as fallback stream ID.
+        // The stream ID is a different identifier assigned by MegaPlay, not the AniList/MAL ID.
+        // Using the wrong ID causes invalid getSources API calls that fail.
         if (streamId.isNullOrBlank()) {
-            val urlMatch = Regex("""/stream/(?:ani|mal)/(\d+)/""").find(url)
-            if (urlMatch != null) {
-                // Got the AniList/MAL ID from URL, use it as fallback stream ID
-                streamId = urlMatch.groupValues[1]
-            }
-        }
-
-        if (streamId.isNullOrBlank()) {
-            Log.e("MegaPlay", "Could not find stream ID for URL: $url")
+            Log.e("MegaPlay", "Could not find stream ID for URL: $url (page may be a 404 error)")
             return
         }
 
@@ -200,60 +194,95 @@ open class AniDoorTryEmbed : ExtractorApi() {
         val html = pageRes.text
 
         // Check if RAW_PAYLOAD is embedded in the page HTML
+        // RAW_PAYLOAD may contain only meta (no providers) - the player.js uses meta
+        // to construct the /api/stream_data URL, then fetches providers from the API
         val payloadRegex = Regex("""RAW_PAYLOAD\s*=\s*["']([^"']+)["']""")
         val payloadMatch = payloadRegex.find(html)
-        val responseData = if (payloadMatch != null) {
+        val rawPayloadData = if (payloadMatch != null) {
             try {
                 val base64Payload = payloadMatch.groupValues[1]
                 val decodedBytes = Base64.decode(base64Payload, Base64.DEFAULT)
                 val decodedJson = String(decodedBytes, Charsets.UTF_8)
                 parseJson<TryEmbedResponse>(decodedJson)
             } catch (e: Exception) {
+                Log.e("TryEmbed", "RAW_PAYLOAD decode failed: ${e.message}")
                 null
             }
         } else {
             null
         }
 
-        val finalResponseData = if (responseData?.providers != null) {
-            responseData
-        } else {
-            // Fallback: Use API endpoints with automatic cookie handling
-            // Cloudstream3's app maintains cookies across requests to the same domain
-            val pathParts = url.substringAfter("https://tryembed.us.cc/embed/anime/").split("/")
-            if (pathParts.size < 3) return
-            val alId = pathParts[0]
-            val episode = pathParts[1]
-            val audio = pathParts[2] // sub or dub
-
-            val apiHeaders = mapOf(
+        // If RAW_PAYLOAD has providers, use them directly
+        if (rawPayloadData?.providers != null) {
+            val providers = rawPayloadData.providers
+            val playbackHeaders = mapOf(
                 "User-Agent" to USER_AGENT,
-                "Referer" to url,
+                "Accept" to "*/*",
                 "Origin" to mainUrl,
-                "Accept" to "*/*"
+                "Referer" to "$mainUrl/",
             )
-
-            // Call /api/meta first (as player.js does) to establish session
-            try {
-                app.get("$mainUrl/api/meta?id=$alId&episode=$episode", headers = apiHeaders)
-            } catch (e: Exception) {
-                Log.e("TryEmbed", "/api/meta failed: ${e.message}")
+            for (provider in providers) {
+                if (provider.status != "ready") continue
+                val qualities = provider.qualities ?: continue
+                val serverName = provider.name ?: name
+                for (quality in qualities) {
+                    val token = quality.token ?: quality.fallbackToken ?: continue
+                    val qualityLabel = quality.name ?: "Auto"
+                    val m3u8Url = "$mainUrl/s/$token.m3u8"
+                    callback(
+                        newExtractorLink(serverName, "$serverName - $qualityLabel", m3u8Url, ExtractorLinkType.M3U8) {
+                            this.referer = "$mainUrl/"
+                            this.headers = playbackHeaders
+                        }
+                    )
+                }
             }
+            return
+        }
 
-            val apiUrl = "$mainUrl/api/stream_data?id=$alId&episode=$episode&audio=$audio"
-            val apiRes = try {
-                app.get(apiUrl, headers = apiHeaders)
-            } catch (e: Exception) {
-                Log.e("TryEmbed", "API fetch failed: ${e.message}")
-                return
-            }
+        // RAW_PAYLOAD has no providers (or wasn't found) - use API fallback
+        // The player.js uses: fetch(`${HOST}/api/meta?...`) then fetch(`${HOST}/api/stream_data?...`)
+        // with credentials:'include' and cache:'no-store'
+        val pathParts = url.substringAfter("https://tryembed.us.cc/embed/anime/").split("/")
+        if (pathParts.size < 3) return
+        val alId = pathParts[0]
+        val episode = pathParts[1]
+        val audio = pathParts[2] // sub or dub
 
-            try {
-                parseJson<TryEmbedResponse>(apiRes.text)
-            } catch (e: Exception) {
-                Log.e("TryEmbed", "Failed to parse API response: ${e.message}")
-                null
-            }
+        val apiHeaders = mapOf(
+            "User-Agent" to USER_AGENT,
+            "Referer" to url,
+            "Origin" to mainUrl,
+            "Accept" to "application/json, text/plain, */*",
+            "Cache-Control" to "no-cache",
+            "Pragma" to "no-cache"
+        )
+
+        // Call /api/meta first (as player.js does) to establish session
+        try {
+            app.get("$mainUrl/api/meta?id=$alId&episode=$episode", headers = apiHeaders)
+        } catch (e: Exception) {
+            Log.e("TryEmbed", "/api/meta failed: ${e.message}")
+        }
+
+        val apiUrl = "$mainUrl/api/stream_data?id=$alId&episode=$episode&audio=$audio"
+        val apiRes = try {
+            app.get(apiUrl, headers = apiHeaders)
+        } catch (e: Exception) {
+            Log.e("TryEmbed", "/api/stream_data failed: ${e.message}")
+            return
+        }
+
+        if (apiRes.code != 200) {
+            Log.e("TryEmbed", "/api/stream_data returned ${apiRes.code}: ${apiRes.text.take(200)}")
+            return
+        }
+
+        val finalResponseData = try {
+            parseJson<TryEmbedResponse>(apiRes.text)
+        } catch (e: Exception) {
+            Log.e("TryEmbed", "Failed to parse API response: ${e.message}")
+            null
         } ?: return
 
         val providers = finalResponseData.providers ?: return

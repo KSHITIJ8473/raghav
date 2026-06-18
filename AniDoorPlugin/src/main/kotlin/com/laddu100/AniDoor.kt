@@ -216,27 +216,30 @@ class AniDoor : MainAPI() {
         val isMovie = parts[4].toBoolean()
 
         // Hardcoded fallback sources (always used as baseline)
+        // MegaPlay: MAL URLs work for most anime, ani URLs return 404 for ~90% of anime
+        // VidNest: all backends currently return 502/404
+        // TryEmbed: RAW_PAYLOAD only has meta (no providers), API returns 403
         val hardcodedSourcesJson = """[
+            {"id":"megaplay-sub-mal","name":"S2","base":"https://megaplay.buzz","path":"/stream/mal/{mal}/{e}/sub","dub":false},
+            {"id":"megaplay-movie-sub-mal","name":"S2","base":"https://megaplay.buzz","path":"/stream/mal/{mal}/1/sub","dub":false},
+            {"id":"megaplay-dub-mal","name":"D2","base":"https://megaplay.buzz","path":"/stream/mal/{mal}/{e}/dub","dub":true},
+            {"id":"megaplay-movie-dub-mal","name":"D2","base":"https://megaplay.buzz","path":"/stream/mal/{mal}/1/dub","dub":true},
+            {"id":"megaplay-sub-ani","name":"S2(ani)","base":"https://megaplay.buzz","path":"/stream/ani/{al}/{e}/sub","dub":false},
+            {"id":"megaplay-movie-sub-ani","name":"S2(ani)","base":"https://megaplay.buzz","path":"/stream/ani/{al}/1/sub","dub":false},
+            {"id":"megaplay-dub-ani","name":"D2(ani)","base":"https://megaplay.buzz","path":"/stream/ani/{al}/{e}/dub","dub":true},
+            {"id":"megaplay-movie-dub-ani","name":"D2(ani)","base":"https://megaplay.buzz","path":"/stream/ani/{al}/1/dub","dub":true},
+            {"id":"tryembed-sub","name":"S4","base":"https://tryembed.us.cc","path":"/embed/anime/{al}/{e}/sub","dub":false},
+            {"id":"tryembed-movie-sub","name":"S4","base":"https://tryembed.us.cc","path":"/embed/anime/{al}/1/sub","dub":false},
+            {"id":"tryembed-dub","name":"D4","base":"https://tryembed.us.cc","path":"/embed/anime/{al}/{e}/dub","dub":true},
+            {"id":"tryembed-movie-dub","name":"D4","base":"https://tryembed.us.cc","path":"/embed/anime/{al}/1/dub","dub":true},
             {"id":"vidnest-ap-sub","name":"S1","base":"https://vidnest.fun","path":"/animepahe/{al}/{e}/sub","dub":false},
             {"id":"vidnest-ap-movie-sub","name":"S1","base":"https://vidnest.fun","path":"/animepahe/{al}/1/sub","dub":false},
             {"id":"vidnest-ap-dub","name":"D1","base":"https://vidnest.fun","path":"/animepahe/{al}/{e}/dub","dub":true},
             {"id":"vidnest-ap-movie-dub","name":"D1","base":"https://vidnest.fun","path":"/animepahe/{al}/1/dub","dub":true},
-            {"id":"megaplay-sub","name":"S2","base":"https://megaplay.buzz","path":"/stream/ani/{al}/{e}/sub","dub":false},
-            {"id":"megaplay-movie-sub","name":"S2","base":"https://megaplay.buzz","path":"/stream/ani/{al}/1/sub","dub":false},
-            {"id":"megaplay-dub","name":"D2","base":"https://megaplay.buzz","path":"/stream/ani/{al}/{e}/dub","dub":true},
-            {"id":"megaplay-movie-dub","name":"D2","base":"https://megaplay.buzz","path":"/stream/ani/{al}/1/dub","dub":true},
-            {"id":"megaplay-sub-alt","name":"S2(alt)","base":"https://megaplay.buzz","path":"/stream/mal/{mal}/{e}/sub","dub":false},
-            {"id":"megaplay-movie-sub-alt","name":"S2(alt)","base":"https://megaplay.buzz","path":"/stream/mal/{mal}/1/sub","dub":false},
-            {"id":"megaplay-dub-alt","name":"D2(alt)","base":"https://megaplay.buzz","path":"/stream/mal/{mal}/{e}/dub","dub":true},
-            {"id":"megaplay-movie-dub-alt","name":"D2(alt)","base":"https://megaplay.buzz","path":"/stream/mal/{mal}/1/dub","dub":true},
             {"id":"vidnest-anime-sub","name":"S3","base":"https://vidnest.fun","path":"/anime/{al}/{e}/sub","dub":false},
             {"id":"vidnest-anime-movie-sub","name":"S3","base":"https://vidnest.fun","path":"/anime/{al}/1/sub","dub":false},
             {"id":"vidnest-anime-dub","name":"D3","base":"https://vidnest.fun","path":"/anime/{al}/{e}/dub","dub":true},
-            {"id":"vidnest-anime-movie-dub","name":"D3","base":"https://vidnest.fun","path":"/anime/{al}/1/dub","dub":true},
-            {"id":"tryembed-sub","name":"S4","base":"https://tryembed.us.cc","path":"/embed/anime/{al}/{e}/sub","dub":false},
-            {"id":"tryembed-movie-sub","name":"S4","base":"https://tryembed.us.cc","path":"/embed/anime/{al}/1/sub","dub":false},
-            {"id":"tryembed-dub","name":"D4","base":"https://tryembed.us.cc","path":"/embed/anime/{al}/{e}/dub","dub":true},
-            {"id":"tryembed-movie-dub","name":"D4","base":"https://tryembed.us.cc","path":"/embed/anime/{al}/1/dub","dub":true}
+            {"id":"vidnest-anime-movie-dub","name":"D3","base":"https://vidnest.fun","path":"/anime/{al}/1/dub","dub":true}
         ]"""
 
         // Parse hardcoded sources as the baseline

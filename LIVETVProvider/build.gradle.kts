@@ -13,7 +13,7 @@ dependencies {
 }
 
 cloudstream {
-    language = "ta"
+    language = "en"
     description = "Watch LIVE TV channels & sports via LIVE TV"
     authors = listOf("KSHITIJ8473")
 

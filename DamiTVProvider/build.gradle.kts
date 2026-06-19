@@ -9,7 +9,7 @@ android {
 
 cloudstream {
     language = "en"
-    description = "dont install under work"
+    description = "dont install under work - live sports provider"
     authors = listOf("KSHITIJ8473")
 
     /**

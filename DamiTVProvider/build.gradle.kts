@@ -9,7 +9,7 @@ android {
 
 cloudstream {
     language = "en"
-    description = "Watch LIVE sports from dami-tv.pro — Cricket, Football, Basketball & more"
+    description = "dont install under work"
     authors = listOf("KSHITIJ8473")
 
     /**

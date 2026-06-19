@@ -2,7 +2,7 @@ version = 1
 
 cloudstream {
     language = "en"
-    description = "Anime from 9anime.org.lv with Sub and Dub support"
+    description = "anime from 9anime clone with sub and dub"
     authors = listOf("KSHITIJ8473")
 
     status = 1

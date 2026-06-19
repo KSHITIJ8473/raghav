@@ -252,7 +252,7 @@ override suspend fun loadLinks(
         }
 
         val orderedSources = filteredSources.sortedBy { source ->
-            sourcePriority(source, validMalId != null)
+            sourcePriority(source, validMalId != null, isDubRequest)
         }
 
         Log.d("AniDoor", "Request: $dubOrSub ep=$epNum type=$wantType -> ${orderedSources.size} sources matched after filtering")
@@ -286,7 +286,7 @@ override suspend fun loadLinks(
                 .replace("{e}", epNum.toString())
 
             val embedUrl = base + resolvedPath
-            Log.d("AniDoor", "Trying source ${source.id} (priority ${sourcePriority(source, validMalId != null)}): $embedUrl")
+            Log.d("AniDoor", "Trying source ${source.id} (priority ${sourcePriority(source, validMalId != null, isDubRequest)}): $embedUrl")
 
             var sourceLinkCount = 0
             val sourceCallback: (ExtractorLink) -> Unit = { link ->
@@ -320,42 +320,51 @@ override suspend fun loadLinks(
             }
 
             Log.d("AniDoor", "Source ${source.id} returned $sourceLinkCount links")
-
-            // If we found links from this source, we can stop trying more sources
-            // This mimics the site behavior where you pick one working source
-            if (sourceLinkCount > 0) {
-                Log.d("AniDoor", "Found working links from ${source.id}, stopping source iteration")
-                break
-            }
+            // Continue trying all sources so user gets all options
         }
 
         Log.d("AniDoor", "Total links found: $linkCount for $dubOrSub ep=$epNum")
         return linkCount > 0
     }
 
-    private fun sourcePriority(source: AniDoorSourceConfig, hasMalId: Boolean): Int {
+    private fun sourcePriority(source: AniDoorSourceConfig, hasMalId: Boolean, isDub: Boolean): Int {
         val base = source.base.orEmpty()
         val path = source.path.orEmpty()
 
-        return when {
-            // Highest priority: MegaPlay with MAL ID (most reliable)
-            base.contains("megaplay.buzz", ignoreCase = true) && path.contains("/stream/mal/", ignoreCase = true) && hasMalId -> 0
-            // High priority: VidNest animepahe (animepahe is a good source)
-            base.contains("vidnest.fun", ignoreCase = true) && path.contains("/animepahe/", ignoreCase = true) -> 1
-            // High priority: TryEmbed
-            base.contains("tryembed.us.cc", ignoreCase = true) -> 2
-            // Medium priority: VidNest anime (direct)
-            base.contains("vidnest.fun", ignoreCase = true) && path.contains("/anime/", ignoreCase = true) -> 3
-            // Medium priority: MegaPlay with AniList ID
-            base.contains("megaplay.buzz", ignoreCase = true) && path.contains("/stream/ani/", ignoreCase = true) && hasMalId -> 4
-            // Lower priority: DropFile (needs MAL ID)
-            base.contains("dropfile.cc", ignoreCase = true) && hasMalId -> 5
-            // Lower priority: HD (nightslayer)
-            base.contains("nightslayer.workers.dev", ignoreCase = true) -> 6
-            // Lowest priority: MegaPlay with AniList ID but no MAL ID
-            base.contains("megaplay.buzz", ignoreCase = true) && path.contains("/stream/ani/", ignoreCase = true) -> 7
-            // Default for anything else
-            else -> 10
+        if (isDub) {
+            return when {
+                // For DUB, TryEmbed is the actual dubbed source
+                base.contains("tryembed.us.cc", ignoreCase = true) -> 0
+                // MegaPlay with MAL ID next
+                base.contains("megaplay.buzz", ignoreCase = true) && path.contains("/stream/mal/", ignoreCase = true) && hasMalId -> 1
+                // MegaPlay with AniList ID
+                base.contains("megaplay.buzz", ignoreCase = true) && path.contains("/stream/ani/", ignoreCase = true) && hasMalId -> 2
+                // VidNest next
+                base.contains("vidnest.fun", ignoreCase = true) -> 3
+                // Default for anything else
+                else -> 10
+            }
+        } else {
+            return when {
+                // Highest priority: MegaPlay with MAL ID (most reliable for sub)
+                base.contains("megaplay.buzz", ignoreCase = true) && path.contains("/stream/mal/", ignoreCase = true) && hasMalId -> 0
+                // High priority: VidNest animepahe
+                base.contains("vidnest.fun", ignoreCase = true) && path.contains("/animepahe/", ignoreCase = true) -> 1
+                // High priority: TryEmbed
+                base.contains("tryembed.us.cc", ignoreCase = true) -> 2
+                // Medium priority: VidNest anime (direct)
+                base.contains("vidnest.fun", ignoreCase = true) && path.contains("/anime/", ignoreCase = true) -> 3
+                // Medium priority: MegaPlay with AniList ID
+                base.contains("megaplay.buzz", ignoreCase = true) && path.contains("/stream/ani/", ignoreCase = true) && hasMalId -> 4
+                // Lower priority: DropFile (needs MAL ID)
+                base.contains("dropfile.cc", ignoreCase = true) && hasMalId -> 5
+                // Lower priority: HD (nightslayer)
+                base.contains("nightslayer.workers.dev", ignoreCase = true) -> 6
+                // Lowest priority: MegaPlay with AniList ID but no MAL ID
+                base.contains("megaplay.buzz", ignoreCase = true) && path.contains("/stream/ani/", ignoreCase = true) -> 7
+                // Default for anything else
+                else -> 10
+            }
         }
     }
 

@@ -229,6 +229,9 @@ open class AniDoorTryEmbed : ExtractorApi() {
         val episode = payloadMeta?.meta?.episode?.toString() ?: pathParts.getOrNull(1) ?: "1"
         val audio = payloadMeta?.meta?.audio ?: pathParts.getOrNull(2) ?: "sub"
 
+        val allProviders = mutableListOf<TryEmbedProvider>()
+        val allCaptions = mutableListOf<TryEmbedCaption>()
+
         // Step 4: Call API with cookies
         if (alId.isNotBlank()) {
             val apiHeaders = mutableMapOf(
@@ -247,15 +250,40 @@ open class AniDoorTryEmbed : ExtractorApi() {
 
             val apiUrl = "$mainUrl/api/stream_data?id=$alId&episode=$episode&audio=$audio"
             try {
+                // Call api/meta first to initialize session
+                val metaUrl = "$mainUrl/api/meta?id=$alId&episode=$episode"
+                app.get(metaUrl, headers = apiHeaders)
+
                 val apiRes = app.get(apiUrl, headers = apiHeaders)
                 Log.d(name, "API response: HTTP ${apiRes.code}, len=${apiRes.text.length}")
                 responseData = parseJson<TryEmbedResponse>(apiRes.text)
+                
+                // Add the initially selected provider (which has qualities resolved)
+                responseData.selectedProvider?.let { allProviders.add(it) }
+                responseData.captions?.let { allCaptions.addAll(it) }
+
+                // Query qualities for other providers that are "idle" (empty qualities initially)
+                responseData.providers?.forEach { provider ->
+                    val providerId = provider.id ?: return@forEach
+                    // Skip if it's the already selected provider
+                    if (providerId == responseData.selectedProvider?.id) return@forEach
+
+                    val serverUrl = "$mainUrl/api/stream_data?id=$alId&episode=$episode&audio=$audio&server=$providerId"
+                    try {
+                        val serverRes = app.get(serverUrl, headers = apiHeaders)
+                        val serverData = parseJson<TryEmbedResponse>(serverRes.text)
+                        serverData.selectedProvider?.let { allProviders.add(it) }
+                        serverData.captions?.let { allCaptions.addAll(it) }
+                    } catch (e: Exception) {
+                        Log.e(name, "Failed to load provider $providerId: ${e.message}")
+                    }
+                }
             } catch (e: Exception) {
                 Log.e(name, "API call failed: ${e.message}")
             }
         }
 
-        if (responseData == null) {
+        if (responseData == null && allProviders.isEmpty()) {
             Log.e(name, "No response data from API for $url, trying WebView fallback")
             // WebView fallback for TryEmbed
             try {
@@ -297,11 +325,6 @@ open class AniDoorTryEmbed : ExtractorApi() {
             return
         }
 
-        // Step 5: Collect all providers (including selectedProvider)
-        val allProviders = mutableListOf<TryEmbedProvider>()
-        responseData.providers?.let { allProviders.addAll(it) }
-        responseData.selectedProvider?.let { allProviders.add(it) }
-
         // Step 6: Process providers
         allProviders.forEach { provider ->
             if (provider.status != "ready") {
@@ -319,9 +342,20 @@ open class AniDoorTryEmbed : ExtractorApi() {
                 if (directUrl != null) {
                     val isM3u8 = quality.isM3U8 ?: directUrl.contains(".m3u8")
                     if (isM3u8) {
-                        M3u8Helper.generateM3u8(
+                        val generated = M3u8Helper.generateM3u8(
                             serverName, directUrl, "$mainUrl/", headers = playbackHeaders
-                        ).forEach(callback)
+                        )
+                        if (generated.isNotEmpty()) {
+                            generated.forEach(callback)
+                        } else {
+                            callback(newExtractorLink(
+                                serverName, "$serverName - $qualityLabel", directUrl,
+                                ExtractorLinkType.M3U8
+                            ) {
+                                this.referer = "$mainUrl/"
+                                this.headers = playbackHeaders
+                            })
+                        }
                     } else {
                         callback(newExtractorLink(
                             serverName, "$serverName - $qualityLabel", directUrl,
@@ -350,7 +384,7 @@ open class AniDoorTryEmbed : ExtractorApi() {
         }
 
         // Step 7: Process direct sources (fallback)
-        responseData.sources?.forEach { source ->
+        responseData?.sources?.forEach { source ->
             val fileUrl = source.file ?: return@forEach
             val label = source.label ?: source.type ?: "Auto"
             if (fileUrl.contains(".m3u8")) {
@@ -363,7 +397,7 @@ open class AniDoorTryEmbed : ExtractorApi() {
         }
 
         // Step 8: Process captions/subtitles
-        responseData.captions?.forEach { caption ->
+        allCaptions.distinctBy { it.file }.forEach { caption ->
             val file = caption.file ?: return@forEach
             subtitleCallback(
                 newSubtitleFile(caption.label ?: "Subtitle", file) {
@@ -372,6 +406,7 @@ open class AniDoorTryEmbed : ExtractorApi() {
             )
         }
     }
+
 
     data class TryEmbedPayloadMeta(
         @JsonProperty("meta") val meta: TryEmbedMeta? = null

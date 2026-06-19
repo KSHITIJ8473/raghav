@@ -11,90 +11,90 @@ import java.util.UUID
 import java.util.concurrent.TimeUnit
 
 /**
- * Firebase Remote Config fetcher for the PlayZTV app.
+ * Retrieves remote configuration from Firebase for the PlayZTV backend.
  *
- * Firebase credentials are taken from the PlayZTV plugin.js:
- *   packageName  : com.playz.tv
- *   apiKey       : AIzaSyDKRqLlbaZBIpHzLBiQTUrJqr3gN-nDWWc
- *   appId        : 1:516859456626:android:12a75869902c4f8a6826eb
- *   projectNumber: 516859456626
+ * Uses the official Firebase REST API to fetch key-value pairs
+ * that control the backend URL and feature flags at runtime.
+ *
+ * Credentials sourced from the PlayZTV app manifest:
+ *   package  : com.playz.tv
+ *   key      : AIzaSyDKRqLlbaZBIpHzLBiQTUrJqr3gN-nDWWc
+ *   app      : 1:516859456626:android:12a75869902c4f8a6826eb
+ *   project  : 516859456626
  */
 object PlayZTVFirebaseFetcher {
 
-    private const val PACKAGE_NAME = "com.playz.tv"
-    private const val API_KEY = "AIzaSyDKRqLlbaZBIpHzLBiQTUrJqr3gN-nDWWc"
-    private const val APP_ID = "1:516859456626:android:12a75869902c4f8a6826eb"
-    private const val PROJECT_NUMBER = "516859456626"
-    private const val APP_VERSION = "2.1"
-    private const val APP_BUILD = "4"
-    private const val SDK_VERSION = "22.1.0"
+    private const val PKG = "com.playz.tv"
+    private const val GOOGLE_API_KEY = "AIzaSyDKRqLlbaZBIpHzLBiQTUrJqr3gN-nDWWc"
+    private const val FIREBASE_APP_ID = "1:516859456626:android:12a75869902c4f8a6826eb"
+    private const val FIREBASE_PROJECT = "516859456626"
+    private const val VER = "2.1"
+    private const val BLD = "4"
+    private const val SDK = "22.1.0"
 
-    private val client = OkHttpClient.Builder()
-        .connectTimeout(30, TimeUnit.SECONDS)
-        .readTimeout(30, TimeUnit.SECONDS)
+    private val httpClient = OkHttpClient.Builder()
+        .connectTimeout(25, TimeUnit.SECONDS)
+        .readTimeout(25, TimeUnit.SECONDS)
+        .writeTimeout(15, TimeUnit.SECONDS)
         .build()
 
-    data class RemoteConfigResponse(
-        val entries: Map<String, String>? = null,
-        val state: String? = null
-    )
+    data class ConfigPayload(val entries: Map<String, String>? = null, val state: String? = null)
 
     /**
-     * Fetches Firebase Remote Config entries.
-     * @return Map of config entries or null if the fetch fails.
+     * Contacts the Firebase Remote Config REST endpoint and returns
+     * all key-value entries, or null when the request fails.
      */
     suspend fun fetchRemoteConfig(): Map<String, String>? = withContext(Dispatchers.IO) {
         try {
-            val url = "https://firebaseremoteconfig.googleapis.com/v1/projects/$PROJECT_NUMBER/namespaces/firebase:fetch"
-            val appInstanceId = UUID.randomUUID().toString().replace("-", "")
+            val instanceToken = UUID.randomUUID().toString().replace("-", "")
+            val endpoint = "https://firebaseremoteconfig.googleapis.com/v1/projects/$FIREBASE_PROJECT/namespaces/firebase:fetch"
 
-            val payload = """
-                {
-                    "appInstanceId": "$appInstanceId",
-                    "appInstanceIdToken": "",
-                    "appId": "$APP_ID",
-                    "countryCode": "US",
-                    "languageCode": "en-US",
-                    "platformVersion": "30",
-                    "timeZone": "UTC",
-                    "appVersion": "$APP_VERSION",
-                    "appBuild": "$APP_BUILD",
-                    "packageName": "$PACKAGE_NAME",
-                    "sdkVersion": "$SDK_VERSION",
-                    "analyticsUserProperties": {}
-                }
-            """.trimIndent()
+            val jsonBody = buildString {
+                append("{")
+                append("\"appInstanceId\":\"$instanceToken\",")
+                append("\"appInstanceIdToken\":\"\",")
+                append("\"appId\":\"$FIREBASE_APP_ID\",")
+                append("\"countryCode\":\"IN\",")
+                append("\"languageCode\":\"ta-IN\",")
+                append("\"platformVersion\":\"31\",")
+                append("\"timeZone\":\"Asia/Kolkata\",")
+                append("\"appVersion\":\"$VER\",")
+                append("\"appBuild\":\"$BLD\",")
+                append("\"packageName\":\"$PKG\",")
+                append("\"sdkVersion\":\"$SDK\",")
+                append("\"analyticsUserProperties\":{}")
+                append("}")
+            }
 
-            val request = Request.Builder()
-                .url(url)
-                .post(payload.toRequestBody("application/json".toMediaType()))
-                .header("Content-Type", "application/json")
+            val req = Request.Builder()
+                .url(endpoint)
                 .header("Accept", "application/json")
-                .header("X-Android-Package", PACKAGE_NAME)
-                .header("X-Goog-Api-Key", API_KEY)
+                .header("Content-Type", "application/json")
+                .header("X-Goog-Api-Key", GOOGLE_API_KEY)
+                .header("X-Android-Package", PKG)
                 .header("X-Google-GFE-Can-Retry", "yes")
-                .header("User-Agent", "okhttp/4.12.0")
+                .header("User-Agent", "Dalvik/2.1.0 (Linux; U; Android 12)")
+                .post(jsonBody.toRequestBody("application/json".toMediaType()))
                 .build()
 
-            val response = client.newCall(request).execute()
-            if (response.isSuccessful) {
-                val body = response.body.string()
-                if (body.isNotBlank()) {
-                    return@withContext parseJson<RemoteConfigResponse>(body).entries
-                }
+            httpClient.newCall(req).execute().use { resp ->
+                if (!resp.isSuccessful) return@withContext null
+                val text = resp.body?.string() ?: return@withContext null
+                if (text.isBlank()) return@withContext null
+                parseJson<ConfigPayload>(text).entries
             }
-            null
-        } catch (e: Exception) {
-            println("PlayZTV: Firebase fetch failed – ${e.message}")
+        } catch (ex: Exception) {
+            println("PlayZTV: Remote config fetch error – ${ex.message}")
             null
         }
     }
 
     /**
-     * Returns the `api_url` entry from Firebase Remote Config,
-     * or null if it cannot be retrieved.
+     * Convenience method that extracts the `api_url` value
+     * from the remote config, stripping any trailing slash.
      */
     suspend fun getBaseApiUrl(): String? {
-        return fetchRemoteConfig()?.get("api_url")?.trimEnd('/')
+        val cfg = fetchRemoteConfig() ?: return null
+        return cfg["api_url"]?.trimEnd('/')
     }
 }

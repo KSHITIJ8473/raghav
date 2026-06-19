@@ -1,288 +1,100 @@
 package com.laddu100
 
-import android.util.Base64
-import android.util.Log
+import java.security.SecureRandom
 import javax.crypto.Cipher
 import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
+/**
+ * Low-level cryptographic helpers for PlayZTV.
+ *
+ * Provides AES/CBC/PKCS5 decryption and a custom substitution
+ * cipher used to protect the backend URL and category payloads.
+ *
+ * The cipher operates on a fixed mapping that is the inverse of
+ * the encryption side — each character in the source range is
+ * swapped with its counterpart in the target range.
+ */
 object PlayZTVCryptoUtils {
 
-    private const val TAG = "PlayZTVCrypto"
+    // ── AES parameters ─────────────────────────────────────────────────────────
+
+    private val AES_KEY_BYTES = android.util.Base64.decode("bTVLbDVuazR4SzFrTjdwTg==", android.util.Base64.DEFAULT)
+    private val AES_IV_BYTES  = android.util.Base64.decode("azVLNG5NOG1LbE5MN2wxNQ==", android.util.Base64.DEFAULT)
+
+    private const val ALGORITHM = "AES/CBC/PKCS5Padding"
+
+    // ── Substitution tables ────────────────────────────────────────────────────
+
+    private const val CHAR_SOURCE = "aAbBcCdDeEfFgGhHiIjJkKlLmMnNoOpPqQrRsStTuUvVwWxXyYzZ"
+    private const val CHAR_TARGET = "fFgGjJkKaApPbBmMoOzZeEnNcCdDrRqQtTvVuUxXhHiIwWyYlLsS"
+
+    // ── Public API ─────────────────────────────────────────────────────────────
 
     /**
-     * OLD FORMAT
+     * AES-256-CBC decrypt → Base64-decode → substitution-decode.
+     * This is the primary pipeline for backend payloads.
      */
-    private const val PLAYZ_AES_KEY =
-        "bTVLbDVuazR4SzFrTjdwTg=="
-
-    private const val PLAYZ_AES_IV =
-        "azVLNG5NOG1LbE5MN2wxNQ=="
-
-    /**
-     * PRIMARY FORMAT
-     */
-    private const val PLAYZ_PRIMARY_AES_KEY =
-        "Yi8xam1sNW5rNHg1azdwTg=="
-
-    private const val PLAYZ_PRIMARY_AES_IV =
-        "MTRuTWs4bU41S2w1S0w3bA=="
-
-    /**
-     * Substitution maps from plugin.js
-     */
-    private const val SUB_FROM =
-        "aAbBcCdDeEfFgGhHiIjJkKlLmMnNoOpPqQrRsStTuUvVwWxXyYzZ"
-
-    private const val SUB_TO =
-        "fFgGjJkKaApPbBmMoOzZeEnNcCdDrRqQtTvVuUxXhHiIwWyYlLsS"
-
-    private val SUB_REVERSE = HashMap<Char, Char>()
-
-    init {
-        for (i in SUB_TO.indices) {
-            SUB_REVERSE[SUB_TO[i]] = SUB_FROM[i]
-        }
-    }
-
-    private data class KeyInfo(
-        val key: ByteArray,
-        val iv: ByteArray
-    )
-
-    private fun decodeKey(base64: String): ByteArray {
-        return Base64.decode(
-            base64,
-            Base64.DEFAULT
-        )
-    }
-
-    private val PRIMARY_KEY by lazy {
-        KeyInfo(
-            decodeKey(PLAYZ_PRIMARY_AES_KEY),
-            decodeKey(PLAYZ_PRIMARY_AES_IV)
-        )
-    }
-
-    private val FALLBACK_KEY by lazy {
-        KeyInfo(
-            decodeKey(PLAYZ_AES_KEY),
-            decodeKey(PLAYZ_AES_IV)
-        )
-    }
-
-    /**
-     * Reverse substitution cipher
-     */
-    private fun decodeSubstitutionPayload(
-        value: String
-    ): String {
-
-        val restored = buildString {
-
-            for (char in value) {
-                append(
-                    SUB_REVERSE[char] ?: char
-                )
-            }
-        }
-
-        return String(
-            Base64.decode(
-                normalizeBase64(restored),
-                Base64.DEFAULT
-            ),
-            Charsets.UTF_8
-        )
-    }
-
-    /**
-     * Normalize malformed base64
-     */
-    private fun normalizeBase64(
-        value: String
-    ): String {
-
-        var normalized = value
-            .replace("-", "+")
-            .replace("_", "/")
-            .replace("\n", "")
-            .replace("\r", "")
-            .replace(" ", "")
-            .replace("\t", "")
-
-        while (normalized.length % 4 != 0) {
-            normalized += "="
-        }
-
-        return normalized
-    }
-
-    /**
-     * AES CBC PKCS5 decrypt
-     */
-    private fun decryptAes(
-        dataB64: String,
-        keyInfo: KeyInfo
-    ): String? {
-
+    fun fullDecrypt(encoded: String): String {
         return try {
-
-            val cipherBytes = Base64.decode(
-                normalizeBase64(dataB64),
-                Base64.DEFAULT
-            )
-
-            val cipher = Cipher.getInstance(
-                "AES/CBC/PKCS5Padding"
-            )
-
-            cipher.init(
-                Cipher.DECRYPT_MODE,
-                SecretKeySpec(
-                    keyInfo.key,
-                    "AES"
-                ),
-                IvParameterSpec(
-                    keyInfo.iv
-                )
-            )
-
-            val decrypted =
-                cipher.doFinal(cipherBytes)
-
-            String(
-                decrypted,
-                Charsets.UTF_8
-            ).trim()
-
+            val raw = decryptAes(encoded)
+            val b64 = String(android.util.Base64.decode(raw, android.util.Base64.DEFAULT))
+            reverseSubstitute(b64)
         } catch (e: Exception) {
-
-            Log.e(
-                TAG,
-                "AES failed: ${e.message}"
-            )
-
-            null
+            encoded
         }
     }
 
     /**
-     * MAIN DECRYPT
+     * AES-256-CBC decryption. Returns the decrypted bytes as a UTF-8 string.
      */
-    fun decryptPlayZTV(
-        body: String?
-    ): String? {
+    fun decryptAes(encryptedBase64: String): String {
+        val keySpec = SecretKeySpec(AES_KEY_BYTES, "AES")
+        val ivSpec  = IvParameterSpec(AES_IV_BYTES)
 
-        return try {
+        val cipher = Cipher.getInstance(ALGORITHM)
+        cipher.init(Cipher.DECRYPT_MODE, keySpec, ivSpec)
 
-            val raw = body?.trim().orEmpty()
+        val cipherBytes = android.util.Base64.decode(encryptedBase64, android.util.Base64.DEFAULT)
+        val plainBytes  = cipher.doFinal(cipherBytes)
 
-            if (raw.isEmpty()) {
-                return null
+        return String(plainBytes, Charsets.UTF_8)
+    }
+
+    // ── Substitution cipher ────────────────────────────────────────────────────
+
+    /**
+     * Reverses the substitution applied during encryption.
+     * Each character found in [CHAR_TARGET] is replaced by the
+     * corresponding character from [CHAR_SOURCE].
+     */
+    private fun reverseSubstitute(input: String): String {
+        val lookup = buildReverseLookup()
+        return buildString(input.length) {
+            for (ch in input) {
+                append(lookup[ch] ?: ch)
             }
-
-            Log.d(TAG, "Raw Payload: $raw")
-
-            /**
-             * Already plain JSON/HTML
-             */
-            if (
-                raw.startsWith("{") ||
-                raw.startsWith("[") ||
-                raw.startsWith("<")
-            ) {
-                return raw
-            }
-
-            /**
-             * PRIMARY FORMAT
-             *
-             * substitution ->
-             * base64 text ->
-             * AES decrypt
-             */
-            try {
-
-                val primaryPayload =
-                    decodeSubstitutionPayload(
-                        raw.replace("\\s".toRegex(), "")
-                    )
-
-                Log.d(
-                    TAG,
-                    "Primary payload decoded"
-                )
-
-                val primary =
-                    decryptAes(
-                        primaryPayload,
-                        PRIMARY_KEY
-                    )
-
-                if (!primary.isNullOrBlank()) {
-
-                    Log.d(
-                        TAG,
-                        "Primary decrypt success"
-                    )
-
-                    return primary
-                }
-
-            } catch (e: Exception) {
-
-                Log.e(
-                    TAG,
-                    "Primary decrypt failed: ${e.message}"
-                )
-            }
-
-            /**
-             * FALLBACK FORMAT
-             */
-            try {
-
-                val fallback =
-                    decryptAes(
-                        raw.replace("\\s".toRegex(), ""),
-                        FALLBACK_KEY
-                    )
-
-                if (!fallback.isNullOrBlank()) {
-
-                    Log.d(
-                        TAG,
-                        "Fallback decrypt success"
-                    )
-
-                    return fallback
-                }
-
-            } catch (e: Exception) {
-
-                Log.e(
-                    TAG,
-                    "Fallback decrypt failed: ${e.message}"
-                )
-            }
-
-            Log.e(
-                TAG,
-                "All decryption strategies failed"
-            )
-
-            null
-
-        } catch (e: Exception) {
-
-            Log.e(
-                TAG,
-                "Decrypt error: ${e.message}",
-                e
-            )
-
-            null
         }
+    }
+
+    /**
+     * Builds a lazy character→character reverse-mapping from CHAR_TARGET→CHAR_SOURCE.
+     */
+    private fun buildReverseLookup(): Map<Char, Char> {
+        val map = mutableMapOf<Char, Char>()
+        for (i in CHAR_SOURCE.indices) {
+            map[CHAR_TARGET[i]] = CHAR_SOURCE[i]
+        }
+        return map
+    }
+
+    // ── Random token generation ────────────────────────────────────────────────
+
+    /** Generates a URL-safe random token (used for cache-busting). */
+    fun randomToken(length: Int = 16): String {
+        val rng = SecureRandom()
+        val bytes = ByteArray(length)
+        rng.nextBytes(bytes)
+        return bytes.joinToString("") { "%02x".format(it) }
     }
 }

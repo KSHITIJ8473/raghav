@@ -9,10 +9,10 @@ import android.os.Bundle
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
-import android.widget.CheckBox
 import android.widget.ImageButton
 import android.widget.LinearLayout
 import android.widget.RelativeLayout
+import android.widget.Switch
 import android.widget.TextView
 import androidx.annotation.RequiresApi
 import androidx.appcompat.app.AlertDialog
@@ -21,10 +21,11 @@ import com.google.android.material.bottomsheet.BottomSheetDialogFragment
 import com.lagradost.cloudstream3.CommonActivity.showToast
 
 /**
- * Settings bottom sheet for PlayZTV provider selection.
+ * PlayZTV provider selector — displayed as a bottom sheet.
  *
- * Reuses the same layout resources (settings.xml, etc.) that are shared across
- * the CNCVerse plugin suite via the `com.laddu100` namespace.
+ * Uses Switch toggles (instead of checkboxes) and a different layout
+ * flow than the LIVETV counterpart. Shares drawable/string resources
+ * via the `com.laddu100` package namespace.
  */
 class PlayZTVSettings(
     private val plugin: PlayZTVPlugin,
@@ -32,36 +33,41 @@ class PlayZTVSettings(
     private val playlistNames: List<String>
 ) : BottomSheetDialogFragment() {
 
-    private val enabledPlaylists = playlistNames
-        .filter { sharedPref?.getBoolean(it, false) ?: false }
-        .toMutableList()
+    // ── State ──────────────────────────────────────────────────────────────────
 
-    // ── Resource helpers ──────────────────────────────────────────────────────
+    private val selected = playlistNames
+        .filter { sharedPref?.getBoolean(it, false) == true }
+        .toMutableSet()
 
-    @SuppressLint("DiscouragedApi")
-    private fun getDrawable(name: String): Drawable? {
-        val id = plugin.resources?.getIdentifier(name, "drawable", "com.laddu100")
-        return id?.let { ResourcesCompat.getDrawable(plugin.resources ?: return null, it, null) }
-    }
+    // ── Resource helpers ───────────────────────────────────────────────────────
 
     @SuppressLint("DiscouragedApi")
-    private fun getString(name: String): String? {
-        val id = plugin.resources?.getIdentifier(name, "string", "com.laddu100")
-        return id?.let { plugin.resources?.getString(it) }
+    private fun loadDrawable(name: String): Drawable? {
+        val res = plugin.resources ?: return null
+        val id = res.getIdentifier(name, "drawable", "com.laddu100")
+        return if (id != 0) ResourcesCompat.getDrawable(res, id, null) else null
     }
 
     @SuppressLint("DiscouragedApi")
-    private fun <T : View> View.findViewByName(name: String): T? {
-        val id = plugin.resources?.getIdentifier(name, "id", "com.laddu100")
-        return findViewById(id ?: return null)
+    private fun loadString(name: String): String? {
+        val res = plugin.resources ?: return null
+        val id = res.getIdentifier(name, "string", "com.laddu100")
+        return if (id != 0) res.getString(id) else null
     }
 
-    private fun View.makeTvCompatible() {
-        setPadding(paddingLeft + 10, paddingTop + 10, paddingRight + 10, paddingBottom + 10)
-        background = getDrawable("outline")
+    @SuppressLint("DiscouragedApi")
+    private fun <T : View> View.findByIdName(name: String): T? {
+        val res = plugin.resources ?: return null
+        val id = res.getIdentifier(name, "id", "com.laddu100")
+        return if (id != 0) findViewById(id) else null
     }
 
-    // ── Fragment lifecycle ────────────────────────────────────────────────────
+    private fun View.applyTvPadding() {
+        setPadding(paddingLeft + 12, paddingTop + 12, paddingRight + 12, paddingBottom + 12)
+        background = loadDrawable("outline")
+    }
+
+    // ── Fragment lifecycle ─────────────────────────────────────────────────────
 
     @SuppressLint("DiscouragedApi")
     override fun onCreateView(
@@ -69,8 +75,9 @@ class PlayZTVSettings(
         container: ViewGroup?,
         savedInstanceState: Bundle?
     ): View? {
-        val layoutId = plugin.resources?.getIdentifier("settings", "layout", "com.laddu100")
-        return layoutId?.let { inflater.inflate(plugin.resources?.getLayout(it), container, false) }
+        val res = plugin.resources ?: return null
+        val layoutId = res.getIdentifier("settings", "layout", "com.laddu100")
+        return if (layoutId != 0) inflater.inflate(res.getLayout(layoutId), container, false) else null
     }
 
     @SuppressLint("UseSwitchCompatOrMaterialCode")
@@ -78,55 +85,42 @@ class PlayZTVSettings(
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
 
-        view.findViewByName<TextView>("header_tw")?.text = getString("header_tw")
-        view.findViewByName<TextView>("header2_tw")?.text = getString("header2_tw")
+        // Title texts
+        view.findByIdName<TextView>("header_tw")?.text = loadString("header_tw")
+        view.findByIdName<TextView>("header2_tw")?.text = loadString("header2_tw")
 
-        val saveBtn = view.findViewByName<ImageButton>("save_btn")
-        saveBtn?.makeTvCompatible()
-        saveBtn?.setImageDrawable(getDrawable("save_icon"))
+        // Save button
+        val saveBtn = view.findByIdName<ImageButton>("save_btn")
+        saveBtn?.applyTvPadding()
+        saveBtn?.setImageDrawable(loadDrawable("save_icon"))
 
-        val list = view.findViewByName<LinearLayout>("list")
-        playlistNames.forEach { list?.addView(buildRow(it)) }
-
-        saveBtn?.setOnClickListener {
-            sharedPref?.edit()?.apply {
-                clear()
-                enabledPlaylists.forEach { putBoolean(it, true) }
-                apply()
-            }
-            AlertDialog.Builder(requireContext())
-                .setTitle("Restart Required")
-                .setMessage("Changes saved. Restart the app to apply them?")
-                .setPositiveButton("Yes") { _, _ -> dismiss(); restartApp() }
-                .setNegativeButton("No") { dlg, _ ->
-                    dlg.dismiss()
-                    showToast("Settings saved. Restart to apply changes.")
-                }
-                .show()
+        // Build rows
+        val container = view.findByIdName<LinearLayout>("list")
+        for (name in playlistNames) {
+            container?.addView(createToggleRow(name))
         }
+
+        // Save action
+        saveBtn?.setOnClickListener { persistAndPrompt() }
     }
 
-    // ── Helpers ───────────────────────────────────────────────────────────────
+    // ── Row builder ────────────────────────────────────────────────────────────
 
-    private fun restartApp() {
-        val ctx = requireContext().applicationContext
-        val intent = ctx.packageManager.getLaunchIntentForPackage(ctx.packageName)
-        val component = intent?.component ?: return
-        ctx.startActivity(Intent.makeRestartActivityTask(component))
-        Runtime.getRuntime().exit(0)
-    }
+    private fun createToggleRow(name: String): RelativeLayout {
+        val ctx = requireContext()
 
-    private fun buildRow(name: String): RelativeLayout {
-        val root = RelativeLayout(requireContext()).apply {
+        val root = RelativeLayout(ctx).apply {
             layoutParams = RelativeLayout.LayoutParams(
                 RelativeLayout.LayoutParams.MATCH_PARENT,
-                RelativeLayout.LayoutParams.MATCH_PARENT
+                RelativeLayout.LayoutParams.WRAP_CONTENT
             )
-            setPadding(0, 0, 0, 8)
+            setPadding(0, 0, 0, 12)
         }
 
-        val checkBox = CheckBox(requireContext()).apply {
+        val label = TextView(ctx).apply {
             id = View.generateViewId()
+            text = name.substringAfter("playlist_")
+            textSize = 17f
             layoutParams = RelativeLayout.LayoutParams(
                 RelativeLayout.LayoutParams.WRAP_CONTENT,
                 RelativeLayout.LayoutParams.WRAP_CONTENT
@@ -134,29 +128,56 @@ class PlayZTVSettings(
                 addRule(RelativeLayout.ALIGN_PARENT_START)
                 addRule(RelativeLayout.CENTER_VERTICAL)
             }
-            isChecked = enabledPlaylists.contains(name)
-            setOnCheckedChangeListener { _, checked ->
-                if (checked) enabledPlaylists.add(name) else enabledPlaylists.remove(name)
-            }
         }
 
-        val textView = TextView(requireContext()).apply {
+        val toggle = Switch(ctx).apply {
             id = View.generateViewId()
-            text = name.substringAfter("playlist_")
-            textSize = 16f
+            isChecked = selected.contains(name)
             layoutParams = RelativeLayout.LayoutParams(
                 RelativeLayout.LayoutParams.WRAP_CONTENT,
                 RelativeLayout.LayoutParams.WRAP_CONTENT
             ).apply {
-                addRule(RelativeLayout.END_OF, checkBox.id)
+                addRule(RelativeLayout.ALIGN_PARENT_END)
                 addRule(RelativeLayout.CENTER_VERTICAL)
-                marginStart = 16
             }
-            setOnClickListener { checkBox.isChecked = !checkBox.isChecked }
+            setOnCheckedChangeListener { _, on ->
+                if (on) selected.add(name) else selected.remove(name)
+            }
         }
 
-        root.addView(checkBox)
-        root.addView(textView)
+        root.addView(label)
+        root.addView(toggle)
         return root
+    }
+
+    // ── Persistence ────────────────────────────────────────────────────────────
+
+    private fun persistAndPrompt() {
+        sharedPref?.edit()?.apply {
+            clear()
+            for (name in selected) putBoolean(name, true)
+            apply()
+        }
+
+        AlertDialog.Builder(requireContext())
+            .setTitle("Restart Required")
+            .setMessage("Changes saved. Restart the app to apply them?")
+            .setPositiveButton("Yes") { _, _ ->
+                dismiss()
+                triggerRestart()
+            }
+            .setNegativeButton("No") { dlg, _ ->
+                dlg.dismiss()
+                showToast("Settings saved. Restart to apply changes.")
+            }
+            .show()
+    }
+
+    private fun triggerRestart() {
+        val ctx = requireContext().applicationContext
+        val launchIntent = ctx.packageManager.getLaunchIntentForPackage(ctx.packageName)
+        val comp = launchIntent?.component ?: return
+        ctx.startActivity(Intent.makeRestartActivityTask(comp))
+        Runtime.getRuntime().exit(0)
     }
 }

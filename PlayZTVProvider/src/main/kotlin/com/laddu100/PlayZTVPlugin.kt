@@ -8,55 +8,55 @@ import com.lagradost.cloudstream3.plugins.CloudstreamPlugin
 import kotlinx.coroutines.runBlocking
 
 /**
- * CloudStream plugin entry-point for PlayZTV.
+ * PlayZTV — CloudStream plugin providing IPTV playlists and live sports.
  *
- * On load it:
- *  1. Always registers [PlayZTVLiveEventsProvider] (live sports, non-removable).
- *  2. Fetches the provider/category list from the PlayZTV API.
- *  3. Registers whichever providers the user enabled in settings.
+ * Registration flow:
+ *  1. SharedPreferences keyed by "PlayZTV".
+ *  2. Fetches the provider manifest from the backend API.
+ *  3. Registers the live-events provider unconditionally.
+ *  4. Registers each user-selected playlist provider.
+ *  5. Attaches the settings bottom-sheet.
  */
 @CloudstreamPlugin
 class PlayZTVPlugin : Plugin() {
 
-    private val sharedPref = activity?.getSharedPreferences("PlayZTV", Context.MODE_PRIVATE)
+    private val prefs = activity?.getSharedPreferences("PlayZTV", Context.MODE_PRIVATE)
 
-    private var iptvProviders: List<Map<String, Any>> = emptyList()
+    private var providerList: List<Map<String, Any>> = emptyList()
 
     override fun load(context: Context) {
+        // Seed the static context references
         PlayZTV.context = context
         PlayZTVLiveEventsProvider.context = context
 
-        // Always available — Live Events (not user-configurable)
-        registerMainAPI(PlayZTVLiveEventsProvider())
+        // Fetch available providers from PlayZTV backend
+        providerList = runBlocking { PlayZTVProviderManager.fetchProviders() }
 
-        // Fetch provider list from API
-        iptvProviders = runBlocking { PlayZTVProviderManager.fetchProviders() }
-
-        // Determine which are enabled in settings
-        val providerSettings = iptvProviders.mapNotNull { p ->
-            val title = p["title"] as? String ?: return@mapNotNull null
-            title to (sharedPref?.getBoolean(title, false) ?: false)
+        // Build a lookup of user-enabled providers
+        val enabled = providerList.mapNotNull { entry ->
+            val name = entry["title"] as? String ?: return@mapNotNull null
+            name to (prefs?.getBoolean(name, false) ?: false)
         }.toMap()
 
-        iptvProviders
-            .filter { p ->
-                val title = p["title"] as? String
-                title != null && providerSettings[title] == true
-            }
-            .forEach { p ->
-                val title = p["title"] as String
-                val catLink = p["catLink"] as String
-                registerMainAPI(PlayZTV(title, catLink))
-            }
+        // Register live-events (always on)
+        registerMainAPI(PlayZTVLiveEventsProvider())
 
-        // Hook up the settings screen
-        val act = context as AppCompatActivity
+        // Register each enabled IPTV provider
+        for (entry in providerList) {
+            val name = entry["title"] as? String ?: continue
+            if (enabled[name] != true) continue
+            val link = entry["catLink"] as? String ?: continue
+            registerMainAPI(PlayZTV(name, link))
+        }
+
+        // Wire up the settings dialog
+        val activity = context as AppCompatActivity
         openSettings = {
             PlayZTVSettings(
                 this,
-                sharedPref,
-                iptvProviders.mapNotNull { it["title"] as? String }
-            ).show(act.supportFragmentManager, "PlayZTVSettings")
+                prefs,
+                providerList.mapNotNull { it["title"] as? String }
+            ).show(activity.supportFragmentManager, "PlayZTVSettings")
         }
     }
 }

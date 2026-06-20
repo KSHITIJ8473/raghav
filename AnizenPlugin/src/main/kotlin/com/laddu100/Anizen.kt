@@ -1,25 +1,7 @@
 package com.laddu100
 
 import com.fasterxml.jackson.annotation.JsonProperty
-import com.lagradost.cloudstream3.Episode
-import com.lagradost.cloudstream3.HomePageResponse
-import com.lagradost.cloudstream3.LoadResponse
-import com.lagradost.cloudstream3.MainAPI
-import com.lagradost.cloudstream3.MainPageRequest
-import com.lagradost.cloudstream3.SearchResponse
-import com.lagradost.cloudstream3.SearchResponseList
-import com.lagradost.cloudstream3.SubtitleFile
-import com.lagradost.cloudstream3.TvType
-import com.lagradost.cloudstream3.app
-import com.lagradost.cloudstream3.fixUrl
-import com.lagradost.cloudstream3.fixUrlNull
-import com.lagradost.cloudstream3.mainPageOf
-import com.lagradost.cloudstream3.newEpisode
-import com.lagradost.cloudstream3.newHomePageResponse
-import com.lagradost.cloudstream3.newMovieLoadResponse
-import com.lagradost.cloudstream3.newMovieSearchResponse
-import com.lagradost.cloudstream3.newTvSeriesLoadResponse
-import com.lagradost.cloudstream3.toNewSearchResponseList
+import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.loadExtractor
 import kotlinx.coroutines.async
@@ -101,23 +83,47 @@ class Anizen : MainAPI() {
 
         val recommendations = emptyList<SearchResponse>()
 
-        return if (tvType == TvType.AnimeMovie) {
-            newMovieLoadResponse(title, url, TvType.AnimeMovie, EpisodeData(dataId, 1).toString()) {
-                this.posterUrl = poster
-                this.plot = description
-                this.year = year
-                this.tags = genres
-                this.recommendations = recommendations
-            }
+        val episodes = if (tvType == TvType.AnimeMovie) {
+            listOf(
+                newEpisode(EpisodeData("movie", dataId, 1).toString()) {
+                    this.name = title
+                    this.episode = 1
+                }
+            )
         } else {
-            val episodes = fetchEpisodes(dataId, totalEpisodes)
-            newTvSeriesLoadResponse(title, url, TvType.Anime, episodes) {
-                this.posterUrl = poster
-                this.plot = description
-                this.year = year
-                this.tags = genres
-                this.recommendations = recommendations
+            fetchEpisodes(dataId, totalEpisodes)
+        }
+
+        val subEpisodes = episodes.map { ep ->
+            val oldData = EpisodeData.fromString(ep.data)
+            val newData = EpisodeData("sub", oldData?.dataId ?: dataId, ep.episode ?: 1).toString()
+            newEpisode(newData) {
+                this.name = ep.name
+                this.episode = ep.episode
+                this.description = ep.description
+                this.posterUrl = ep.posterUrl
             }
+        }
+
+        val dubEpisodes = episodes.map { ep ->
+            val oldData = EpisodeData.fromString(ep.data)
+            val newData = EpisodeData("dub", oldData?.dataId ?: dataId, ep.episode ?: 1).toString()
+            newEpisode(newData) {
+                this.name = ep.name
+                this.episode = ep.episode
+                this.description = ep.description
+                this.posterUrl = ep.posterUrl
+            }
+        }
+
+        return newAnimeLoadResponse(title, url, tvType) {
+            this.posterUrl = poster
+            this.plot = description
+            this.year = year
+            this.tags = genres
+            this.recommendations = recommendations
+            if (subEpisodes.isNotEmpty()) addEpisodes(DubStatus.Subbed, subEpisodes)
+            if (dubEpisodes.isNotEmpty()) addEpisodes(DubStatus.Dubbed, dubEpisodes)
         }
     }
 
@@ -133,6 +139,16 @@ class Anizen : MainAPI() {
             headers = headers
         ).parsedSafe<ServerResponse>() ?: return false
 
+        val requestedType = episodeData.type.lowercase()
+        val filteredServers = response.servers.filter { server ->
+            val serverType = server.type.lowercase()
+            when (requestedType) {
+                "sub" -> serverType == "sub" || serverType == "hindi"
+                "dub" -> serverType == "dub" || serverType == "hindi"
+                else -> true
+            }
+        }
+
         var loadedLinks = false
         val wrappedCallback: (ExtractorLink) -> Unit = { link ->
             loadedLinks = true
@@ -140,7 +156,7 @@ class Anizen : MainAPI() {
         }
 
         coroutineScope {
-            response.servers.sortedBy { it.priority() }.map { server ->
+            filteredServers.sortedBy { it.priority() }.map { server ->
                 async {
                     runCatching {
                         val embed = server.embed?.takeIf { it.isNotBlank() } ?: server.iframeUrl?.takeIf { it.isNotBlank() }
@@ -159,10 +175,12 @@ class Anizen : MainAPI() {
                                 embed.contains("megaplay.buzz") -> AnizenMegaPlay(sourceName).getUrl(embed, mainUrl, subtitleCallback, wrappedCallback)
                                 embed.contains("vidwish.live") -> AnizenVidWish(sourceName).getUrl(embed, mainUrl, subtitleCallback, wrappedCallback)
                                 embed.contains("vidtube.site") -> AnizenVidTube(sourceName).getUrl(embed, mainUrl, subtitleCallback, wrappedCallback)
-                                embed.contains("playerp2p.live") || embed.contains("gdmirrorbot.") || embed.contains("boosterx.") -> {
-                                    AnizenWebView(sourceName, embed.baseUrl()).getUrl(embed, mainUrl, subtitleCallback, wrappedCallback)
+                                else -> {
+                                    val loaded = loadExtractor(embed, mainUrl, subtitleCallback, wrappedCallback)
+                                    if (!loaded) {
+                                        AnizenWebView(sourceName, embed.baseUrl()).getUrl(embed, mainUrl, subtitleCallback, wrappedCallback)
+                                    }
                                 }
-                                else -> loadExtractor(embed, mainUrl, subtitleCallback, wrappedCallback)
                             }
                         }
                     }
@@ -176,14 +194,14 @@ class Anizen : MainAPI() {
         val response = app.get("$mainUrl/ajax/episodes/$dataId", headers = headers).parsedSafe<EpisodeResponse>()
         val episodes = response?.episodes?.mapNotNull { ep ->
             val no = ep.no ?: return@mapNotNull null
-            newEpisode(EpisodeData(dataId, no).toString()) {
+            newEpisode(EpisodeData("all", dataId, no).toString()) {
                 this.name = ep.title ?: "Episode $no"
                 this.episode = no
             }
         }.orEmpty()
         return episodes.ifEmpty {
             (1..fallbackCount).map { no ->
-                newEpisode(EpisodeData(dataId, no).toString()) {
+                newEpisode(EpisodeData("all", dataId, no).toString()) {
                     this.name = "Episode $no"
                     this.episode = no
                 }
@@ -204,13 +222,25 @@ class Anizen : MainAPI() {
         }
     }
 
-    private data class EpisodeData(val dataId: String, val episode: Int) {
-        override fun toString(): String = "$dataId|$episode"
+    private data class EpisodeData(val type: String, val dataId: String, val episode: Int) {
+        override fun toString(): String = "$type|$dataId|$episode"
 
         companion object {
             fun fromString(data: String): EpisodeData? {
                 val split = data.split("|")
-                val rawDataId = split.getOrNull(0)?.trim()?.takeIf { it.isNotBlank() } ?: return null
+                if (split.size < 3) {
+                    val rawDataId = split.getOrNull(0)?.trim()?.takeIf { it.isNotBlank() } ?: return null
+                    val cleanDataId = rawDataId
+                        .substringBefore("?")
+                        .substringBefore("#")
+                        .removeSuffix("/")
+                        .substringAfterLast("/")
+                        .takeIf { it.isNotBlank() }
+                        ?: return null
+                    return EpisodeData("all", cleanDataId, split.getOrNull(1)?.toIntOrNull() ?: 1)
+                }
+                val type = split[0]
+                val rawDataId = split[1]
                 val cleanDataId = rawDataId
                     .substringBefore("?")
                     .substringBefore("#")
@@ -218,7 +248,7 @@ class Anizen : MainAPI() {
                     .substringAfterLast("/")
                     .takeIf { it.isNotBlank() }
                     ?: return null
-                return EpisodeData(cleanDataId, split.getOrNull(1)?.toIntOrNull() ?: 1)
+                return EpisodeData(type, cleanDataId, split[2].toIntOrNull() ?: 1)
             }
         }
     }
@@ -248,15 +278,19 @@ class Anizen : MainAPI() {
     )
 
     private fun AniServer.priority(): Int {
-        val key = "${serverName.lowercase()} ${type.lowercase()} ${embed.orEmpty().lowercase()} ${iframeUrl.orEmpty().lowercase()}"
+        if (type.lowercase() == "hindi") {
+            return 10
+        }
+        val key = "${serverName.lowercase()} ${embed.orEmpty().lowercase()} ${iframeUrl.orEmpty().lowercase()}"
         return when {
-            key.contains("gdmirror") || key.contains("mirror") || key.contains("default") -> 0
-            key.contains("ryzex") || key.contains("abyss") -> 1
-            key.contains("megaplay") || key.contains("vidstream") -> 2
-            key.contains("vidwish") || key.contains("vidcloud") -> 3
-            key.contains("boosterx") || key.contains("playerx") -> 4
-            key.contains("vidstack") || key.contains("playerp2p") || key.contains("streamp2p") -> 5
-            else -> 6
+            key.contains("megaplay") || key.contains("vidstream") -> 0
+            key.contains("vidwish") || key.contains("vidcloud") -> 1
+            key.contains("vidtube") || key.contains("vidplay") -> 2
+            key.contains("ryzex") || key.contains("abyss") -> 3
+            key.contains("gdmirror") || key.contains("mirror") || key.contains("default") -> 4
+            key.contains("boosterx") || key.contains("playerx") -> 5
+            key.contains("vidstack") || key.contains("playerp2p") || key.contains("streamp2p") -> 6
+            else -> 7
         }
     }
 

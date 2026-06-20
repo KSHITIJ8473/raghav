@@ -40,12 +40,14 @@ class StreamEastProvider : MainAPI() {
         .readTimeout(5, TimeUnit.SECONDS)
         .build()
 
-    // Custom client that uses our DNS resolver to bypass local ISP DNS blocks
-    private val dnsClient = OkHttpClient.Builder()
-        .dns(customDns)
-        .connectTimeout(15, TimeUnit.SECONDS)
-        .readTimeout(15, TimeUnit.SECONDS)
-        .build()
+    // Custom OkHttpClient delegating to CloudStream's global baseClient but with overridden DNS
+    private val dnsClient by lazy {
+        app.baseClient.newBuilder()
+            .dns(customDns)
+            .connectTimeout(15, TimeUnit.SECONDS)
+            .readTimeout(15, TimeUnit.SECONDS)
+            .build()
+    }
 
     // ── Helper to resolve IPs dynamically using Cloudflare DoH (directly via 1.1.1.1 IP) ────
     private fun resolveDnsDoH(hostname: String): List<InetAddress> {
@@ -101,8 +103,19 @@ class StreamEastProvider : MainAPI() {
         }
     }
 
+    private fun decodeHtmlEntities(text: String): String {
+        return text
+            .replace("&amp;", "&")
+            .replace("&#039;", "'")
+            .replace("&apos;", "'")
+            .replace("&quot;", "\"")
+            .replace("&lt;", "<")
+            .replace("&gt;", ">")
+    }
+
     private fun stripHtml(html: String): String {
-        return html.replace(Regex("<[^>]*>"), "").replace(Regex("\\s+"), " ").trim()
+        val clean = html.replace(Regex("<[^>]*>"), "").replace(Regex("\\s+"), " ").trim()
+        return decodeHtmlEntities(clean)
     }
 
     // ── Data classes ──────────────────────────────────────────────────────────
@@ -137,65 +150,65 @@ class StreamEastProvider : MainAPI() {
         try {
             val html = customGet("$mainUrl/v52")
             
-            // Extract event links matching f1-podium--link class
-            val eventRegex = """<a\s+[^>]*class="[^"]*f1-podium--link[^"]*"[^>]*href="([^"]+)"[^>]*>(.*?)</a>""".toRegex(RegexOption.DOT_MATCHES_ALL)
-            val matches = eventRegex.findAll(html)
+            // Extract event links matching f1-podium--link class in a robust way
+            val aTagRegex = """<a\s+([^>]+)>(.*?)</a>""".toRegex(RegexOption.DOT_MATCHES_ALL)
+            val hrefRegex = """href="([^"]+)"""".toRegex()
+            val timeRegex = """(\d+)\s+(minute|hour|day)[s]?\s+from\s+now""".toRegex(RegexOption.IGNORE_CASE)
 
-            matches.forEach { match ->
-                val href = match.groupValues[1]
-                val cleanUrl = if (href.startsWith("http")) href else "$mainUrl${if (href.startsWith("/")) "" else "/"}$href"
-                val rawText = match.groupValues[2]
-                val cleanText = stripHtml(rawText)
+            aTagRegex.findAll(html).forEach { match ->
+                val attrs = match.groupValues[1]
+                val body = match.groupValues[2]
 
-                if (cleanText.isNotBlank()) {
-                    var isLive = false
-                    var title = cleanText
-                    var shortTime = ""
+                if (attrs.contains("f1-podium--link")) {
+                    val hrefMatch = hrefRegex.find(attrs)
+                    val href = hrefMatch?.groupValues?.get(1) ?: return@forEach
+                    val cleanUrl = if (href.startsWith("http")) href else "$mainUrl${if (href.startsWith("/")) "" else "/"}$href"
+                    
+                    val cleanText = stripHtml(body)
 
-                    if (cleanText.endsWith(" LIVE", ignoreCase = true)) {
-                        isLive = true
-                        title = cleanText.substring(0, cleanText.length - 5).trim()
-                    } else {
-                        val fromNowIndex = cleanText.lastIndexOf(" from now", ignoreCase = true)
-                        if (fromNowIndex != -1) {
-                            val suffix = cleanText.substring(fromNowIndex)
-                            title = cleanText.substring(0, fromNowIndex).trim()
-                            
-                            val timeMatch = """(\d+)\s+(minute|hour|day)""".toRegex(RegexOption.IGNORE_CASE).find(suffix)
-                            shortTime = if (timeMatch != null) {
+                    if (cleanText.isNotBlank()) {
+                        var isLive = false
+                        var title = cleanText
+                        var shortTime = ""
+
+                        if (cleanText.endsWith(" LIVE", ignoreCase = true)) {
+                            isLive = true
+                            title = cleanText.substring(0, cleanText.length - 5).trim()
+                        } else {
+                            val timeMatch = timeRegex.find(cleanText)
+                            if (timeMatch != null) {
                                 val num = timeMatch.groupValues[1]
                                 val unit = timeMatch.groupValues[2].lowercase()[0]
-                                "$num$unit"
-                            } else {
-                                "soon"
+                                shortTime = "$num$unit"
+                                title = cleanText.substring(0, timeMatch.range.first).trim()
+                            } else if (cleanText.contains(" LIVE", ignoreCase = true)) {
+                                isLive = true
+                                title = cleanText.replace(" LIVE", "", ignoreCase = true).trim()
                             }
-                        } else if (cleanText.contains(" LIVE", ignoreCase = true)) {
-                            isLive = true
-                            title = cleanText.replace(" LIVE", "", ignoreCase = true).trim()
                         }
-                    }
 
-                    val displayTitle = if (isLive) {
-                        "[LIVE] $title"
-                    } else {
-                        "[UPCOMING - $shortTime] $title"
-                    }
+                        val displayTitle = if (isLive) {
+                            "[LIVE] $title"
+                        } else {
+                            if (shortTime.isNotEmpty()) "[UPCOMING - $shortTime] $title" else "[UPCOMING] $title"
+                        }
 
-                    val loadData = EventLoadData(
-                        title = title,
-                        url = cleanUrl,
-                        posterUrl = "",
-                        isLive = isLive
-                    )
+                        val loadData = EventLoadData(
+                            title = title,
+                            url = cleanUrl,
+                            posterUrl = "",
+                            isLive = isLive
+                        )
 
-                    val searchRes = newLiveSearchResponse(displayTitle, loadData.toJson(), TvType.Live) {
-                        this.posterUrl = ""
-                    }
+                        val searchRes = newLiveSearchResponse(displayTitle, loadData.toJson(), TvType.Live) {
+                            this.posterUrl = ""
+                        }
 
-                    if (isLive) {
-                        liveItems.add(searchRes)
-                    } else {
-                        upcomingItems.add(searchRes)
+                        if (isLive) {
+                            liveItems.add(searchRes)
+                        } else {
+                            upcomingItems.add(searchRes)
+                        }
                     }
                 }
             }

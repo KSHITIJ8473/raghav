@@ -38,7 +38,8 @@ class Miruro : MainAPI() {
         TvType.OVA
     )
 
-    private val providerOrder = listOf("kiwi", "pewe", "bonk", "bee", "ally", "hop", "moo")
+    private val providerOrder = listOf("kiwi", "pewe", "bonk", "bee", "ally", "hop", "moo", "nun", "bun", "twin", "cog")
+
 
     // Display names for providers
     private val providerDisplayNames = mapOf(
@@ -48,7 +49,11 @@ class Miruro : MainAPI() {
         "bee"  to "AniKoto",
         "ally" to "AllManga",
         "hop"  to "KickAssAnime",
-        "moo"  to "AnimeGG"
+        "moo"  to "AnimeGG",
+        "nun"  to "Nun",
+        "bun"  to "Bun",
+        "twin" to "Twin",
+        "cog"  to "Cog"
     )
 
     override val mainPage = mainPageOf(
@@ -301,18 +306,20 @@ class Miruro : MainAPI() {
                 val quality = qualityFromString(stream.quality)
                 val qualityLabel = stream.quality ?: "Auto"
                 val fansubLabel = if (!stream.fansub.isNullOrEmpty()) " [${stream.fansub}]" else ""
+                val userAgent = "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
+                val finalUrl = resolveHls(m3u8Url, referer, userAgent)
 
                 callback.invoke(
                     newExtractorLink(
                         source = "Miruro",
                         name = "$displayName$fansubLabel - $qualityLabel",
-                        url = m3u8Url,
+                        url = finalUrl,
                         type = ExtractorLinkType.M3U8
                     ) {
                         this.quality = quality
                         this.headers = mapOf(
                             "Referer" to referer,
-                            "User-Agent" to "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
+                            "User-Agent" to userAgent
                         )
                     }
                 )
@@ -391,5 +398,60 @@ class Miruro : MainAPI() {
             .replace(Regex("\\s+"), "-")
             .replace(Regex("-+"), "-")
             .trim('-')
+    }
+
+    private suspend fun resolveHls(
+        m3u8Url: String,
+        referer: String,
+        userAgent: String
+    ): String {
+        try {
+            val res = app.get(
+                url = m3u8Url,
+                headers = mapOf(
+                    "Referer" to referer,
+                    "User-Agent" to userAgent
+                )
+            )
+            val m3u8Text = res.text
+            val keyUri = Regex("""URI=["']([^"']+)""").find(m3u8Text)?.groupValues?.get(1)
+            if (keyUri != null && !keyUri.startsWith("data:")) {
+                val absoluteKeyUri = if (keyUri.startsWith("http")) {
+                    keyUri
+                } else {
+                    val base = m3u8Url.substringBeforeLast("/")
+                    "$base/$keyUri"
+                }
+
+                val keyRes = app.get(
+                    url = absoluteKeyUri,
+                    headers = mapOf(
+                        "Referer" to referer,
+                        "User-Agent" to userAgent
+                    )
+                )
+                val keyBytes = keyRes.body.bytes()
+                val base64Key = android.util.Base64.encodeToString(keyBytes, android.util.Base64.NO_WRAP)
+                val newM3u8Text = m3u8Text.replace(keyUri, "data:text/plain;base64,$base64Key")
+                
+                // Rewrite any relative segment URLs to absolute URLs just in case
+                val lines = newM3u8Text.split("\n").map { line ->
+                    val trimmed = line.trim()
+                    if (trimmed.isNotEmpty() && !trimmed.startsWith("#") && !trimmed.startsWith("http")) {
+                        val base = m3u8Url.substringBeforeLast("/")
+                        "$base/$trimmed"
+                    } else {
+                        line
+                    }
+                }
+                val rewrittenM3u8 = lines.joinToString("\n")
+                
+                val base64M3u8 = android.util.Base64.encodeToString(rewrittenM3u8.toByteArray(Charsets.UTF_8), android.util.Base64.NO_WRAP)
+                return "data:application/vnd.apple.mpegurl;base64,$base64M3u8"
+            }
+        } catch (e: Exception) {
+            // ignore
+        }
+        return m3u8Url
     }
 }

@@ -138,23 +138,23 @@ class Anizen : MainAPI() {
             "$mainUrl/ajax/servers/${episodeData.dataId}?ep=${episodeData.episode}",
             headers = headers
         ).parsedSafe<ServerResponse>() ?: return false
-
+ 
         val requestedType = episodeData.type.lowercase()
         val filteredServers = response.servers.filter { server ->
             val serverType = server.type.lowercase()
             when (requestedType) {
-                "sub" -> serverType == "sub" || serverType == "hindi"
-                "dub" -> serverType == "dub" || serverType == "hindi"
+                "sub" -> serverType == "sub" || serverType == "hsub" || serverType == "h-sub" || serverType == "raw" || serverType == "hindi"
+                "dub" -> serverType == "dub" || serverType == "adub" || serverType == "a-dub" || serverType == "hindi"
                 else -> true
             }
         }
-
+ 
         var loadedLinks = false
         val wrappedCallback: (ExtractorLink) -> Unit = { link ->
             loadedLinks = true
             callback(link)
         }
-
+ 
         coroutineScope {
             filteredServers.sortedBy { it.priority() }.map { server ->
                 async {
@@ -166,6 +166,26 @@ class Anizen : MainAPI() {
                                 .distinct()
                                 .joinToString(" ")
                             when {
+                                embed.contains("plyr.php#") -> {
+                                    val b64 = embed.substringAfter("#").substringBefore("#")
+                                    val decodedUrl = try {
+                                        String(android.util.Base64.decode(b64, android.util.Base64.DEFAULT), Charsets.UTF_8)
+                                    } catch (e: Exception) {
+                                        ""
+                                    }
+                                    if (decodedUrl.isNotBlank()) {
+                                        wrappedCallback(
+                                            com.lagradost.cloudstream3.utils.newExtractorLink(
+                                                sourceName,
+                                                sourceName,
+                                                decodedUrl,
+                                                if (decodedUrl.contains(".m3u8")) com.lagradost.cloudstream3.utils.ExtractorLinkType.M3U8 else com.lagradost.cloudstream3.utils.ExtractorLinkType.VIDEO
+                                            ) {
+                                                this.referer = "https://gogoanime.me.uk/"
+                                            }
+                                        )
+                                    }
+                                }
                                 embed.contains("ryzex.top") -> {
                                     AnizenRyzex().apply { name = sourceName }.getUrl(embed, mainUrl, subtitleCallback, wrappedCallback)
                                 }

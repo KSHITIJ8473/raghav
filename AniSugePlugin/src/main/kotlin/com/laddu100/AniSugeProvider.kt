@@ -9,6 +9,10 @@ import com.lagradost.cloudstream3.network.CloudflareKiller
 import com.lagradost.api.Log
 import org.jsoup.Jsoup
 import java.net.URLEncoder
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+
 
 class AniSugeProvider : MainAPI() {
     override var mainUrl = "https://anisuge.tv"
@@ -263,10 +267,10 @@ class AniSugeProvider : MainAPI() {
         isCasting: Boolean,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
-    ): Boolean {
-        if (!data.startsWith("https://")) return false
+    ): Boolean = coroutineScope {
+        if (!data.startsWith("https://")) return@coroutineScope false
         val parts = data.split("|")
-        if (parts.size < 5) return false
+        if (parts.size < 5) return@coroutineScope false
         val baseUrl = parts[0]
         val animeId = parts[1]
         val epNum = parts[2]
@@ -284,18 +288,18 @@ class AniSugeProvider : MainAPI() {
         ).text
 
         val serverListJson = parseJson<EpsResponse>(serverListResponseText)
-        val serverListHtml = serverListJson.result ?: return false
+        val serverListHtml = serverListJson.result ?: return@coroutineScope false
         val serverListSoup = Jsoup.parse(serverListHtml)
 
         val serverTypes = serverListSoup.select(".server-type")
-        var foundAny = false
+        val serversToLoad = mutableListOf<Pair<String, String>>() // Pair of serverName, linkId
 
         for (st in serverTypes) {
             val typeAttr = st.attr("data-type")
             val isMatch = if (selectedType == "sub") {
-                typeAttr == "sub" || typeAttr == "hsub"
+                typeAttr == "sub" || typeAttr == "hsub" || typeAttr == "h-sub" || typeAttr == "raw"
             } else {
-                typeAttr == "dub"
+                typeAttr == "dub" || typeAttr == "adub" || typeAttr == "a-dub"
             }
 
             if (!isMatch) continue
@@ -304,6 +308,19 @@ class AniSugeProvider : MainAPI() {
             for (s in servers) {
                 val linkId = s.attr("data-link-id") ?: continue
                 val serverName = s.selectFirst("span")?.text()?.trim() ?: "Unknown Server"
+                serversToLoad.add(Pair(serverName, linkId))
+            }
+        }
+
+        if (serversToLoad.isEmpty()) return@coroutineScope false
+
+        val loadedResults = serversToLoad.map { (serverName, linkId) ->
+            async {
+                var loadedSingle = false
+                val wrappedCallback: (ExtractorLink) -> Unit = { link ->
+                    loadedSingle = true
+                    callback(link)
+                }
 
                 try {
                     val serverInfoText = app.get(
@@ -317,70 +334,175 @@ class AniSugeProvider : MainAPI() {
                     ).text
 
                     val serverInfoJson = parseJson<ServerInfoResponse>(serverInfoText)
-                    val playerUrl = serverInfoJson.result?.url ?: continue
+                    val playerUrl = serverInfoJson.result?.url ?: return@async false
 
                     val parsedUrl = java.net.URI(playerUrl)
                     val embedBase = "${parsedUrl.scheme}://${parsedUrl.host}"
 
-                    val playerPageHtml = app.get(
-                        url = playerUrl,
-                        headers = mapOf(
-                            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-                            "Referer" to "$baseUrl/"
-                        )
-                    ).text
-
-                    val playerPageSoup = Jsoup.parse(playerPageHtml)
-                    val playerId = playerPageSoup.selectFirst("#megaplay-player")?.attr("data-id")
-                        ?: Regex("""data-id=["'](\d+)""").find(playerPageHtml)?.groupValues?.get(1)
-                        ?: Regex("""/stream/s-\d+/(\d+)""").find(playerUrl)?.groupValues?.get(1)
-                        ?: continue
-
-                    val sourcesText = app.get(
-                        url = "$embedBase/stream/getSources?id=$playerId&type=$selectedType",
-                        headers = mapOf(
-                            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-                            "Referer" to playerUrl,
-                            "X-Requested-With" to "XMLHttpRequest",
-                            "Origin" to embedBase
-                        )
-                    ).text
-
-                    val sourcesJson = parseJson<SourcesResponse>(sourcesText)
-                    val m3u8Url = sourcesJson.sources?.file
-
-                    if (!m3u8Url.isNullOrEmpty()) {
-                        M3u8Helper.generateM3u8(
-                            source = "$name - $serverName",
-                            streamUrl = m3u8Url,
-                            referer = embedBase,
-                            headers = mapOf(
-                                "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-                                "Referer" to "$embedBase/"
-                            )
-                        ).forEach(callback)
-
-                        foundAny = true
-                    }
-
-                    sourcesJson.tracks?.forEach { track ->
-                        val file = track.file ?: return@forEach
-                        if (track.kind == "captions" || track.kind == "subtitles") {
-                            subtitleCallback(
-                                newSubtitleFile(track.label ?: "Subtitle", file) {
-                                    this.headers = mapOf("Referer" to "$embedBase/")
+                    // Try direct plyr.php / KiwiStream base64 decoding first
+                    if (playerUrl.contains("plyr.php#")) {
+                        val b64 = playerUrl.substringAfter("#").substringBefore("#")
+                        val decodedUrl = try {
+                            String(android.util.Base64.decode(b64, android.util.Base64.DEFAULT), Charsets.UTF_8)
+                        } catch (e: Exception) {
+                            ""
+                        }
+                        if (decodedUrl.isNotBlank()) {
+                            wrappedCallback(
+                                newExtractorLink(
+                                    serverName,
+                                    serverName,
+                                    decodedUrl,
+                                    if (decodedUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                                ) {
+                                    this.referer = "https://gogoanime.me.uk/"
                                 }
                             )
+                            return@async true
                         }
                     }
 
+                    // Otherwise check if it is a Megaplay clone or custom embed
+                    val isMegaplayClone = playerUrl.contains("megaplay.buzz") || 
+                                          playerUrl.contains("vidwish.live") || 
+                                          playerUrl.contains("vidtube.site") ||
+                                          playerUrl.contains("vidstream") || 
+                                          playerUrl.contains("vidplay")
+
+                    if (isMegaplayClone) {
+                        try {
+                            val playerPageHtml = app.get(
+                                url = playerUrl,
+                                headers = mapOf(
+                                    "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+                                    "Referer" to "$baseUrl/"
+                                )
+                            ).text
+
+                            val playerPageSoup = Jsoup.parse(playerPageHtml)
+                            val playerId = playerPageSoup.selectFirst("#megaplay-player")?.attr("data-id")
+                                ?: Regex("""data-id=["'](\d+)""").find(playerPageHtml)?.groupValues?.get(1)
+                                ?: playerPageSoup.selectFirst("#megaplay-player")?.attr("data-realid")
+                                ?: Regex("""data-realid=["'](\d+)""").find(playerPageHtml)?.groupValues?.get(1)
+                                ?: Regex("""/stream/s-\d+/(\d+)""").find(playerUrl)?.groupValues?.get(1)
+
+                            if (playerId != null) {
+                                val sourcesText = app.get(
+                                    url = "$embedBase/stream/getSources?id=$playerId&type=$selectedType",
+                                    headers = mapOf(
+                                        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+                                        "Referer" to playerUrl,
+                                        "X-Requested-With" to "XMLHttpRequest",
+                                        "Origin" to embedBase
+                                    )
+                                ).text
+
+                                val sourcesJson = parseJson<SourcesResponse>(sourcesText)
+                                val m3u8Url = sourcesJson.sources?.file
+
+                                if (!m3u8Url.isNullOrEmpty()) {
+                                    M3u8Helper.generateM3u8(
+                                        source = "$name - $serverName",
+                                        streamUrl = m3u8Url,
+                                        referer = embedBase,
+                                        headers = mapOf(
+                                            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+                                            "Referer" to "$embedBase/"
+                                        )
+                                    ).forEach(wrappedCallback)
+                                }
+
+                                sourcesJson.tracks?.forEach { track ->
+                                    val file = track.file ?: return@forEach
+                                    if (track.kind == "captions" || track.kind == "subtitles") {
+                                        subtitleCallback(
+                                            newSubtitleFile(track.label ?: "Subtitle", file) {
+                                                this.headers = mapOf("Referer" to "$embedBase/")
+                                            }
+                                        )
+                                    }
+                                }
+                            }
+                        } catch (e: Exception) {
+                            Log.e("AniSuge", "API extraction failed for $serverName, trying WebView: ${e.message}")
+                        }
+
+                        // If API failed to get links for Megaplay clone, use WebViewResolver fallback
+                        if (!loadedSingle) {
+                            try {
+                                val resolver = com.lagradost.cloudstream3.network.WebViewResolver(
+                                    interceptUrl = Regex("""\.m3u8"""),
+                                    additionalUrls = listOf(Regex("""\.m3u8""")),
+                                    script = """document.querySelector('.jw-icon-display')?.click();""",
+                                    useOkhttp = false,
+                                    timeout = 15_000L
+                                )
+                                val m3u8 = app.get(playerUrl, referer = "$baseUrl/", interceptor = resolver).url
+                                if (m3u8.contains(".m3u8")) {
+                                    M3u8Helper.generateM3u8(
+                                        source = "$name - $serverName",
+                                        streamUrl = m3u8,
+                                        referer = embedBase,
+                                        headers = mapOf(
+                                            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+                                            "Referer" to "$embedBase/"
+                                        )
+                                    ).forEach(wrappedCallback)
+                                }
+                            } catch (e: Exception) {
+                                Log.e("AniSuge", "WebView extraction failed for $serverName: ${e.message}")
+                            }
+                        }
+                    } else {
+                        // Custom embed or kiwi stream
+                        val loaded = loadExtractor(playerUrl, "$baseUrl/", subtitleCallback, wrappedCallback)
+                        if (!loaded) {
+                            try {
+                                val resolver = com.lagradost.cloudstream3.network.WebViewResolver(
+                                    interceptUrl = Regex("""(?i)\.(m3u8|mp4)(?:\?|$)"""),
+                                    additionalUrls = listOf(Regex("""(?i)\.(m3u8|mp4)(?:\?|$)""")),
+                                    script = """document.querySelector('button,[role="button"],.jw-icon-display,.vds-play-button')?.click();""",
+                                    useOkhttp = false,
+                                    timeout = 20_000L
+                                )
+                                val resolved = app.get(playerUrl, referer = "$baseUrl/", interceptor = resolver).url
+                                val headers = mapOf("Referer" to playerUrl)
+                                when {
+                                    resolved.contains(".m3u8", ignoreCase = true) -> {
+                                        M3u8Helper.generateM3u8(
+                                            source = "$name - $serverName",
+                                            streamUrl = resolved,
+                                            referer = playerUrl,
+                                            headers = headers
+                                        ).forEach(wrappedCallback)
+                                    }
+                                    resolved.contains(".mp4", ignoreCase = true) -> {
+                                        wrappedCallback(
+                                            newExtractorLink(
+                                                source = "$name - $serverName",
+                                                name = "$name - $serverName",
+                                                url = resolved,
+                                                type = ExtractorLinkType.VIDEO
+                                            ) {
+                                                quality = getQualityFromName(resolved)
+                                                this.headers = headers
+                                            }
+                                        )
+                                    }
+                                }
+                            } catch (e: Exception) {
+                                Log.e("AniSuge", "Custom WebView extraction failed for $serverName: ${e.message}")
+                            }
+                        }
+                    }
                 } catch (e: Exception) {
                     Log.e("AniSuge", "Failed loading links from server $serverName: ${e.message}")
                 }
+                loadedSingle
             }
-        }
+        }.awaitAll()
 
-        return foundAny
+        loadedResults.any { it }
     }
 
     data class EpsResponse(

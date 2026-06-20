@@ -9,6 +9,7 @@ import okhttp3.Dns
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.net.InetAddress
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 
 class StreamEastProvider : MainAPI() {
@@ -20,24 +21,62 @@ class StreamEastProvider : MainAPI() {
     override val hasChromecastSupport = true
     override val supportedTypes = setOf(TvType.Live)
 
+    // Thread-safe DNS cache to prevent redundant resolutions
+    private val dnsCache = ConcurrentHashMap<String, List<InetAddress>>()
+
+    // Hardcoded IP mappings for domains blocked by ISP DNS
+    private val fallbacks = mapOf(
+        "istreameast.app" to listOf("128.0.104.20"),
+        "gooz.aapmains.net" to listOf("95.214.234.151"),
+        "chatgpt.hereisman.net" to listOf("95.214.234.151"),
+        "grok.hereisman.net" to listOf("185.254.197.14"),
+        "grok2.hereisman.net" to listOf("185.254.197.14")
+    )
+
     // Custom DNS resolver supporting fallback to Cloudflare DNS-over-HTTPS (1.1.1.1)
     private val customDns = object : Dns {
         override fun lookup(hostname: String): List<InetAddress> {
             if (hostname == "1.1.1.1") {
                 return listOf(InetAddress.getByName("1.1.1.1"))
             }
+
+            // 1. Check cache first (0ms overhead)
+            dnsCache[hostname]?.let { return it }
+
+            // 2. Check hardcoded fallbacks (0ms overhead)
+            fallbacks[hostname]?.let { ips ->
+                val inetAddresses = ips.map { InetAddress.getByName(it) }
+                dnsCache[hostname] = inetAddresses
+                return inetAddresses
+            }
+
+            // 3. Try standard DNS first for unblocked domains (e.g. Unsplash, CDNs)
+            try {
+                val systemResolved = Dns.SYSTEM.lookup(hostname)
+                if (systemResolved.isNotEmpty()) {
+                    dnsCache[hostname] = systemResolved
+                    return systemResolved
+                }
+            } catch (e: Exception) {
+                // System DNS failed or blocked
+            }
+
+            // 4. Resolve via Cloudflare DNS-over-HTTPS (DoH)
             val resolved = resolveDnsDoH(hostname)
             if (resolved.isNotEmpty()) {
+                dnsCache[hostname] = resolved
                 return resolved
             }
+
+            // 5. Final fallback to System DNS
             return Dns.SYSTEM.lookup(hostname)
         }
     }
 
-    // Dedicated client for DNS-over-HTTPS (DoH) requests, using standard system DNS to make direct IP requests
+    // Dedicated client for DNS-over-HTTPS (DoH) requests, using short timeouts to prevent blocking UI thread
     private val dohClient = OkHttpClient.Builder()
-        .connectTimeout(5, TimeUnit.SECONDS)
-        .readTimeout(5, TimeUnit.SECONDS)
+        .connectTimeout(3, TimeUnit.SECONDS)
+        .readTimeout(3, TimeUnit.SECONDS)
         .build()
 
     // Custom OkHttpClient delegating to CloudStream's global baseClient but with overridden DNS
@@ -51,14 +90,6 @@ class StreamEastProvider : MainAPI() {
 
     // ── Helper to resolve IPs dynamically using Cloudflare DoH (directly via 1.1.1.1 IP) ────
     private fun resolveDnsDoH(hostname: String): List<InetAddress> {
-        val fallbacks = mapOf(
-            "istreameast.app" to listOf("128.0.104.20"),
-            "gooz.aapmains.net" to listOf("95.214.234.151"),
-            "chatgpt.hereisman.net" to listOf("95.214.234.151"),
-            "grok.hereisman.net" to listOf("185.254.197.14"),
-            "grok2.hereisman.net" to listOf("185.254.197.14")
-        )
-
         try {
             val request = Request.Builder()
                 .url("https://1.1.1.1/dns-query?name=$hostname&type=A")
@@ -78,11 +109,6 @@ class StreamEastProvider : MainAPI() {
             }
         } catch (e: Exception) {
             println("StreamEast: DoH resolution failed for $hostname - ${e.message}")
-        }
-
-        // Return hardcoded fallback if DoH is blocked or fails
-        fallbacks[hostname]?.let { ips ->
-            return ips.map { InetAddress.getByName(it) }
         }
 
         return emptyList()
@@ -121,10 +147,10 @@ class StreamEastProvider : MainAPI() {
     private fun getPosterForEvent(url: String, title: String): String {
         val combined = "$url $title".lowercase()
         return when {
-            combined.contains("mlb") || combined.contains("baseball") -> "https://istreameast.app/images/new/new-mlb.webp"
-            combined.contains("nba") || combined.contains("wnba") || combined.contains("basketball") || combined.contains("ncaab") -> "https://istreameast.app/images/new/new-nba.webp"
-            combined.contains("nfl") || combined.contains("cfb") || combined.contains("american football") || combined.contains("ncaa") -> "https://istreameast.app/images/new/new-nfl.webp"
-            combined.contains("nhl") || combined.contains("hockey") -> "https://istreameast.app/images/new/new-nhl.webp"
+            combined.contains("mlb") || combined.contains("baseball") -> "https://images.unsplash.com/photo-1530541930197-ff16ac917b0e?q=80&w=500"
+            combined.contains("nba") || combined.contains("wnba") || combined.contains("basketball") || combined.contains("ncaab") -> "https://images.unsplash.com/photo-1546519638-68e109498ffc?q=80&w=500"
+            combined.contains("nfl") || combined.contains("cfb") || combined.contains("american football") || combined.contains("ncaa") -> "https://images.unsplash.com/photo-1587280501635-68a0e82cd5ff?q=80&w=500"
+            combined.contains("nhl") || combined.contains("hockey") -> "https://images.unsplash.com/photo-1515523110800-9415d13b84a8?q=80&w=500"
             combined.contains("ufc") || combined.contains("mma") || combined.contains("boxing") || combined.contains("fight") -> "https://images.unsplash.com/photo-1549719386-74dfcbf7dbed?q=80&w=500"
             combined.contains("f1") || combined.contains("formula") || combined.contains("motorsport") || combined.contains("gp") -> "https://images.unsplash.com/photo-1568605117036-5fe5e7bab0b7?q=80&w=500"
             combined.contains("soccer") || combined.contains("football") || combined.contains("fifa") || combined.contains("cup") || combined.contains("laliga") || combined.contains("premier") -> "https://images.unsplash.com/photo-1508098682722-e99c43a406b2?q=80&w=500"

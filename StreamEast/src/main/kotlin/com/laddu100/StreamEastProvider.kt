@@ -11,6 +11,7 @@ import okhttp3.Request
 import java.net.InetAddress
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.delay
 
 class StreamEastProvider : MainAPI() {
 
@@ -129,6 +130,31 @@ class StreamEastProvider : MainAPI() {
         }
     }
 
+    private suspend fun customGetWithRetry(
+        url: String,
+        referer: String? = null,
+        maxAttempts: Int = 4,
+        validate: (String) -> Boolean = { true }
+    ): String {
+        var attempts = 0
+        while (attempts < maxAttempts) {
+            try {
+                val html = customGet(url, referer)
+                if (validate(html)) {
+                    return html
+                }
+                println("StreamEast: Validation failed on attempt ${attempts + 1} for $url")
+            } catch (e: Exception) {
+                println("StreamEast: Attempt ${attempts + 1} failed for $url - ${e.message}")
+            }
+            attempts++
+            if (attempts < maxAttempts) {
+                delay(1500)
+            }
+        }
+        return customGet(url, referer) // Final attempt, throw original error if still fails
+    }
+
     private fun decodeHtmlEntities(text: String): String {
         return text
             .replace("&amp;", "&")
@@ -189,7 +215,7 @@ class StreamEastProvider : MainAPI() {
         val upcomingItems = mutableListOf<SearchResponse>()
 
         try {
-            val html = customGet("$mainUrl/v52")
+            val html = customGetWithRetry("$mainUrl/v52") { it.contains("f1-podium--link") }
             
             // Extract event links matching f1-podium--link class in a robust way
             val aTagRegex = """<a\s+([^>]+)>(.*?)</a>""".toRegex(RegexOption.DOT_MATCHES_ALL)
@@ -296,7 +322,7 @@ class StreamEastProvider : MainAPI() {
 
         val streamsList = mutableListOf<StreamInfo>()
         try {
-            val html = customGet(eventUrl)
+            val html = customGetWithRetry(eventUrl) { it.contains("streamId") || it.contains("stream-btn") }
 
             // Extract alternate buttons
             val btnRegex = """id="stream-btn-(\d+)"[^>]*onclick="[^"]*changeStream\(\1\)"[^>]*>\s*([^<]+)""".toRegex(RegexOption.IGNORE_CASE)

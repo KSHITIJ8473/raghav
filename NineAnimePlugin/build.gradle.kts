@@ -3,7 +3,7 @@ version = 1
 cloudstream {
     language = "en"
     description = "anime from 9anime clone with sub and dub"
-    authors = listOf("KSHITIJ8473")
+    authors = listOf("raghav")
 
     status = 1
     tvTypes = listOf(

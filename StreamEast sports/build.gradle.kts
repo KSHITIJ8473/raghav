@@ -1,5 +1,5 @@
 // use an integer for version numbers
-version = 1
+version = 2
 
 android {
     buildFeatures {
@@ -24,5 +24,5 @@ cloudstream {
         "Live",
     )
 
-    iconUrl = "https://istreameast.app/images/new/new-nfl.webp"
+    iconUrl = "https://d3e6ckxkrs5ntg.cloudfront.net/artists/images/8639152/original/crop:x0y0w500h500/hash:1698153106/a.jpg?1698153106"
 }

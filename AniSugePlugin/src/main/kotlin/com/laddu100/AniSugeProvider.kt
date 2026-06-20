@@ -245,11 +245,7 @@ class AniSugeProvider : MainAPI() {
             }
         }
 
-        val tvType = if (soup.selectFirst(".status .type")?.text()?.contains("MOVIE", ignoreCase = true) == true) {
-            TvType.AnimeMovie
-        } else {
-            TvType.Anime
-        }
+        val tvType = TvType.Anime
 
         return newAnimeLoadResponse(title, url, tvType) {
             this.posterUrl = poster
@@ -349,11 +345,7 @@ class AniSugeProvider : MainAPI() {
                         }
                         if (decodedUrl.isNotBlank()) {
                             val userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-                            val finalUrl = if (decodedUrl.contains(".m3u8")) {
-                                resolveHls(decodedUrl, "https://gogoanime.me.uk/", userAgent)
-                            } else {
-                                decodedUrl
-                            }
+                            val finalUrl = decodedUrl
                             wrappedCallback(
                                 newExtractorLink(
                                     serverName,
@@ -446,7 +438,7 @@ class AniSugeProvider : MainAPI() {
                                 val m3u8 = app.get(playerUrl, referer = "$baseUrl/", interceptor = resolver).url
                                 if (m3u8.contains(".m3u8")) {
                                     val userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-                                    val finalUrl = resolveHls(m3u8, embedBase, userAgent)
+                                    val finalUrl = m3u8
                                     M3u8Helper.generateM3u8(
                                         source = "$name - $serverName",
                                         streamUrl = finalUrl,
@@ -478,12 +470,14 @@ class AniSugeProvider : MainAPI() {
                                 when {
                                     resolved.contains(".m3u8", ignoreCase = true) -> {
                                         val userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-                                        val finalUrl = resolveHls(resolved, playerUrl, userAgent)
                                         M3u8Helper.generateM3u8(
                                             source = "$name - $serverName",
-                                            streamUrl = finalUrl,
+                                            streamUrl = resolved,
                                             referer = playerUrl,
-                                            headers = headers
+                                            headers = mapOf(
+                                                "User-Agent" to userAgent,
+                                                "Referer" to "$playerUrl/"
+                                            )
                                         ).forEach(wrappedCallback)
                                     }
                                     resolved.contains(".mp4", ignoreCase = true) -> {
@@ -544,58 +538,4 @@ class AniSugeProvider : MainAPI() {
         @JsonProperty("kind") val kind: String? = null
     )
 
-    private suspend fun resolveHls(
-        m3u8Url: String,
-        referer: String,
-        userAgent: String
-    ): String {
-        try {
-            val res = app.get(
-                url = m3u8Url,
-                headers = mapOf(
-                    "Referer" to referer,
-                    "User-Agent" to userAgent
-                )
-            )
-            val m3u8Text = res.text
-            val keyUri = Regex("""URI=["']([^"']+)""").find(m3u8Text)?.groupValues?.get(1)
-            if (keyUri != null && !keyUri.startsWith("data:")) {
-                val absoluteKeyUri = if (keyUri.startsWith("http")) {
-                    keyUri
-                } else {
-                    val base = m3u8Url.substringBeforeLast("/")
-                    "$base/$keyUri"
-                }
-
-                val keyRes = app.get(
-                    url = absoluteKeyUri,
-                    headers = mapOf(
-                        "Referer" to referer,
-                        "User-Agent" to userAgent
-                    )
-                )
-                val keyBytes = keyRes.body.bytes()
-                val base64Key = android.util.Base64.encodeToString(keyBytes, android.util.Base64.NO_WRAP)
-                val newM3u8Text = m3u8Text.replace(keyUri, "data:text/plain;base64,$base64Key")
-                
-                // Rewrite any relative segment URLs to absolute URLs just in case
-                val lines = newM3u8Text.split("\n").map { line ->
-                    val trimmed = line.trim()
-                    if (trimmed.isNotEmpty() && !trimmed.startsWith("#") && !trimmed.startsWith("http")) {
-                        val base = m3u8Url.substringBeforeLast("/")
-                        "$base/$trimmed"
-                    } else {
-                        line
-                    }
-                }
-                val rewrittenM3u8 = lines.joinToString("\n")
-                
-                val base64M3u8 = android.util.Base64.encodeToString(rewrittenM3u8.toByteArray(Charsets.UTF_8), android.util.Base64.NO_WRAP)
-                return "data:application/vnd.apple.mpegurl;base64,$base64M3u8"
-            }
-        } catch (e: Exception) {
-            // ignore
-        }
-        return m3u8Url
-    }
 }

@@ -3,7 +3,7 @@ version = 1
 cloudstream {
     language = "en"
     description = "Anime from AniSuge with Sub and Dub support"
-    authors = listOf("KSHITIJ8473")
+    authors = listOf("raghav")
 
     status = 1
     tvTypes = listOf(

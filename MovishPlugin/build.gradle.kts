@@ -3,7 +3,7 @@ version = 1
 cloudstream {
     language = "en"
     description = "Movish Provider - Movies and TV Shows"
-    authors = listOf("KSHITIJ8473")
+    authors = listOf("raghav")
 
     status = 1
     tvTypes = listOf(

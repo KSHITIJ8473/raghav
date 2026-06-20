@@ -11,7 +11,7 @@ import com.lagradost.cloudstream3.plugins.Plugin
  * events from istreameast.app.
  */
 @CloudstreamPlugin
-class StreamEast sports : Plugin() {
+class StreamEast : Plugin() {
 
     override fun load(context: Context) {
         registerMainAPI(StreamEastProvider())

@@ -1,0 +1,321 @@
+package com.laddu100
+
+import com.lagradost.cloudstream3.*
+import com.lagradost.cloudstream3.utils.*
+import com.lagradost.cloudstream3.utils.AppUtils.parseJson
+import com.lagradost.cloudstream3.utils.AppUtils.toJson
+import com.fasterxml.jackson.annotation.JsonProperty
+import okhttp3.Dns
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import java.net.InetAddress
+import java.util.concurrent.TimeUnit
+
+class StreamEastProvider : MainAPI() {
+
+    override var mainUrl = "https://istreameast.app"
+    override var name = "StreamEast"
+    override var lang = "en"
+    override val hasMainPage = true
+    override val hasChromecastSupport = true
+    override val supportedTypes = setOf(TvType.Live)
+
+    // Custom DNS resolver supporting fallback to Cloudflare DNS-over-HTTPS (1.1.1.1)
+    private val customDns = object : Dns {
+        override fun lookup(hostname: String): List<InetAddress> {
+            if (hostname == "1.1.1.1") {
+                return listOf(InetAddress.getByName("1.1.1.1"))
+            }
+            val resolved = resolveDnsDoH(hostname)
+            if (resolved.isNotEmpty()) {
+                return resolved
+            }
+            return Dns.SYSTEM.lookup(hostname)
+        }
+    }
+
+    // Dedicated client for DNS-over-HTTPS (DoH) requests, using standard system DNS to make direct IP requests
+    private val dohClient = OkHttpClient.Builder()
+        .connectTimeout(5, TimeUnit.SECONDS)
+        .readTimeout(5, TimeUnit.SECONDS)
+        .build()
+
+    // Custom client that uses our DNS resolver to bypass local ISP DNS blocks
+    private val dnsClient = OkHttpClient.Builder()
+        .dns(customDns)
+        .connectTimeout(15, TimeUnit.SECONDS)
+        .readTimeout(15, TimeUnit.SECONDS)
+        .build()
+
+    // ── Helper to resolve IPs dynamically using Cloudflare DoH (directly via 1.1.1.1 IP) ────
+    private fun resolveDnsDoH(hostname: String): List<InetAddress> {
+        val fallbacks = mapOf(
+            "istreameast.app" to listOf("128.0.104.20"),
+            "gooz.aapmains.net" to listOf("95.214.234.151"),
+            "chatgpt.hereisman.net" to listOf("95.214.234.151"),
+            "grok.hereisman.net" to listOf("185.254.197.14"),
+            "grok2.hereisman.net" to listOf("185.254.197.14")
+        )
+
+        try {
+            val request = Request.Builder()
+                .url("https://1.1.1.1/dns-query?name=$hostname&type=A")
+                .header("Accept", "application/dns-json")
+                .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
+                .build()
+
+            dohClient.newCall(request).execute().use { response ->
+                if (response.isSuccessful) {
+                    val responseText = response.body?.string() ?: ""
+                    val ipRegex = """\"data\"\s*:\s*\"([0-9.]+)\"""".toRegex()
+                    val ips = ipRegex.findAll(responseText).map { it.groupValues[1] }.toList()
+                    if (ips.isNotEmpty()) {
+                        return ips.map { InetAddress.getByName(it) }
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            println("StreamEast: DoH resolution failed for $hostname - ${e.message}")
+        }
+
+        // Return hardcoded fallback if DoH is blocked or fails
+        fallbacks[hostname]?.let { ips ->
+            return ips.map { InetAddress.getByName(it) }
+        }
+
+        return emptyList()
+    }
+
+    // Scraper helper utilizing the custom client
+    private fun customGet(url: String, referer: String? = null): String {
+        val builder = Request.Builder()
+            .url(url)
+            .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
+        if (referer != null) {
+            builder.header("Referer", referer)
+        }
+        val request = builder.build()
+        dnsClient.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) throw Exception("HTTP Error: ${response.code}")
+            return response.body?.string() ?: ""
+        }
+    }
+
+    private fun stripHtml(html: String): String {
+        return html.replace(Regex("<[^>]*>"), "").replace(Regex("\\s+"), " ").trim()
+    }
+
+    // ── Data classes ──────────────────────────────────────────────────────────
+
+    data class EventLoadData(
+        val title: String,
+        val url: String,
+        val posterUrl: String?,
+        val isLive: Boolean
+    )
+
+    data class StreamLoadData(
+        val title: String,
+        val streams: List<StreamInfo>
+    )
+
+    data class StreamInfo(
+        val name: String,
+        val url: String // Represents stream ID
+    )
+
+    // ── Main Page ─────────────────────────────────────────────────────────────
+
+    override suspend fun getMainPage(
+        page: Int,
+        request: MainPageRequest
+    ): HomePageResponse {
+        val lists = mutableListOf<HomePageList>()
+        val liveItems = mutableListOf<SearchResponse>()
+        val upcomingItems = mutableListOf<SearchResponse>()
+
+        try {
+            val html = customGet("$mainUrl/v52")
+            
+            // Extract event links matching f1-podium--link class
+            val eventRegex = """<a\s+[^>]*class="[^"]*f1-podium--link[^"]*"[^>]*href="([^"]+)"[^>]*>(.*?)</a>""".toRegex(RegexOption.DOT_MATCHES_ALL)
+            val matches = eventRegex.findAll(html)
+
+            matches.forEach { match ->
+                val href = match.groupValues[1]
+                val cleanUrl = if (href.startsWith("http")) href else "$mainUrl${if (href.startsWith("/")) "" else "/"}$href"
+                val rawText = match.groupValues[2]
+                val cleanText = stripHtml(rawText)
+
+                if (cleanText.isNotBlank()) {
+                    var isLive = false
+                    var title = cleanText
+                    var shortTime = ""
+
+                    if (cleanText.endsWith(" LIVE", ignoreCase = true)) {
+                        isLive = true
+                        title = cleanText.substring(0, cleanText.length - 5).trim()
+                    } else {
+                        val fromNowIndex = cleanText.lastIndexOf(" from now", ignoreCase = true)
+                        if (fromNowIndex != -1) {
+                            val suffix = cleanText.substring(fromNowIndex)
+                            title = cleanText.substring(0, fromNowIndex).trim()
+                            
+                            val timeMatch = """(\d+)\s+(minute|hour|day)""".toRegex(RegexOption.IGNORE_CASE).find(suffix)
+                            shortTime = if (timeMatch != null) {
+                                val num = timeMatch.groupValues[1]
+                                val unit = timeMatch.groupValues[2].lowercase()[0]
+                                "$num$unit"
+                            } else {
+                                "soon"
+                            }
+                        } else if (cleanText.contains(" LIVE", ignoreCase = true)) {
+                            isLive = true
+                            title = cleanText.replace(" LIVE", "", ignoreCase = true).trim()
+                        }
+                    }
+
+                    val displayTitle = if (isLive) {
+                        "[LIVE] $title"
+                    } else {
+                        "[UPCOMING - $shortTime] $title"
+                    }
+
+                    val loadData = EventLoadData(
+                        title = title,
+                        url = cleanUrl,
+                        posterUrl = "",
+                        isLive = isLive
+                    )
+
+                    val searchRes = newLiveSearchResponse(displayTitle, loadData.toJson(), TvType.Live) {
+                        this.posterUrl = ""
+                    }
+
+                    if (isLive) {
+                        liveItems.add(searchRes)
+                    } else {
+                        upcomingItems.add(searchRes)
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            println("StreamEast: Failed to load main page - ${e.message}")
+        }
+
+        if (liveItems.isNotEmpty()) {
+            lists.add(HomePageList("🟢 StreamEast - Live Games", liveItems, isHorizontalImages = true))
+        }
+        if (upcomingItems.isNotEmpty()) {
+            lists.add(HomePageList("📅 StreamEast - Upcoming Games", upcomingItems, isHorizontalImages = true))
+        }
+
+        return newHomePageResponse(lists, hasNext = false)
+    }
+
+    // ── Search ────────────────────────────────────────────────────────────────
+
+    override suspend fun search(query: String): List<SearchResponse> {
+        val results = mutableListOf<SearchResponse>()
+        try {
+            val mainPage = getMainPage(1, MainPageRequest(this.name, "", true))
+            mainPage.items.forEach { list ->
+                list.list.forEach { card ->
+                    if (card.name.contains(query, ignoreCase = true)) {
+                        results.add(card)
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            println("StreamEast: Search failed - ${e.message}")
+        }
+        return results
+    }
+
+    // ── Load ──────────────────────────────────────────────────────────────────
+
+    override suspend fun load(url: String): LoadResponse {
+        val eventData = parseJson<EventLoadData>(url)
+        val eventUrl = eventData.url
+        val title = eventData.title
+
+        val streamsList = mutableListOf<StreamInfo>()
+        try {
+            val html = customGet(eventUrl)
+
+            // Extract alternate buttons
+            val btnRegex = """id="stream-btn-(\d+)"[^>]*onclick="[^"]*changeStream\(\1\)"[^>]*>\s*([^<]+)""".toRegex(RegexOption.IGNORE_CASE)
+            val btnMatches = btnRegex.findAll(html)
+            btnMatches.forEach {
+                val streamId = it.groupValues[1]
+                val name = it.groupValues[2].trim()
+                streamsList.add(StreamInfo(name = name, url = streamId))
+            }
+
+            // Fallback to default streamId defined in script block
+            if (streamsList.isEmpty()) {
+                val defaultStreamMatch = """streamId\s*=\s*(\d+)""".toRegex().find(html)
+                val defaultStreamId = defaultStreamMatch?.groupValues?.get(1)
+                if (defaultStreamId != null) {
+                    streamsList.add(StreamInfo(name = "Server 1", url = defaultStreamId))
+                }
+            }
+        } catch (e: Exception) {
+            println("StreamEast: Load failed to query event page - ${e.message}")
+        }
+
+        val streamData = StreamLoadData(title, streamsList)
+
+        return newLiveStreamLoadResponse(title, url, this.name) {
+            this.posterUrl = ""
+            this.dataUrl = streamData.toJson()
+        }
+    }
+
+    // ── Load Links ────────────────────────────────────────────────────────────
+
+    override suspend fun loadLinks(
+        data: String,
+        isCasting: Boolean,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
+        val streamData = try {
+            parseJson<StreamLoadData>(data)
+        } catch (e: Exception) {
+            println("StreamEast: loadLinks parse error - ${e.message}")
+            return false
+        }
+
+        if (streamData.streams.isEmpty()) return false
+
+        streamData.streams.forEach { stream ->
+            try {
+                // Fetch the master playlist using custom OkHttp client (supporting DoH)
+                val playlistUrl = "https://chatgpt.hereisman.net/playlist/${stream.url}/load-playlist"
+                val refererUrl = "https://gooz.aapmains.net/new-stream-embed/${stream.url}?ad=111"
+                
+                val responseText = customGet(playlistUrl, referer = refererUrl)
+                
+                // Parse the sub-stream playlist URL from the master playlist response
+                val subStreamMatch = """(https?://[^\s]+)""".toRegex().find(responseText)
+                val finalUrl = subStreamMatch?.groupValues?.get(1) ?: playlistUrl
+
+                callback.invoke(
+                    newExtractorLink(
+                        this.name,
+                        stream.name,
+                        finalUrl,
+                        ExtractorLinkType.M3U8
+                    ) {
+                        this.referer = "https://gooz.aapmains.net/"
+                    }
+                )
+            } catch (e: Exception) {
+                println("StreamEast: Failed to resolve link for ${stream.name} - ${e.message}")
+            }
+        }
+
+        return true
+    }
+}

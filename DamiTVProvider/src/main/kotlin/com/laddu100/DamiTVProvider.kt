@@ -82,40 +82,20 @@ class DamiTVProvider : MainAPI() {
     ): HomePageResponse {
         val lists = mutableListOf<HomePageList>()
 
-        // 1. Live Matches
+        // Live Sports Matches
         try {
             val liveText = app.get("$mainUrl/papi/matches/live", headers = baseHeaders).text
             val liveMatches = parseJson<List<DamiMatch>>(liveText)
-            if (liveMatches.isNotEmpty()) {
-                val items = liveMatches.map { matchToSearchResponse(it) }
-                lists.add(HomePageList("🟢 Live Matches", items, isHorizontalImages = true))
+            val filteredMatches = liveMatches.filter { match ->
+                val cat = match.category?.lowercase() ?: ""
+                cat.isNotBlank() && cat != "24/7-streams" && cat != "live-tv" && cat != "channels" && !cat.contains("stream")
+            }
+            if (filteredMatches.isNotEmpty()) {
+                val items = filteredMatches.map { matchToSearchResponse(it) }
+                lists.add(HomePageList("🟢 Live Sports Events", items, isHorizontalImages = true))
             }
         } catch (e: Exception) {
             println("DamiTV: Failed to load live matches - ${e.message}")
-        }
-
-        // 2. Popular Matches
-        try {
-            val popularText = app.get("$mainUrl/papi/matches/all/popular", headers = baseHeaders).text
-            val popularMatches = parseJson<List<DamiMatch>>(popularText)
-            if (popularMatches.isNotEmpty()) {
-                val items = popularMatches.map { matchToSearchResponse(it) }
-                lists.add(HomePageList("🔥 Popular Matches", items, isHorizontalImages = true))
-            }
-        } catch (e: Exception) {
-            println("DamiTV: Failed to load popular matches - ${e.message}")
-        }
-
-        // 3. Today's Matches
-        try {
-            val todayText = app.get("$mainUrl/papi/matches/all-today", headers = baseHeaders).text
-            val todayMatches = parseJson<List<DamiMatch>>(todayText)
-            if (todayMatches.isNotEmpty()) {
-                val items = todayMatches.map { matchToSearchResponse(it) }
-                lists.add(HomePageList("📅 Today's Matches", items, isHorizontalImages = true))
-            }
-        } catch (e: Exception) {
-            println("DamiTV: Failed to load today's matches - ${e.message}")
         }
 
         return newHomePageResponse(lists, hasNext = false)
@@ -139,11 +119,13 @@ class DamiTVProvider : MainAPI() {
 
     override suspend fun search(query: String): List<SearchResponse> {
         return try {
-            val text = app.get("$mainUrl/papi/matches/all", headers = baseHeaders).text
-            val allMatches = parseJson<List<DamiMatch>>(text)
-            allMatches.filter { match ->
-                match.title.contains(query, ignoreCase = true) ||
-                (match.league?.contains(query, ignoreCase = true) ?: false)
+            val text = app.get("$mainUrl/papi/matches/live", headers = baseHeaders).text
+            val liveMatches = parseJson<List<DamiMatch>>(text)
+            liveMatches.filter { match ->
+                val cat = match.category?.lowercase() ?: ""
+                val isSport = cat.isNotBlank() && cat != "24/7-streams" && cat != "live-tv" && cat != "channels" && !cat.contains("stream")
+                isSport && (match.title.contains(query, ignoreCase = true) ||
+                (match.league?.contains(query, ignoreCase = true) ?: false))
             }.map { matchToSearchResponse(it) }
         } catch (e: Exception) {
             println("DamiTV: Search failed - ${e.message}")
@@ -182,8 +164,9 @@ class DamiTVProvider : MainAPI() {
 
         val streamData = StreamLoadData(title, streamsList)
 
-        return newLiveStreamLoadResponse(title, streamData.toJson(), url) {
+        return newLiveStreamLoadResponse(title, url, this.name) {
             this.posterUrl = posterUrl
+            this.dataUrl = streamData.toJson()
         }
     }
 
@@ -209,13 +192,18 @@ class DamiTVProvider : MainAPI() {
                 // Fetch fresh signed HLS URL from extract-url API right before playing
                 val text = app.get("$mainUrl/papi/extract-url/${stream.url}", headers = baseHeaders).text
                 val response = parseJson<ExtractUrlResponse>(text)
-                if (response.success && !response.hlsUrl.isNullOrBlank()) {
-                    callback.invoke(
-                        newExtractorLink(name, stream.name, response.hlsUrl, ExtractorLinkType.M3U8) {
-                            this.quality = Qualities.Unknown.value
-                            this.referer = "$mainUrl/"
-                        }
-                    )
+                if (response.success) {
+                    if (!response.hlsUrl.isNullOrBlank()) {
+                        callback.invoke(
+                            newExtractorLink(name, stream.name, response.hlsUrl, ExtractorLinkType.M3U8) {
+                                this.quality = Qualities.Unknown.value
+                                this.referer = "$mainUrl/"
+                            }
+                        )
+                    }
+                    if (!response.embedUrl.isNullOrBlank()) {
+                        loadExtractor(response.embedUrl, "$mainUrl/", subtitleCallback, callback)
+                    }
                 }
             } catch (e: Exception) {
                 println("DamiTV: Failed to load stream link for ${stream.name} - ${e.message}")

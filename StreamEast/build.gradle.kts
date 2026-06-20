@@ -9,7 +9,7 @@ android {
 
 cloudstream {
     language = "en"
-    description = "StreamEast Sports Provider"
+    description = "StreamEast Sports(REQUIRES CLOUDFLARE DNS)"
     authors = listOf("KSHITIJ8473")
 
     /**

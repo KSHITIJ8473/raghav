@@ -2,8 +2,8 @@ version = 1
 
 cloudstream {
     language = "en"
-    description = "AniZen anime with sub,dub,some hindi servers but still under construction"
-    authors = listOf("KSHITIJ8473", "Codex")
+    description = "AniZen(sub and dub) may face issues under work "
+    authors = listOf("KSHITIJ8473")
 
     status = 3
     tvTypes = listOf(

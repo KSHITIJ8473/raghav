@@ -50,7 +50,14 @@ class StreamEastProvider : MainAPI() {
                 return inetAddresses
             }
 
-            // 3. Try standard DNS first for unblocked domains (e.g. Unsplash, CDNs)
+            // 3. Try dynamic DoH resolution first to bypass ISP DNS hijacking of streaming domains
+            val resolved = resolveDnsDoH(hostname)
+            if (resolved.isNotEmpty()) {
+                dnsCache[hostname] = resolved
+                return resolved
+            }
+
+            // 4. Fallback to standard System DNS lookup (e.g. for safe domains where DoH failed/blocked)
             try {
                 val systemResolved = Dns.SYSTEM.lookup(hostname)
                 if (systemResolved.isNotEmpty()) {
@@ -59,13 +66,6 @@ class StreamEastProvider : MainAPI() {
                 }
             } catch (e: Exception) {
                 // System DNS failed or blocked
-            }
-
-            // 4. Resolve via Cloudflare DNS-over-HTTPS (DoH)
-            val resolved = resolveDnsDoH(hostname)
-            if (resolved.isNotEmpty()) {
-                dnsCache[hostname] = resolved
-                return resolved
             }
 
             // 5. Final fallback to System DNS
@@ -153,7 +153,8 @@ class StreamEastProvider : MainAPI() {
             combined.contains("nhl") || combined.contains("hockey") -> "https://images.unsplash.com/photo-1515523110800-9415d13b84a8?q=80&w=500"
             combined.contains("ufc") || combined.contains("mma") || combined.contains("boxing") || combined.contains("fight") -> "https://images.unsplash.com/photo-1549719386-74dfcbf7dbed?q=80&w=500"
             combined.contains("f1") || combined.contains("formula") || combined.contains("motorsport") || combined.contains("gp") -> "https://images.unsplash.com/photo-1568605117036-5fe5e7bab0b7?q=80&w=500"
-            combined.contains("soccer") || combined.contains("football") || combined.contains("fifa") || combined.contains("cup") || combined.contains("laliga") || combined.contains("premier") -> "https://images.unsplash.com/photo-1508098682722-e99c43a406b2?q=80&w=500"
+            combined.contains("world cup") || combined.contains("worldcup") || combined.contains("fifa") -> "https://images.unsplash.com/photo-1518091043644-c1d4457512c6?q=80&w=500"
+            combined.contains("soccer") || combined.contains("football") || combined.contains("cup") || combined.contains("laliga") || combined.contains("premier") -> "https://images.unsplash.com/photo-1508098682722-e99c43a406b2?q=80&w=500"
             else -> "https://images.unsplash.com/photo-1461896836934-ffe607ba8211?q=80&w=500" // Generic sports fallback
         }
     }

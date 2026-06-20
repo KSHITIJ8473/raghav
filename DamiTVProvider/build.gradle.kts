@@ -9,7 +9,7 @@ android {
 
 cloudstream {
     language = "en"
-    description = "dont install under work - live sports provider"
+    description = "live sports"
     authors = listOf("KSHITIJ8473")
 
     /**
@@ -24,5 +24,5 @@ cloudstream {
         "Live",
     )
 
-    iconUrl = "https://dami-tv.pro/assets/img/logo.png"
+    iconUrl = "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcTAvvc01IqbjrBZ-AhXwvyrIblnaJBA04IUNKmJNRbqEh46fWVItaGuoRsj&s=10"
 }

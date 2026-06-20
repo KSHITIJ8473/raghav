@@ -3,7 +3,7 @@ version = 1
 cloudstream {
     language = "en"
     description = "AniZen(sub and dub) may face issues under work "
-    authors = listOf("KSHITIJ8473")
+    authors = listOf("raghav")
 
     status = 3
     tvTypes = listOf(

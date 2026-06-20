@@ -9,7 +9,7 @@ android {
 
 cloudstream {
     language = "en"
-    description = "live sports"
+    description = "Live sports HIGH QAULITY"
     authors = listOf("KSHITIJ8473")
 
     /**

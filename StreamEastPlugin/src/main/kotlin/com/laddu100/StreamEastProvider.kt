@@ -118,6 +118,20 @@ class StreamEastProvider : MainAPI() {
         return decodeHtmlEntities(clean)
     }
 
+    private fun getPosterForEvent(url: String, title: String): String {
+        val combined = "$url $title".lowercase()
+        return when {
+            combined.contains("mlb") || combined.contains("baseball") -> "https://istreameast.app/images/new/new-mlb.webp"
+            combined.contains("nba") || combined.contains("wnba") || combined.contains("basketball") || combined.contains("ncaab") -> "https://istreameast.app/images/new/new-nba.webp"
+            combined.contains("nfl") || combined.contains("cfb") || combined.contains("american football") || combined.contains("ncaa") -> "https://istreameast.app/images/new/new-nfl.webp"
+            combined.contains("nhl") || combined.contains("hockey") -> "https://istreameast.app/images/new/new-nhl.webp"
+            combined.contains("ufc") || combined.contains("mma") || combined.contains("boxing") || combined.contains("fight") -> "https://images.unsplash.com/photo-1549719386-74dfcbf7dbed?q=80&w=500"
+            combined.contains("f1") || combined.contains("formula") || combined.contains("motorsport") || combined.contains("gp") -> "https://images.unsplash.com/photo-1568605117036-5fe5e7bab0b7?q=80&w=500"
+            combined.contains("soccer") || combined.contains("football") || combined.contains("fifa") || combined.contains("cup") || combined.contains("laliga") || combined.contains("premier") -> "https://images.unsplash.com/photo-1508098682722-e99c43a406b2?q=80&w=500"
+            else -> "https://images.unsplash.com/photo-1461896836934-ffe607ba8211?q=80&w=500" // Generic sports fallback
+        }
+    }
+
     // ── Data classes ──────────────────────────────────────────────────────────
 
     data class EventLoadData(
@@ -193,15 +207,16 @@ class StreamEastProvider : MainAPI() {
                             if (shortTime.isNotEmpty()) "[UPCOMING - $shortTime] $title" else "[UPCOMING] $title"
                         }
 
+                        val poster = getPosterForEvent(cleanUrl, title)
                         val loadData = EventLoadData(
                             title = title,
                             url = cleanUrl,
-                            posterUrl = "",
+                            posterUrl = poster,
                             isLive = isLive
                         )
 
                         val searchRes = newLiveSearchResponse(displayTitle, loadData.toJson(), TvType.Live) {
-                            this.posterUrl = ""
+                            this.posterUrl = poster
                         }
 
                         if (isLive) {
@@ -280,7 +295,7 @@ class StreamEastProvider : MainAPI() {
         val streamData = StreamLoadData(title, streamsList)
 
         return newLiveStreamLoadResponse(title, url, this.name) {
-            this.posterUrl = ""
+            this.posterUrl = eventData.posterUrl
             this.dataUrl = streamData.toJson()
         }
     }

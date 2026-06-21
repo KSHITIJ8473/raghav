@@ -1,4 +1,4 @@
-version = 1
+version = 2
 
 cloudstream {
     language = "en"
@@ -11,5 +11,5 @@ cloudstream {
         "AnimeMovie",
         "OVA"
     )
-    iconUrl = "https://2dhive.com/logo-light.svg"
+    iconUrl = "https://wallpapers.com/images/hd/anime-symbols-full-metal-alchemist-homunculi-black-and-red-59twpz44gslsiv1o.jpg"
 }

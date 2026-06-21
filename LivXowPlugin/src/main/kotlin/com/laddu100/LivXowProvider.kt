@@ -19,7 +19,7 @@ import javax.crypto.spec.SecretKeySpec
  *
  * Decryption Architecture (two separate AES keys):
  *   - HTTP Response Key (c6/f0.java): M8mkKlNL75K4nl15 / kN7m5Kl1pN5nk4xK
- *     Used for: app.txt, channels/*.txt (config/channel list responses)
+ *     Used for: app.txt, channels/<slug>.txt (config/channel list responses)
  *     Flow: substitution cipher -> Base64 -> AES/CBC
  *   - Stream Data Key (android/support/v4/media/session/b.java): l2K5wB8xC1wP7rK1 / n0K4nP8uB8hH1l18
  *     Used for: per-channel stream link responses
@@ -77,7 +77,7 @@ class LivXowProvider : MainAPI() {
     /**
      * AES/CBC/PKCS5Padding for HTTP response decryption (c6/f0.java).
      * Key: "M8mkKlNL75K4nl15", IV: "kN7m5Kl1pN5nk4xK"
-     * Used for app.txt and channels/*.txt responses.
+     * Used for app.txt and channels/<slug>.txt responses.
      *
      * Full flow from f0.j():
      *   1. If response starts with { or [ -> return as-is
@@ -172,7 +172,7 @@ class LivXowProvider : MainAPI() {
 
     /**
      * Fetches a URL and decrypts using the HTTP response key (c6/f0.java).
-     * Used for app.txt and channels/*.txt.
+     * Used for app.txt and channels/<slug>.txt.
      */
     private suspend fun fetchHttpDecrypted(url: String, headers: Map<String, String> = baseHeaders): String? {
         return try {

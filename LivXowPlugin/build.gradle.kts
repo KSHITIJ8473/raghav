@@ -10,7 +10,7 @@ cloudstream {
         "Live",
         "TvSeries"
     )
-    iconUrl = "https://hshshebegge.store/favicon.ico"
+    iconUrl = "https://sohaidoegeve2.shop/favicon.ico"
 }
 
 android {

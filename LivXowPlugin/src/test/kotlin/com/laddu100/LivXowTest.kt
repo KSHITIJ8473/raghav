@@ -92,7 +92,7 @@ class LivXowTest {
     @Test
     fun testTimeoutCompilation() = runBlocking {
         try {
-            val res = app.get("https://hshshebegge.store/", timeout = 30L)
+            val res = app.get("https://sohaidoegeve2.shop/", timeout = 30L)
             println("API response code: ${res.code}")
         } catch (e: Exception) {
             println("API timeout test (expected if server is down): ${e.message}")

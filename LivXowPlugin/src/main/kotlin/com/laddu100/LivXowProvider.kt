@@ -17,31 +17,30 @@ import javax.crypto.spec.SecretKeySpec
  *
  * Reverse-engineered from the LivXow Android APK (com.livxow.tv).
  *
+ * Decryption Architecture (two separate AES keys):
+ *   - HTTP Response Key (c6/f0.java): M8mkKlNL75K4nl15 / kN7m5Kl1pN5nk4xK
+ *     Used for: app.txt, channels/*.txt (config/channel list responses)
+ *     Flow: substitution cipher -> Base64 -> AES/CBC
+ *   - Stream Data Key (android/support/v4/media/session/b.java): l2K5wB8xC1wP7rK1 / n0K4nP8uB8hH1l18
+ *     Used for: per-channel stream link responses
+ *     Flow: Base64 -> AES/CBC
+ *
  * API Flow:
- *   1. Config: {base_url}app.txt -> encrypted -> JSON array -> first element is app config
- *   2. Channel data: Each channel's "link" field -> encrypted -> JSON array -> stream objects
- *   3. Decryption: Character substitution cipher (rc.a.b equivalent) with AES fallback
+ *   1. {base_url}app.txt -> HTTP key decrypt -> config JSON with sports_slug
+ *   2. {base_url}{sports_slug} -> HTTP key decrypt -> channel array [{channel: "{name, logo, links, link_names}"}]
+ *   3. {base_url}{channel.links} -> Stream key decrypt -> stream data
  *   4. Stream objects: { name, link, api, tokenApi, audio, scheme, secure_decoder }
- *   5. Headers: URL may contain | followed by &-separated key=value pairs
  */
 class LivXowProvider : MainAPI() {
-    override var mainUrl = "https://hshshebegge.store/"
+    override var mainUrl = "https://sohaidoegeve2.shop/"
     override var name = "LivXow"
     override val supportedTypes = setOf(TvType.Live)
     override var lang = "en"
     override val hasMainPage = true
     override val hasDownloadSupport = false
 
-    // ==================== DECRYPTION: Character Substitution Cipher ====================
+    // ==================== DECRYPTION: Character Substitution Cipher (rc.a.b) ====================
 
-    /**
-     * Character substitution cipher used by the LivXow app (rc.a.b).
-     * Maps from the shuffled alphabet back to the standard alphabet.
-     *
-     * Standard:  aAbBcCdDeEfFgGhHiIjJkKlLmMnNoOpPqQrRsStTuUvVwWxXyYzZ
-     * Shuffled:  fFgGjJkKaApPbBmMoOzZeEnNcCdDrRqQtTvVuUxXhHiIwWyYlLsS
-     * Non-alphabetic characters pass through unchanged.
-     */
     private val standardAlphabet = charArrayOf(
         'a', 'A', 'b', 'B', 'c', 'C', 'd', 'D', 'e', 'E', 'f', 'F', 'g', 'G',
         'h', 'H', 'i', 'I', 'j', 'J', 'k', 'K', 'l', 'L', 'm', 'M', 'n', 'N',
@@ -56,7 +55,7 @@ class LivXowProvider : MainAPI() {
         'i', 'I', 'w', 'W', 'y', 'Y', 'l', 'L', 's', 'S'
     )
 
-    // Decode table: shuffled char -> standard char
+    // Decode table: shuffled char -> standard char (rc.a f11361d)
     private val decodeTable = CharArray(128) { it.toChar() }
 
     init {
@@ -66,20 +65,54 @@ class LivXowProvider : MainAPI() {
     }
 
     /**
-     * Decrypts data using the character substitution cipher (rc.a.b equivalent).
+     * Character substitution cipher (rc.a.b equivalent).
+     * Maps shuffled alphabet characters back to standard alphabet.
      */
     private fun decryptSubstitution(str: String): String {
         return String(CharArray(str.length) { i -> decodeTable[str[i].code] })
     }
 
-    // ==================== DECRYPTION: AES/CBC (b.k equivalent) ====================
+    // ==================== DECRYPTION: HTTP Response AES (c6/f0.java j() method) ====================
 
     /**
-     * AES/CBC/PKCS5Padding decryption used by the app (b.k method).
-     * Key: "l2K5wB8xC1wP7rK1", IV: "n0K4nP8uB8hH1l18"
-     * Input is Base64-encoded ciphertext.
+     * AES/CBC/PKCS5Padding for HTTP response decryption (c6/f0.java).
+     * Key: "M8mkKlNL75K4nl15", IV: "kN7m5Kl1pN5nk4xK"
+     * Used for app.txt and channels/*.txt responses.
+     *
+     * Full flow from f0.j():
+     *   1. If response starts with { or [ -> return as-is
+     *   2. Apply substitution cipher (rc.a.b)
+     *   3. Base64 decode
+     *   4. AES/CBC decrypt with this key/IV
      */
-    private fun decryptAes(str: String): String? {
+    private fun decryptHttpResponse(str: String): String {
+        if (str.startsWith("{") || str.startsWith("[")) {
+            return str
+        }
+        return try {
+            val substituted = decryptSubstitution(str)
+            val decoded = Base64.getDecoder().decode(substituted)
+            val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
+            val key = SecretKeySpec("M8mkKlNL75K4nl15".toByteArray(Charsets.UTF_8), "AES")
+            val iv = IvParameterSpec("kN7m5Kl1pN5nk4xK".toByteArray(Charsets.UTF_8))
+            cipher.init(Cipher.DECRYPT_MODE, key, iv)
+            String(cipher.doFinal(decoded), Charsets.UTF_8)
+        } catch (_: Exception) {
+            ""
+        }
+    }
+
+    // ==================== DECRYPTION: Stream Data AES (b.k() method) ====================
+
+    /**
+     * AES/CBC/PKCS5Padding for stream data decryption (b.k() method).
+     * Key: "l2K5wB8xC1wP7rK1", IV: "n0K4nP8uB8hH1l18"
+     * Used for per-channel stream link responses.
+     */
+    private fun decryptStreamData(str: String): String? {
+        if (str.startsWith("{") || str.startsWith("[")) {
+            return str
+        }
         return try {
             val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
             val key = SecretKeySpec("l2K5wB8xC1wP7rK1".toByteArray(Charsets.UTF_8), "AES")
@@ -89,29 +122,6 @@ class LivXowProvider : MainAPI() {
         } catch (_: Exception) {
             null
         }
-    }
-
-    /**
-     * Attempts to decrypt using the most appropriate method.
-     * First tries substitution cipher, then AES as fallback.
-     * Returns original string if it's already plain JSON.
-     */
-    private fun decrypt(str: String): String {
-        if (str.startsWith("[") || str.startsWith("{")) {
-            return str  // Already plain JSON
-        }
-        // Try substitution cipher first (used by PlayerActivity.C() and most API responses)
-        val subResult = decryptSubstitution(str)
-        if (subResult.startsWith("[") || subResult.startsWith("{")) {
-            return subResult
-        }
-        // Try AES as fallback
-        val aesResult = decryptAes(str)
-        if (aesResult != null && (aesResult.startsWith("[") || aesResult.startsWith("{"))) {
-            return aesResult
-        }
-        // Return substitution result as last resort
-        return subResult
     }
 
     // ==================== HEADERS ====================
@@ -125,16 +135,13 @@ class LivXowProvider : MainAPI() {
     /**
      * Parses headers from the pipe-separated format used by the app.
      * Format: "key1=value1&key2=value2&user-agent=Mozilla..."
-     * Mirrors the b.s() method in the decompiled app.
-     *
-     * Note: "user-agent" is mapped to "User-Agent" (case-insensitive).
+     * Mirrors b.s() / vc.a.g() in the decompiled app.
      */
     private fun parseHeaders(headerStr: String): Map<String, String> {
         val map = mutableMapOf<String, String>()
         for (part in headerStr.split("&")) {
             val eqIndex = part.indexOf('=')
             if (eqIndex == -1) {
-                // No value - just a key
                 val key = if (part.equals("user-agent", ignoreCase = true)) "User-Agent" else part
                 map[key] = ""
             } else {
@@ -150,7 +157,6 @@ class LivXowProvider : MainAPI() {
     /**
      * Splits a URL that may contain pipe-separated headers.
      * Returns Pair(url, headersMap).
-     * Format: "https://example.com/stream.m3u8|header1=val1&header2=val2"
      */
     private fun splitUrlAndHeaders(raw: String): Pair<String, Map<String, String>> {
         if (!raw.contains("|")) {
@@ -164,13 +170,33 @@ class LivXowProvider : MainAPI() {
 
     // ==================== HTTP HELPERS ====================
 
-    private suspend fun fetchAndDecrypt(url: String, headers: Map<String, String> = baseHeaders): JSONArray? {
+    /**
+     * Fetches a URL and decrypts using the HTTP response key (c6/f0.java).
+     * Used for app.txt and channels/*.txt.
+     */
+    private suspend fun fetchHttpDecrypted(url: String, headers: Map<String, String> = baseHeaders): String? {
         return try {
             val response = app.get(url, headers = headers, timeout = 30L)
             if (!response.isSuccessful) return null
             val rawBody = response.text
             if (rawBody.isBlank()) return null
-            val decrypted = decrypt(rawBody)
+            decryptHttpResponse(rawBody)
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    /**
+     * Fetches a URL and decrypts using the stream data key (b.k()).
+     * Used for per-channel stream link responses.
+     */
+    private suspend fun fetchStreamDecrypted(url: String, headers: Map<String, String> = baseHeaders): JSONArray? {
+        return try {
+            val response = app.get(url, headers = headers, timeout = 30L)
+            if (!response.isSuccessful) return null
+            val rawBody = response.text
+            if (rawBody.isBlank()) return null
+            val decrypted = decryptStreamData(rawBody) ?: return null
             JSONArray(decrypted)
         } catch (_: Exception) {
             null
@@ -187,95 +213,96 @@ class LivXowProvider : MainAPI() {
         page: Int,
         request: MainPageRequest
     ): HomePageResponse {
-        val configUrl = "${mainUrl}app.txt"
-
         try {
-            val jsonArray = fetchAndDecrypt(configUrl) ?: return newHomePageResponse(emptyList())
+            // Step 1: Fetch and decrypt app.txt config
+            val configUrl = "${mainUrl}app.txt"
+            val configJson = fetchHttpDecrypted(configUrl) ?: return HomePageResponse(emptyList())
 
-            // First element is the app config
-            val configJson = jsonArray.optJSONObject(0)
+            val config = try { JSONArray(configJson).optJSONObject(0) } catch (_: Exception) { null }
+            if (config == null) return HomePageResponse(emptyList())
+
+            // Step 2: Get sports_slug and fetch channels
+            var sportsSlug = config.optString("sports_slug", "")
+            if (sportsSlug.isBlank()) {
+                sportsSlug = config.optString("abbasi_sports_slug", "")
+            }
+            if (sportsSlug.isBlank()) {
+                sportsSlug = config.optString("new_sports_slug", "")
+            }
+
+            if (sportsSlug.isBlank()) {
+                return HomePageResponse(emptyList())
+            }
+
+            val channelsUrl = "$mainUrl$sportsSlug"
+            val channelsJson = fetchHttpDecrypted(channelsUrl) ?: return HomePageResponse(emptyList())
+
+            val channelsArray = try { JSONArray(channelsJson) } catch (_: Exception) { null }
+            if (channelsArray == null) return HomePageResponse(emptyList())
+
+            // Step 3: Parse channels
             val homeItems = mutableListOf<HomePageList>()
+            val channelItems = mutableListOf<SearchResponse>()
 
-            if (configJson != null) {
-                // Config-only keys to skip (not channel categories)
-                val configKeys = setOf(
-                    "sports_slug", "new_app_version", "new_download_url",
-                    "new_telegram_url", "download_tg", "email", "web_url", "cric_live",
-                    "foot_live", "message", "message_url", "banner_ad", "banner_ad_action",
-                    "support_ad", "support_tutorial", "support_wait_seconds",
-                    "support_reopen_hours", "new_app_versions"
-                )
+            for (i in 0 until channelsArray.length()) {
+                val item = channelsArray.optJSONObject(i) ?: continue
+                // Each item has "channel" key containing a JSON string
+                val channelStr = item.optString("channel", "")
+                if (channelStr.isBlank()) continue
 
-                val keys = configJson.keys()
-                while (keys.hasNext()) {
-                    val key = keys.next()
-                    if (key in configKeys) continue
+                val channelObj = try { JSONObject(channelStr) } catch (_: Exception) { continue }
+                val channelName = channelObj.optString("name", "")
+                val channelLogo = channelObj.optString("logo", "")
+                val channelLinks = channelObj.optString("links", "")
+                val isPlaylist = channelObj.optBoolean("is_playlist", false)
+                val linkNames = channelObj.optJSONArray("link_names")
 
-                    val value = configJson.opt(key)
-                    if (value is JSONArray) {
-                        val channelItems = parseChannelArray(value, key)
-                        if (channelItems.isNotEmpty()) {
-                            homeItems.add(
-                                HomePageList(
-                                    name = key.replace("_", " ")
-                                        .replaceFirstChar { it.uppercase() },
-                                    list = channelItems,
-                                    isHorizontalImages = false
-                                )
-                            )
+                if (channelName.isBlank() || channelLinks.isBlank()) continue
+
+                // For playlist-type channels, we create sub-items for each link name
+                if (isPlaylist && linkNames != null && linkNames.length() > 0) {
+                    for (j in 0 until linkNames.length()) {
+                        val subName = linkNames.optString(j, channelName)
+                        // Store full URL in the data field as a JSON with channel info
+                        val dataObj = JSONObject().apply {
+                            put("links", channelLinks)
+                            put("name", subName)
+                            put("logo", channelLogo)
                         }
+                        channelItems.add(
+                            newLiveSearchResponse(subName, dataObj.toString()) {
+                                this.posterUrl = channelLogo.ifBlank { null }
+                            }
+                        )
                     }
+                } else {
+                    val dataObj = JSONObject().apply {
+                        put("links", channelLinks)
+                        put("name", channelName)
+                        put("logo", channelLogo)
+                    }
+                    channelItems.add(
+                        newLiveSearchResponse(channelName, dataObj.toString()) {
+                            this.posterUrl = channelLogo.ifBlank { null }
+                        }
+                    )
                 }
             }
 
-            return newHomePageResponse(homeItems.ifEmpty {
-                // Fallback: parse all JSON objects in the array as individual channels
-                val fallbackItems = mutableListOf<SearchResponse>()
-                for (i in 0 until jsonArray.length()) {
-                    val obj = jsonArray.optJSONObject(i) ?: continue
-                    val item = channelToSearchResponse(obj, i)
-                    if (item != null) fallbackItems.add(item)
-                }
-                listOf(HomePageList("Live Channels", fallbackItems, isHorizontalImages = false))
+            homeItems.add(HomePageList("Live Channels", channelItems))
+
+            return HomePageResponse(homeItems.ifEmpty {
+                listOf(HomePageList("No Channels", emptyList()))
             })
         } catch (_: Exception) {
-            return newHomePageResponse(emptyList())
-        }
-    }
-
-    /**
-     * Parses a JSONArray of channel objects into SearchResponse items.
-     * Channel fields: name/title, link, logo, grouptitle, referer, useragent, referrer, origin, cookie, drmlicense
-     */
-    private fun parseChannelArray(arr: JSONArray, categoryName: String): List<SearchResponse> {
-        val items = mutableListOf<SearchResponse>()
-        for (i in 0 until arr.length()) {
-            val obj = arr.optJSONObject(i) ?: continue
-            val item = channelToSearchResponse(obj, i)
-            if (item != null) items.add(item)
-        }
-        return items
-    }
-
-    /**
-     * Converts a single channel JSONObject to a SearchResponse.
-     */
-    private fun channelToSearchResponse(obj: JSONObject, index: Int): SearchResponse? {
-        val channelName = obj.optString("name", obj.optString("title", ""))
-        val channelLink = obj.optString("link", "")
-        val channelLogo = obj.optString("logo", "")
-
-        if (channelName.isBlank() || channelLink.isBlank()) return null
-
-        return newLiveSearchResponse(channelName, channelLink) {
-            this.posterUrl = channelLogo.ifBlank { null }
+            return HomePageResponse(emptyList())
         }
     }
 
     // ==================== SEARCH ====================
 
     override suspend fun search(query: String): List<SearchResponse> {
-        val homeResponse = getMainPage(1, MainPageRequest("Search", mainUrl, false))
+        val homeResponse = getMainPage(1, MainPageRequest(mainUrl))
         val allItems = homeResponse.items.flatMap { it.list }
         return allItems.filter {
             it.name.contains(query, ignoreCase = true)
@@ -285,10 +312,18 @@ class LivXowProvider : MainAPI() {
     // ==================== LOAD (Channel Detail) ====================
 
     override suspend fun load(url: String): LoadResponse {
-        // For live TV, the URL is the channel's link URL
-        // We return a simple load response; actual stream links are resolved in loadLinks()
-        return newLiveStreamLoadResponse("Live Channel", url, this.name) {
-            this.dataUrl = url
+        try {
+            val dataObj = JSONObject(url)
+            val name = dataObj.optString("name", "Live Channel")
+            val logo = dataObj.optString("logo", "")
+            return newLiveLoadResponse(name, url) {
+                this.posterUrl = logo.ifBlank { null }
+                this.plot = "Live streaming channel"
+            }
+        } catch (_: Exception) {
+            return newLiveLoadResponse("Live Channel", url) {
+                this.plot = "Live streaming channel"
+            }
         }
     }
 
@@ -301,20 +336,23 @@ class LivXowProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         try {
-            val jsonArray = fetchAndDecrypt(data) ?: return false
+            val dataObj = JSONObject(data)
+            val links = dataObj.optString("links", "")
+            if (links.isBlank()) return false
+
+            val streamUrl = "$mainUrl$links"
+            val jsonArray = fetchStreamDecrypted(streamUrl) ?: return false
 
             for (i in 0 until jsonArray.length()) {
                 val streamObj = jsonArray.optJSONObject(i) ?: continue
 
                 // Handle playlist format (channel + playlist)
-                // From b8.h.u(): checks for "channel" and "playlist" keys
                 if (streamObj.has("channel") && streamObj.has("playlist")) {
                     val playlistRaw = streamObj.getString("playlist")
                     val (playlistUrl, playlistHeaders) = splitUrlAndHeaders(playlistRaw)
 
-                    // Fetch the playlist stream data
                     val mergedHeaders = baseHeaders.toMutableMap().apply { putAll(playlistHeaders) }
-                    val playlistArray = fetchAndDecrypt(playlistUrl, mergedHeaders)
+                    val playlistArray = fetchStreamDecrypted(playlistUrl, mergedHeaders)
                     if (playlistArray != null) {
                         for (j in 0 until playlistArray.length()) {
                             val pStream = playlistArray.optJSONObject(j) ?: continue
@@ -336,19 +374,13 @@ class LivXowProvider : MainAPI() {
     /**
      * Processes a single stream JSON object and adds extractor links.
      * Stream object fields (pc.h model):
-     *   - name: stream name
+     *   - name: stream name/quality
      *   - link: stream URL (may contain |headers)
-     *   - api: DRM license URL (may contain |headers)
+     *   - api: DRM license URL (may contain |encrypted_headers)
      *   - tokenApi: token API URL
      *   - audio: audio track
-     *   - scheme: DRM scheme (0=ClearKey, 1=Widevine, 2=other)
+     *   - scheme: DRM scheme (0=ClearKey, 1=Widevine)
      *   - secure_decoder: whether secure decoder is required
-     *
-     * Additional fields from b.java.o():
-     *   - type: stream type (token, json, sp, ls, yt, html, embed, daddy)
-     *   - link_key: JSON key to extract from response
-     *   - request_type: GET or POST
-     *   - request_body: POST body
      */
     private suspend fun processStreamObject(
         streamObj: JSONObject,
@@ -363,7 +395,7 @@ class LivXowProvider : MainAPI() {
         // Determine stream type from URL extension
         val type = when {
             actualUrl.contains(".m3u8", ignoreCase = true) -> ExtractorLinkType.M3U8
-            actualUrl.contains(".mpd", ignoreCase = true) -> ExtractorLinkType.DASH
+            actualUrl.contains(".mpd", ignoreCase = true) -> ExtractorLinkType.MPD
             else -> ExtractorLinkType.VIDEO
         }
 
@@ -373,8 +405,6 @@ class LivXowProvider : MainAPI() {
         // Get DRM info from pc.h model
         val drmApiRaw = streamObj.optString("api", null)
         val tokenApi = streamObj.optString("tokenApi", null)
-        val scheme = streamObj.optInt("scheme", 0) // 0=ClearKey, 1=Widevine
-        val secureDecoder = streamObj.optBoolean("secure_decoder", false)
 
         // Add the main stream link
         callback(
@@ -382,22 +412,21 @@ class LivXowProvider : MainAPI() {
                 source = name,
                 name = "$name - $streamName",
                 url = actualUrl,
-                type = type
+                type = type,
+                referer = mainUrl
             ) {
-                this.referer = mainUrl
                 this.headers = mergedHeaders
                 this.quality = Qualities.Unknown.value
             }
         )
 
         // Handle DRM/api field if present
-        // The api field may contain url|encrypted_headers (where headers are substitution-cipher encrypted)
         if (!drmApiRaw.isNullOrBlank()) {
             val (drmUrl, drmHeadersRaw) = if (drmApiRaw.contains("|")) {
                 val pipeIdx = drmApiRaw.indexOf('|')
                 val url = drmApiRaw.substring(0, pipeIdx)
                 val headersEncrypted = drmApiRaw.substring(pipeIdx + 1)
-                // Decrypt headers using substitution cipher (rc.a.b is used in b.java.o() line 454)
+                // Decrypt headers using substitution cipher
                 val headersDecrypted = decryptSubstitution(headersEncrypted)
                 Pair(url, parseHeaders(headersDecrypted))
             } else {
@@ -411,9 +440,9 @@ class LivXowProvider : MainAPI() {
                     source = name,
                     name = "$name - $streamName (DRM)",
                     url = drmUrl,
-                    type = type
+                    type = type,
+                    referer = mainUrl
                 ) {
-                    this.referer = mainUrl
                     this.headers = drmHeaders
                     this.quality = Qualities.Unknown.value
                 }
@@ -430,9 +459,9 @@ class LivXowProvider : MainAPI() {
                     source = name,
                     name = "$name - $streamName (Token)",
                     url = tokenUrl,
-                    type = type
+                    type = type,
+                    referer = mainUrl
                 ) {
-                    this.referer = mainUrl
                     this.headers = tokenMergedHeaders
                     this.quality = Qualities.Unknown.value
                 }

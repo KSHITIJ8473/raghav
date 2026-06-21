@@ -224,9 +224,10 @@ class TwoDHiveProvider : MainAPI() {
         val props = mapper.readTree(propsStr)
         val decoded = decodeAstro(props)
 
+        // Robust MAL ID parsing with fallback to epUrl query parameter
         val malId = decoded.get("animeIdOrName")?.let { node ->
             if (node.isNumber) node.asInt() else node.asText().toIntOrNull()
-        }
+        } ?: epUrl.substringAfter("anime=").substringBefore("&").toIntOrNull()
 
         val epNum = decoded.get("epNum")?.asInt() ?: 1
         val serversList = decoded.get("servers")
@@ -236,38 +237,104 @@ class TwoDHiveProvider : MainAPI() {
         // 1. Process parsed servers from page props
         if (serversList != null && serversList.isArray) {
             serversList.forEach { serverItem ->
-                val serverName = serverItem.get("server_name")?.asText() ?: ""
-                val slug = serverItem.get("slug")?.asText() ?: ""
+                val serverName = serverItem.get("server_name")?.asText()?.trim() ?: ""
+                val slug = serverItem.get("slug")?.asText()?.trim() ?: ""
                 val isDub = serverItem.get("dub")?.asBoolean() ?: false
+                val animeName = serverItem.get("anime_name")?.asText()?.trim() ?: ""
+
+                // Robust check for dub status based on dub flag, server name, or anime name
+                val isServerDub = isDub || serverName.contains("dub", ignoreCase = true) || animeName.contains("dub", ignoreCase = true)
 
                 // Filter subbed/dubbed server according to the selected tab
-                if ((type == "dub" && isDub) || (type == "sub" && !isDub)) {
-                    if (serverName.equals("hadfree", ignoreCase = true) && slug.isNotEmpty()) {
+                if ((type == "dub" && isServerDub) || (type == "sub" && !isServerDub)) {
+                    if (slug.isNotEmpty()) {
                         loadedResults.add(async {
                             try {
-                                val apiRespText = app.get(
-                                    url = "$mainUrl/api/hadfree?slug=${slug}",
-                                    headers = mapOf(
-                                        "User-Agent" to userAgent,
-                                        "Referer" to epUrl
-                                    )
-                                ).text
-                                val apiJson = mapper.readTree(apiRespText)
-                                val streamUrl = apiJson.get("streamUrl")?.asText()
-                                if (!streamUrl.isNullOrEmpty()) {
-                                    callback(
-                                        newExtractorLink(
-                                            source = "hadfree",
-                                            name = "HAdfree",
-                                            url = streamUrl,
-                                            type = ExtractorLinkType.VIDEO
-                                        ) {
-                                            this.referer = "$mainUrl/"
+                                when {
+                                    serverName.equals("hadfree", ignoreCase = true) -> {
+                                        val apiRespText = app.get(
+                                            url = "$mainUrl/api/hadfree?slug=${slug}",
+                                            headers = mapOf(
+                                                "User-Agent" to userAgent,
+                                                "Referer" to epUrl
+                                            )
+                                        ).text
+                                        val apiJson = mapper.readTree(apiRespText)
+                                        val streamUrl = apiJson.get("streamUrl")?.asText()
+                                        if (!streamUrl.isNullOrEmpty()) {
+                                            callback(
+                                                newExtractorLink(
+                                                    source = "hadfree",
+                                                    name = "HAdfree",
+                                                    url = streamUrl,
+                                                    type = ExtractorLinkType.VIDEO
+                                                ) {
+                                                    this.referer = "$mainUrl/"
+                                                }
+                                            )
+                                            true
+                                        } else false
+                                    }
+                                    serverName.equals("neko_mp4", ignoreCase = true) -> {
+                                        callback(
+                                            newExtractorLink(
+                                                source = "neko_mp4",
+                                                name = "Neko MP4",
+                                                url = slug,
+                                                type = ExtractorLinkType.VIDEO
+                                            ) {
+                                                this.referer = "$mainUrl/"
+                                            }
+                                        )
+                                        true
+                                    }
+                                    serverName.equals("mp4upload", ignoreCase = true) -> {
+                                        loadExtractor(
+                                            url = "https://www.mp4upload.com/embed-$slug.html",
+                                            referer = epUrl,
+                                            subtitleCallback = subtitleCallback,
+                                            callback = callback
+                                        )
+                                    }
+                                    serverName.equals("meta_media_id", ignoreCase = true) -> {
+                                        loadExtractor(
+                                            url = "https://www.facebook.com/video/embed?video_id=$slug",
+                                            referer = epUrl,
+                                            subtitleCallback = subtitleCallback,
+                                            callback = callback
+                                        )
+                                    }
+                                    serverName.equals("hydrax", ignoreCase = true) || serverName.equals("abyssplayer", ignoreCase = true) -> {
+                                        loadExtractor(
+                                            url = "https://abyssplayer.com/$slug",
+                                            referer = epUrl,
+                                            subtitleCallback = subtitleCallback,
+                                            callback = callback
+                                        )
+                                    }
+                                    slug.startsWith("http://") || slug.startsWith("https://") -> {
+                                        if (slug.contains(".mp4") || slug.contains(".m3u8")) {
+                                            callback(
+                                                newExtractorLink(
+                                                    source = serverName.takeIf { it.isNotEmpty() } ?: "Direct",
+                                                    name = serverName.takeIf { it.isNotEmpty() } ?: "Direct Link",
+                                                    url = slug,
+                                                    type = ExtractorLinkType.VIDEO
+                                                ) {
+                                                    this.referer = "$mainUrl/"
+                                                }
+                                            )
+                                            true
+                                        } else {
+                                            loadExtractor(
+                                                url = slug,
+                                                referer = epUrl,
+                                                subtitleCallback = subtitleCallback,
+                                                callback = callback
+                                            )
                                         }
-                                    )
-                                    true
-                                } else {
-                                    false
+                                    }
+                                    else -> false
                                 }
                             } catch (e: Exception) {
                                 false

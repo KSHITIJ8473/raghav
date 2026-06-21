@@ -82,6 +82,26 @@ class DamiTVProvider : MainAPI() {
     ): HomePageResponse {
         val lists = mutableListOf<HomePageList>()
 
+        // Dashboard Announcement
+        try {
+            val dashboardData = EventLoadData(
+                title = "📢 Click here for Live Scores, Schedules & Domain Status",
+                url = "dashboard",
+                posterUrl = "https://images.unsplash.com/photo-1460925895917-afdab827c52f?q=80&w=500",
+                category = "Dashboard"
+            )
+            val dashboardRes = newLiveSearchResponse(
+                "👉 Dami TV - Live Scores, Schedules & Status",
+                dashboardData.toJson(),
+                TvType.Live
+            ) {
+                this.posterUrl = "https://images.unsplash.com/photo-1460925895917-afdab827c52f?q=80&w=500"
+            }
+            lists.add(HomePageList("📢 Dami TV Dashboard", listOf(dashboardRes), isHorizontalImages = true))
+        } catch (e: Exception) {
+            // Ignore dashboard insertion errors
+        }
+
         // Live Sports Matches
         try {
             val liveText = app.get("$mainUrl/papi/matches/live", headers = baseHeaders).text
@@ -141,6 +161,14 @@ class DamiTVProvider : MainAPI() {
         val title = eventData.title
         val posterUrl = eventData.posterUrl
 
+        if (matchId == "dashboard") {
+            return newLiveStreamLoadResponse(title, url, this.name) {
+                this.posterUrl = posterUrl
+                this.plot = "⚠️ Domain blocks are common! Check our live status page to get the latest working streaming domains, real-time match schedules, server updates, and live scores.\n\n🌐 Visit: https://damitv-status.vercel.app\n\n(Copy and paste this URL into your browser to access)"
+                this.dataUrl = StreamLoadData(title, emptyList()).toJson()
+            }
+        }
+
         val streamsList = mutableListOf<StreamInfo>()
         try {
             val text = app.get("$mainUrl/papi/extract-url/$matchId", headers = baseHeaders).text
@@ -166,6 +194,7 @@ class DamiTVProvider : MainAPI() {
 
         return newLiveStreamLoadResponse(title, url, this.name) {
             this.posterUrl = posterUrl
+            this.plot = "Check out our live status dashboard for domain updates, real-time fixtures, and server pings: https://damitv-status.vercel.app"
             this.dataUrl = streamData.toJson()
         }
     }

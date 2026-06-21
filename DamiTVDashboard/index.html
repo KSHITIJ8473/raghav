@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dami TV - Live Dashboard & Status</title>
+    <!-- Google Fonts: Inter -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700;800&display=swap" rel="stylesheet">
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="index.css">
+</head>
+<body>
+    <div class="container">
+        <!-- HEADER -->
+        <header>
+            <div class="logo-area">
+                <i class="fa-solid fa-tv logo-icon"></i>
+                <h1>DAMI TV<span>DASHBOARD</span></h1>
+            </div>
+            <div class="system-time">
+                <i class="fa-regular fa-clock"></i>
+                <span id="live-clock">--:--:--</span>
+            </div>
+        </header>
+
+        <!-- GOOGLE ADS ZONE 1 (TOP LEADERBOARD) -->
+        <div class="ad-slot ad-leaderboard">
+            <span class="ad-label"><i class="fa-solid fa-rectangle-ad"></i> Google AdSense Advertisement</span>
+            <div class="ad-placeholder">
+                <!-- paste your Google AdSense code here -->
+                <ins class="adsbygoogle"
+                     style="display:block"
+                     data-ad-client="ca-pub-XXXXXXXXXXXXXXXX"
+                     data-ad-slot="XXXXXXXXXX"
+                     data-ad-format="auto"
+                     data-full-width-responsive="true"></ins>
+                <script>
+                     (adsbygoogle = window.adsbygoogle || []).push({});
+                </script>
+                <p class="ad-hint">Ads will appear here once approved by Google AdSense</p>
+            </div>
+        </div>
+
+        <!-- MAIN LAYOUT GRID -->
+        <div class="main-grid">
+            
+            <!-- LEFT COLUMN (STATUS & FIXTURES) -->
+            <div class="left-col">
+                
+                <!-- SERVER / DOMAIN STATUS -->
+                <section class="dashboard-card status-card">
+                    <h2><i class="fa-solid fa-server section-icon"></i> Streaming Domain Status</h2>
+                    <p class="section-desc">Real-time status check of streaming components. If streams fail, check here first.</p>
+                    <div class="status-grid">
+                        <div class="status-item" id="status-main">
+                            <div class="status-header">
+                                <span class="host-title">Main Portal</span>
+                                <span class="status-indicator online"></span>
+                            </div>
+                            <span class="host-url">dami-tv.pro</span>
+                            <span class="host-ping"><i class="fa-solid fa-gauge-high"></i> <span class="ping-time">-- ms</span></span>
+                        </div>
+                        
+                        <div class="status-item" id="status-resolver">
+                            <div class="status-header">
+                                <span class="host-title">Playlist Solver</span>
+                                <span class="status-indicator online"></span>
+                            </div>
+                            <span class="host-url">chatgpt.hereisman.net</span>
+                            <span class="host-ping"><i class="fa-solid fa-gauge-high"></i> <span class="ping-time">-- ms</span></span>
+                        </div>
+
+                        <div class="status-item" id="status-embed">
+                            <div class="status-header">
+                                <span class="host-title">Embed Server</span>
+                                <span class="status-indicator online"></span>
+                            </div>
+                            <span class="host-url">gooz.aapmains.net</span>
+                            <span class="host-ping"><i class="fa-solid fa-gauge-high"></i> <span class="ping-time">-- ms</span></span>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- LIVE SCORES WIDGET -->
+                <section class="dashboard-card live-scores-card">
+                    <div class="card-header-row">
+                        <h2><i class="fa-solid fa-circle-dot live-icon animate-pulse"></i> Live Scores Ticker</h2>
+                        <span class="badge live-badge">UPDATED LIVE</span>
+                    </div>
+                    <div class="scores-container" id="scores-ticker">
+                        <!-- Scores will be dynamically inserted here -->
+                        <div class="score-card">
+                            <span class="match-category">⚽ Premier League</span>
+                            <div class="score-row">
+                                <span class="team-name">Chelsea</span>
+                                <span class="score-numbers font-mono">2 - 1</span>
+                                <span class="team-name">Arsenal</span>
+                            </div>
+                            <span class="match-time animate-pulse"><i class="fa-solid fa-clock-rotate-left"></i> 74'</span>
+                        </div>
+
+                        <div class="score-card">
+                            <span class="match-category">🏀 NBA Finals</span>
+                            <div class="score-row">
+                                <span class="team-name">Lakers</span>
+                                <span class="score-numbers font-mono">102 - 98</span>
+                                <span class="team-name">Celtics</span>
+                            </div>
+                            <span class="match-time"><i class="fa-solid fa-clock-rotate-left"></i> Q4 2:14</span>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- UPCOMING MATCH FIXTURES -->
+                <section class="dashboard-card fixtures-card">
+                    <h2><i class="fa-solid fa-calendar-days section-icon"></i> Upcoming Big Fixtures</h2>
+                    <p class="section-desc">Domain pings are warm. Get ready for these matches coming up today:</p>
+                    <div class="fixtures-list" id="fixtures-container">
+                        <!-- Fixtures dynamically populated by JS -->
+                    </div>
+                </section>
+            </div>
+
+            <!-- RIGHT COLUMN (LIVE CHAT & DISPLAY ADS) -->
+            <div class="right-col">
+                
+                <!-- LIVE MATCH CHAT ROOM -->
+                <section class="dashboard-card chat-card">
+                    <div class="chat-header">
+                        <div class="chat-title">
+                            <i class="fa-regular fa-comments chat-icon"></i>
+                            <div>
+                                <h3>Global Fan Chat</h3>
+                                <span class="chat-subtitle"><span id="chat-online-count">1,248</span> fans online</span>
+                            </div>
+                        </div>
+                        <span class="badge sports-badge">ALL SPORTS</span>
+                    </div>
+                    
+                    <div class="chat-messages" id="chat-box">
+                        <!-- Simulated active fan chat messages -->
+                    </div>
+
+                    <div class="chat-input-area" id="chat-form">
+                        <input type="text" id="chat-input" placeholder="Say something about the match..." autocomplete="off" maxlength="150">
+                        <button type="button" id="chat-send-btn"><i class="fa-solid fa-paper-plane"></i></button>
+                    </div>
+                </section>
+
+                <!-- GOOGLE ADS ZONE 2 (VERTICAL SIDEBAR) -->
+                <div class="ad-slot ad-sidebar">
+                    <span class="ad-label"><i class="fa-solid fa-rectangle-ad"></i> Sponsored Links</span>
+                    <div class="ad-placeholder">
+                        <!-- paste your Google AdSense code here -->
+                        <ins class="adsbygoogle"
+                             style="display:block"
+                             data-ad-client="ca-pub-XXXXXXXXXXXXXXXX"
+                             data-ad-slot="YYYYYYYYYY"
+                             data-ad-format="rectangle"></ins>
+                        <script>
+                             (adsbygoogle = window.adsbygoogle || []).push({});
+                        </script>
+                        <p class="ad-hint">300x250 Ad Zone</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- GOOGLE ADS ZONE 3 (FOOTER LEADERBOARD) -->
+        <div class="ad-slot ad-leaderboard">
+            <span class="ad-label"><i class="fa-solid fa-rectangle-ad"></i> Google Advertisement</span>
+            <div class="ad-placeholder">
+                <!-- paste your Google AdSense code here -->
+                <ins class="adsbygoogle"
+                     style="display:block"
+                     data-ad-client="ca-pub-XXXXXXXXXXXXXXXX"
+                     data-ad-slot="ZZZZZZZZZZ"
+                     data-ad-format="auto"
+                     data-full-width-responsive="true"></ins>
+                <script>
+                     (adsbygoogle = window.adsbygoogle || []).push({});
+                </script>
+            </div>
+        </div>
+
+        <!-- FOOTER -->
+        <footer>
+            <p>© 2026 Dami TV Companion. We do not host or upload any streams. All stream links are scraped dynamically from open internet indexes.</p>
+            <p>Make sure you have a VPN active when streaming live matches to protect your connection.</p>
+        </footer>
+    </div>
+
+    <!-- Script imports -->
+    <script src="app.js"></script>
+</body>
+</html>

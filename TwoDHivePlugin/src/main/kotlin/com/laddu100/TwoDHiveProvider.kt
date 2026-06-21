@@ -1,6 +1,9 @@
 package com.laddu100
 
 import com.fasterxml.jackson.databind.ObjectMapper
+import com.fasterxml.jackson.databind.JsonNode
+import com.fasterxml.jackson.databind.node.ArrayNode
+import com.fasterxml.jackson.databind.node.ObjectNode
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import org.jsoup.Jsoup
@@ -176,6 +179,27 @@ class TwoDHiveProvider : MainAPI() {
         }
     }
 
+    private val mapper = ObjectMapper()
+
+    private fun decodeAstro(node: JsonNode): JsonNode {
+        if (node.isArray && node.size() == 2 && node.get(0).isNumber) {
+            return decodeAstro(node.get(1))
+        }
+        if (node.isArray) {
+            val arrayNode = mapper.createArrayNode()
+            node.forEach { arrayNode.add(decodeAstro(it)) }
+            return arrayNode
+        }
+        if (node.isObject) {
+            val objectNode = mapper.createObjectNode()
+            node.fields().forEach { (key, value) ->
+                objectNode.set<JsonNode>(key, decodeAstro(value))
+            }
+            return objectNode
+        }
+        return node
+    }
+
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -197,44 +221,24 @@ class TwoDHiveProvider : MainAPI() {
 
         val propsStr = island.attr("props").takeIf { it.isNotEmpty() } ?: return@coroutineScope false
 
-        val mapper = ObjectMapper()
         val props = mapper.readTree(propsStr)
+        val decoded = decodeAstro(props)
 
-        val malIdNode = props.get("animeIdOrName")
-        val malId = if (malIdNode != null && malIdNode.isArray && malIdNode.size() >= 2) {
-            malIdNode.get(1).asInt()
-        } else {
-            null
+        val malId = decoded.get("animeIdOrName")?.let { node ->
+            if (node.isNumber) node.asInt() else node.asText().toIntOrNull()
         }
 
-        val epNumNode = props.get("epNum")
-        val epNum = if (epNumNode != null && epNumNode.isArray && epNumNode.size() >= 2) {
-            epNumNode.get(1).asInt()
-        } else {
-            1
-        }
-
-        val serversNode = props.get("servers")
-        val serversList = if (serversNode != null && serversNode.isArray && serversNode.size() >= 2) {
-            serversNode.get(1)
-        } else {
-            null
-        }
+        val epNum = decoded.get("epNum")?.asInt() ?: 1
+        val serversList = decoded.get("servers")
 
         val loadedResults = mutableListOf<Deferred<Boolean>>()
 
         // 1. Process parsed servers from page props
         if (serversList != null && serversList.isArray) {
-            serversList.forEach { serverItemWrapper ->
-                val serverItem = if (serverItemWrapper.isArray && serverItemWrapper.size() >= 2) {
-                    serverItemWrapper.get(1)
-                } else {
-                    serverItemWrapper
-                }
-
-                val serverName = serverItem.get("server_name")?.get(1)?.asText() ?: ""
-                val slug = serverItem.get("slug")?.get(1)?.asText() ?: ""
-                val isDub = serverItem.get("dub")?.get(1)?.asBoolean() ?: false
+            serversList.forEach { serverItem ->
+                val serverName = serverItem.get("server_name")?.asText() ?: ""
+                val slug = serverItem.get("slug")?.asText() ?: ""
+                val isDub = serverItem.get("dub")?.asBoolean() ?: false
 
                 // Filter subbed/dubbed server according to the selected tab
                 if ((type == "dub" && isDub) || (type == "sub" && !isDub)) {
@@ -243,7 +247,10 @@ class TwoDHiveProvider : MainAPI() {
                             try {
                                 val apiRespText = app.get(
                                     url = "$mainUrl/api/hadfree?slug=${slug}",
-                                    headers = mapOf("Referer" to epUrl)
+                                    headers = mapOf(
+                                        "User-Agent" to userAgent,
+                                        "Referer" to epUrl
+                                    )
                                 ).text
                                 val apiJson = mapper.readTree(apiRespText)
                                 val streamUrl = apiJson.get("streamUrl")?.asText()
@@ -279,7 +286,10 @@ class TwoDHiveProvider : MainAPI() {
                     try {
                         val apiRespText = app.get(
                             url = "$mainUrl/api/hianime?mal_id=$malId&ep_num=$epNum",
-                            headers = mapOf("Referer" to epUrl)
+                            headers = mapOf(
+                                "User-Agent" to userAgent,
+                                "Referer" to epUrl
+                            )
                         ).text
                         val apiJson = mapper.readTree(apiRespText)
                         val m3u8 = apiJson.get("m3u8")?.asText()
@@ -317,7 +327,10 @@ class TwoDHiveProvider : MainAPI() {
                     val megaplayUrl = "https://megaplay.buzz/stream/mal/$malId/$epNum/$type"
                     val playerPageHtml = app.get(
                         url = megaplayUrl,
-                        headers = mapOf("Referer" to epUrl)
+                        headers = mapOf(
+                            "User-Agent" to userAgent,
+                            "Referer" to epUrl
+                        )
                     ).text
 
                     val playerPageSoup = Jsoup.parse(playerPageHtml)
@@ -331,6 +344,7 @@ class TwoDHiveProvider : MainAPI() {
                         val sourcesText = app.get(
                             url = "https://megaplay.buzz/stream/getSources?id=$playerId&type=$type",
                             headers = mapOf(
+                                "User-Agent" to userAgent,
                                 "Referer" to megaplayUrl,
                                 "X-Requested-With" to "XMLHttpRequest",
                                 "Origin" to "https://megaplay.buzz"

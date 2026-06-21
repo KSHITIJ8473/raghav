@@ -190,7 +190,7 @@ class LivXowProvider : MainAPI() {
         val configUrl = "${mainUrl}app.txt"
 
         try {
-            val jsonArray = fetchAndDecrypt(configUrl) ?: return HomePageResponse(emptyList())
+            val jsonArray = fetchAndDecrypt(configUrl) ?: return newHomePageResponse(emptyList())
 
             // First element is the app config
             val configJson = jsonArray.optJSONObject(0)
@@ -228,7 +228,7 @@ class LivXowProvider : MainAPI() {
                 }
             }
 
-            return HomePageResponse(homeItems.ifEmpty {
+            return newHomePageResponse(homeItems.ifEmpty {
                 // Fallback: parse all JSON objects in the array as individual channels
                 val fallbackItems = mutableListOf<SearchResponse>()
                 for (i in 0 until jsonArray.length()) {
@@ -236,10 +236,10 @@ class LivXowProvider : MainAPI() {
                     val item = channelToSearchResponse(obj, i)
                     if (item != null) fallbackItems.add(item)
                 }
-                listOf(HomePageList("Live Channels", fallbackItems))
+                listOf(HomePageList("Live Channels", fallbackItems, isHorizontalImages = false))
             })
         } catch (_: Exception) {
-            return HomePageResponse(emptyList())
+            return newHomePageResponse(emptyList())
         }
     }
 
@@ -275,7 +275,7 @@ class LivXowProvider : MainAPI() {
     // ==================== SEARCH ====================
 
     override suspend fun search(query: String): List<SearchResponse> {
-        val homeResponse = getMainPage(1, MainPageRequest(mainUrl))
+        val homeResponse = getMainPage(1, MainPageRequest("Search", mainUrl, false))
         val allItems = homeResponse.items.flatMap { it.list }
         return allItems.filter {
             it.name.contains(query, ignoreCase = true)
@@ -287,8 +287,8 @@ class LivXowProvider : MainAPI() {
     override suspend fun load(url: String): LoadResponse {
         // For live TV, the URL is the channel's link URL
         // We return a simple load response; actual stream links are resolved in loadLinks()
-        return newLiveLoadResponse("Live Channel", url) {
-            this.plot = "Live streaming channel"
+        return newLiveStreamLoadResponse("Live Channel", url, this.name) {
+            this.dataUrl = url
         }
     }
 
@@ -363,7 +363,7 @@ class LivXowProvider : MainAPI() {
         // Determine stream type from URL extension
         val type = when {
             actualUrl.contains(".m3u8", ignoreCase = true) -> ExtractorLinkType.M3U8
-            actualUrl.contains(".mpd", ignoreCase = true) -> ExtractorLinkType.MPD
+            actualUrl.contains(".mpd", ignoreCase = true) -> ExtractorLinkType.DASH
             else -> ExtractorLinkType.VIDEO
         }
 
@@ -382,9 +382,9 @@ class LivXowProvider : MainAPI() {
                 source = name,
                 name = "$name - $streamName",
                 url = actualUrl,
-                type = type,
-                referer = mainUrl
+                type = type
             ) {
+                this.referer = mainUrl
                 this.headers = mergedHeaders
                 this.quality = Qualities.Unknown.value
             }
@@ -411,9 +411,9 @@ class LivXowProvider : MainAPI() {
                     source = name,
                     name = "$name - $streamName (DRM)",
                     url = drmUrl,
-                    type = type,
-                    referer = mainUrl
+                    type = type
                 ) {
+                    this.referer = mainUrl
                     this.headers = drmHeaders
                     this.quality = Qualities.Unknown.value
                 }
@@ -430,9 +430,9 @@ class LivXowProvider : MainAPI() {
                     source = name,
                     name = "$name - $streamName (Token)",
                     url = tokenUrl,
-                    type = type,
-                    referer = mainUrl
+                    type = type
                 ) {
+                    this.referer = mainUrl
                     this.headers = tokenMergedHeaders
                     this.quality = Qualities.Unknown.value
                 }

@@ -22,6 +22,31 @@ class StreamEastProvider : MainAPI() {
     override val hasChromecastSupport = true
     override val supportedTypes = setOf(TvType.Live)
 
+    private var isUrlLoaded = false
+
+    data class FirebaseConfig(
+        @JsonProperty("streameast") val streameast: String? = null,
+        @JsonProperty("streameast_url") val streameast_url: String? = null,
+        @JsonProperty("streameastUrl") val streameastUrl: String? = null
+    )
+
+    private suspend fun loadFirebaseUrl() {
+        if (isUrlLoaded) return
+        try {
+            val response = app.get("https://cloudstreampluginhelper-default-rtdb.firebaseio.com/.json").text
+            val json = parseJson<FirebaseConfig>(response)
+            val url = json.streameast ?: json.streameast_url ?: json.streameastUrl
+            url?.let {
+                if (it.isNotEmpty()) {
+                    mainUrl = it.removeSuffix("/")
+                }
+            }
+            isUrlLoaded = true
+        } catch (e: Exception) {
+            println("StreamEast: Failed to load Firebase URL - ${e.message}")
+        }
+    }
+
     // Thread-safe DNS cache to prevent redundant resolutions
     private val dnsCache = ConcurrentHashMap<String, List<InetAddress>>()
 
@@ -210,6 +235,7 @@ class StreamEastProvider : MainAPI() {
         page: Int,
         request: MainPageRequest
     ): HomePageResponse {
+        loadFirebaseUrl()
         val lists = mutableListOf<HomePageList>()
         val liveItems = mutableListOf<SearchResponse>()
         val upcomingItems = mutableListOf<SearchResponse>()
@@ -297,6 +323,7 @@ class StreamEastProvider : MainAPI() {
     // ── Search ────────────────────────────────────────────────────────────────
 
     override suspend fun search(query: String): List<SearchResponse> {
+        loadFirebaseUrl()
         val results = mutableListOf<SearchResponse>()
         try {
             val mainPage = getMainPage(1, MainPageRequest(this.name, "", true))
@@ -316,6 +343,7 @@ class StreamEastProvider : MainAPI() {
     // ── Load ──────────────────────────────────────────────────────────────────
 
     override suspend fun load(url: String): LoadResponse {
+        loadFirebaseUrl()
         val eventData = parseJson<EventLoadData>(url)
         val eventUrl = eventData.url
         val title = eventData.title
@@ -361,6 +389,7 @@ class StreamEastProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
+        loadFirebaseUrl()
         val streamData = try {
             parseJson<StreamLoadData>(data)
         } catch (e: Exception) {

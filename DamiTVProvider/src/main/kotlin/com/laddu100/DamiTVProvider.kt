@@ -17,12 +17,38 @@ class DamiTVProvider : MainAPI() {
     override val hasChromecastSupport = true
     override val supportedTypes = setOf(TvType.Live)
 
-    private val baseHeaders = mapOf(
-        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
-        "Accept" to "application/json, text/plain, */*",
-        "Referer" to "$mainUrl/",
-        "Origin" to mainUrl
+    private var isUrlLoaded = false
+
+    data class FirebaseConfig(
+        @JsonProperty("dami") val dami: String? = null,
+        @JsonProperty("dami_url") val dami_url: String? = null,
+        @JsonProperty("damiUrl") val damiUrl: String? = null
     )
+
+    private suspend fun loadFirebaseUrl() {
+        if (isUrlLoaded) return
+        try {
+            val response = app.get("https://cloudstreampluginhelper-default-rtdb.firebaseio.com/.json").text
+            val json = parseJson<FirebaseConfig>(response)
+            val url = json.dami ?: json.dami_url ?: json.damiUrl
+            url?.let {
+                if (it.isNotEmpty()) {
+                    mainUrl = it.removeSuffix("/")
+                }
+            }
+            isUrlLoaded = true
+        } catch (e: Exception) {
+            println("DamiTV: Failed to load Firebase URL - ${e.message}")
+        }
+    }
+
+    private val baseHeaders: Map<String, String>
+        get() = mapOf(
+            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+            "Accept" to "application/json, text/plain, */*",
+            "Referer" to "$mainUrl/",
+            "Origin" to mainUrl
+        )
 
     // ── Data classes for API JSON structures ───────────────────────────────────
 
@@ -129,6 +155,7 @@ class DamiTVProvider : MainAPI() {
         page: Int,
         request: MainPageRequest
     ): HomePageResponse {
+        loadFirebaseUrl()
         val lists = mutableListOf<HomePageList>()
 
         try {
@@ -166,6 +193,7 @@ class DamiTVProvider : MainAPI() {
     // ── Search ────────────────────────────────────────────────────────────────
 
     override suspend fun search(query: String): List<SearchResponse> {
+        loadFirebaseUrl()
         return try {
             val text = app.get("$mainUrl/papi/matches/all", headers = baseHeaders).text
             val allMatches = parseJson<List<DamiMatch>>(text)
@@ -190,6 +218,7 @@ class DamiTVProvider : MainAPI() {
     // ── Load ──────────────────────────────────────────────────────────────────
 
     override suspend fun load(url: String): LoadResponse {
+        loadFirebaseUrl()
         val eventData = parseJson<EventLoadData>(url)
         val matchId = eventData.url
         val title = eventData.title
@@ -237,6 +266,7 @@ class DamiTVProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
+        loadFirebaseUrl()
         val streamData = try {
             parseJson<StreamLoadData>(data)
         } catch (e: Exception) {

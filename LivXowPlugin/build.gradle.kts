@@ -2,7 +2,7 @@ version = 1
 
 cloudstream {
     language = "en"
-    description = "LivXow - Live Sports & TV Streaming"
+    description = "under work dont install"
     authors = listOf("KSHITIJ8473")
 
     status = 1

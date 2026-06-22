@@ -22,7 +22,6 @@ class Anizen : MainAPI() {
         "home" to "Home",
         "az-page/all" to "A-Z Anime",
         "search?keyword=one%20piece" to "Popular",
-        "search?keyword=hindi" to "Hindi",
         "search?keyword=dub" to "Dubbed"
     )
 
@@ -71,8 +70,11 @@ class Anizen : MainAPI() {
             .firstOrNull { it.text().trim() in listOf("Premiered:", "Date aired:") }
             ?.nextElementSibling()?.text()
             ?.let { Regex("""\d{4}""").find(it)?.value?.toIntOrNull() }
-        val dataId = document.selectFirst("div[data-data-id]")?.attr("data-data-id")?.takeIf { it.isNotBlank() }
-            ?: url.substringBefore("?").substringBefore("#").removeSuffix("/").substringAfterLast("/")
+        val slug = url.substringBefore("?").substringBefore("#").removeSuffix("/").substringAfterLast("/")
+        val dataId = document.selectFirst("div[data-anime-id=$slug]")?.attr("data-data-id")
+            ?: document.selectFirst("div[data-data-id][data-anime-id]")?.attr("data-data-id")
+            ?: document.selectFirst("div[data-data-id]")?.attr("data-data-id")
+            ?: slug
         val totalEpisodes = document.select("span")
             .firstOrNull { it.text().trim() == "Episodes:" }
             ?.nextElementSibling()?.text()?.trim()?.toIntOrNull()
@@ -142,9 +144,10 @@ class Anizen : MainAPI() {
         val requestedType = episodeData.type.lowercase()
         val filteredServers = response.servers.filter { server ->
             val serverType = server.type.lowercase()
+            if (serverType == "hindi" || server.serverName.contains("hindi", ignoreCase = true)) return@filter false
             when (requestedType) {
-                "sub" -> serverType == "sub" || serverType == "hsub" || serverType == "h-sub" || serverType == "raw" || serverType == "hindi"
-                "dub" -> serverType == "dub" || serverType == "adub" || serverType == "a-dub" || serverType == "hindi"
+                "sub" -> serverType == "sub" || serverType == "hsub" || serverType == "h-sub" || serverType == "raw"
+                "dub" -> serverType == "dub" || serverType == "adub" || serverType == "a-dub"
                 else -> true
             }
         }
@@ -192,9 +195,9 @@ class Anizen : MainAPI() {
                                 embed.contains("abyssplayer.com") || embed.contains("abyss.to") -> {
                                     AnizenAbyss().apply { name = sourceName }.getUrl(embed, mainUrl, subtitleCallback, wrappedCallback)
                                 }
-                                embed.contains("megaplay.buzz") -> AnizenMegaPlay(sourceName).getUrl(embed, mainUrl, subtitleCallback, wrappedCallback)
-                                embed.contains("vidwish.live") -> AnizenVidWish(sourceName).getUrl(embed, mainUrl, subtitleCallback, wrappedCallback)
-                                embed.contains("vidtube.site") -> AnizenVidTube(sourceName).getUrl(embed, mainUrl, subtitleCallback, wrappedCallback)
+                                embed.contains("megaplay") || embed.contains("vidstream") -> AnizenMegaPlay(sourceName).getUrl(embed, mainUrl, subtitleCallback, wrappedCallback)
+                                embed.contains("vidwish") || embed.contains("vidcloud") -> AnizenVidWish(sourceName).getUrl(embed, mainUrl, subtitleCallback, wrappedCallback)
+                                embed.contains("vidtube") || embed.contains("vidplay") -> AnizenVidTube(sourceName).getUrl(embed, mainUrl, subtitleCallback, wrappedCallback)
                                 else -> {
                                     val loaded = loadExtractor(embed, mainUrl, subtitleCallback, wrappedCallback)
                                     if (!loaded) {

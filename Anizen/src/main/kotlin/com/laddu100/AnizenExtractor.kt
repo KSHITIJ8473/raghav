@@ -1,6 +1,7 @@
 package com.laddu100
 
 import com.fasterxml.jackson.annotation.JsonProperty
+import com.fasterxml.jackson.databind.JsonNode
 import com.lagradost.api.Log
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.app
@@ -79,11 +80,13 @@ open class AnizenMegaPlay(private val sourceName: String = "MegaPlay") : Extract
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
+        val domain = Regex("""https?://[^/]+""").find(url)?.value ?: mainUrl
         val headers = mapOf(
             "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:140.0) Gecko/20100101 Firefox/140.0",
             "Accept" to "*/*",
             "X-Requested-With" to "XMLHttpRequest",
-            "Referer" to "$mainUrl/"
+            "Referer" to "$domain/",
+            "Origin" to domain
         )
 
         runCatching {
@@ -94,16 +97,32 @@ open class AnizenMegaPlay(private val sourceName: String = "MegaPlay") : Extract
                 ?: Regex("""data-realid=["'](\d+)""").find(document.html())?.groupValues?.get(1)
                 ?: Regex("""/stream/s-\d+/(\d+)""").find(url)?.groupValues?.get(1)
                 ?: return@runCatching
-            val response = app.get("$mainUrl/stream/getSources?id=$id", headers = headers).parsedSafe<Response>()
+            val response = app.get("$domain/stream/getSources?id=$id", headers = headers).parsedSafe<Response>()
                 ?: return@runCatching
-            val m3u8 = response.sources?.file ?: return@runCatching
+            
+            val sourcesNode = response.sources
+            val m3u8 = when {
+                sourcesNode == null -> null
+                sourcesNode.isArray -> {
+                    val first = sourcesNode.firstOrNull()
+                    when {
+                        first == null -> null
+                        first.isObject -> first.get("file")?.asText()
+                        first.isTextual -> first.asText()
+                        else -> null
+                    }
+                }
+                sourcesNode.isObject -> sourcesNode.get("file")?.asText()
+                sourcesNode.isTextual -> sourcesNode.asText()
+                else -> null
+            } ?: return@runCatching
 
-            generateM3u8(name, m3u8, mainUrl, headers = headers).forEach(callback)
+            generateM3u8(name, m3u8, domain, headers = headers).forEach(callback)
             response.tracks.forEach { track ->
                 val file = track.file ?: return@forEach
                 if (track.kind == "captions" || track.kind == "subtitles") {
                     subtitleCallback(newSubtitleFile(track.label ?: "Subtitle", file) {
-                        this.headers = mapOf("Referer" to "$mainUrl/")
+                        this.headers = mapOf("Referer" to "$domain/", "Origin" to domain)
                     })
                 }
             }
@@ -116,19 +135,17 @@ open class AnizenMegaPlay(private val sourceName: String = "MegaPlay") : Extract
                 useOkhttp = false,
                 timeout = 15_000L
             )
-            val m3u8 = app.get(url, referer = mainUrl, interceptor = resolver).url
+            val m3u8 = app.get(url, referer = domain, interceptor = resolver).url
             if (m3u8.contains(".m3u8")) {
-                generateM3u8(name, m3u8, mainUrl, headers = headers).forEach(callback)
+                generateM3u8(name, m3u8, domain, headers = headers).forEach(callback)
             }
         }
     }
 
     data class Response(
-        @JsonProperty("sources") val sources: Sources? = null,
+        @JsonProperty("sources") val sources: JsonNode? = null,
         @JsonProperty("tracks") val tracks: List<Track> = emptyList()
     )
-
-    data class Sources(@JsonProperty("file") val file: String? = null)
 
     data class Track(
         @JsonProperty("file") val file: String? = null,

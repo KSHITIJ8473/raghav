@@ -302,7 +302,7 @@ class LivXowProvider : MainAPI() {
     // ==================== SEARCH ====================
 
     override suspend fun search(query: String): List<SearchResponse> {
-        val homeResponse = getMainPage(1, MainPageRequest(mainUrl))
+        val homeResponse = getMainPage(1, MainPageRequest("Search", mainUrl, false))
         val allItems = homeResponse.items.flatMap { it.list }
         return allItems.filter {
             it.name.contains(query, ignoreCase = true)

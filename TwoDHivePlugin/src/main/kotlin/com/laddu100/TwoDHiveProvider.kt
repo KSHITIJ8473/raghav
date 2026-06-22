@@ -200,10 +200,7 @@ class TwoDHiveProvider : MainAPI() {
         return node
     }
 
-    private var cachedProxyUrl: String? = null
-
     private suspend fun getProxyUrl(malId: Int, epNum: Int): String {
-        cachedProxyUrl?.let { return it }
         try {
             val apiRespText = app.get(
                 url = "$mainUrl/api/hianime?mal_id=$malId&ep_num=$epNum",
@@ -215,12 +212,10 @@ class TwoDHiveProvider : MainAPI() {
             val apiJson = mapper.readTree(apiRespText)
             val m3u8 = apiJson.get("m3u8")?.asText()
             if (!m3u8.isNullOrEmpty() && m3u8.contains("/m3u8-proxy")) {
-                val prefix = m3u8.substringBefore("/m3u8-proxy") + "/m3u8-proxy"
-                cachedProxyUrl = prefix
-                return prefix
+                return m3u8.substringBefore("/m3u8-proxy") + "/m3u8-proxy"
             }
         } catch (e: Exception) {
-            // ignore
+            // ignore - fallback will be used
         }
         return "https://anicloud-hls-proxy.n3779118.workers.dev/m3u8-proxy"
     }
@@ -240,8 +235,8 @@ class TwoDHiveProvider : MainAPI() {
         val soup = Jsoup.parse(html)
 
         // Find MultiServerPlayer props in Astro Island
-        val island = soup.select("astro-island").firstOrNull { 
-            it.attr("component-url").contains("MultiServerPlayer", ignoreCase = true) 
+        val island = soup.select("astro-island").firstOrNull {
+            it.attr("component-url").contains("MultiServerPlayer", ignoreCase = true)
         } ?: return@coroutineScope false
 
         val propsStr = island.attr("props").takeIf { it.isNotEmpty() } ?: return@coroutineScope false
@@ -267,194 +262,106 @@ class TwoDHiveProvider : MainAPI() {
                 val isDub = serverItem.get("dub")?.asBoolean() ?: false
                 val animeName = serverItem.get("anime_name")?.asText()?.trim() ?: ""
 
-                // Map hydrax to hadfree just like the React app does
                 val mappedServerName = if (serverName.equals("hydrax", ignoreCase = true)) "hadfree" else serverName
 
-                // Robust check for dub status based on dub flag, server name, or anime name
                 val isServerDub = isDub || mappedServerName.contains("dub", ignoreCase = true) || animeName.contains("dub", ignoreCase = true)
 
-                // Filter subbed/dubbed server according to the selected tab
                 if ((type == "dub" && isServerDub) || (type == "sub" && !isServerDub)) {
-                    if (slug.isNotEmpty()) {
-                        loadedResults.add(async {
-                            try {
-                                when {
-                                    mappedServerName.equals("hadfree", ignoreCase = true) -> {
-                                        val apiRespText = app.get(
-                                            url = "$mainUrl/api/hadfree?slug=${slug}",
-                                            headers = mapOf(
-                                                "User-Agent" to userAgent,
-                                                "Referer" to epUrl
-                                            )
-                                        ).text
-                                        val apiJson = mapper.readTree(apiRespText)
-                                        val streamUrl = apiJson.get("streamUrl")?.asText()
-                                        if (!streamUrl.isNullOrEmpty()) {
-                                            callback(
-                                                newExtractorLink(
-                                                    source = "hadfree",
-                                                    name = "HAdfree",
-                                                    url = streamUrl,
-                                                    type = ExtractorLinkType.VIDEO
-                                                ) {
-                                                    this.headers = mapOf(
-                                                        "User-Agent" to userAgent,
-                                                        "Referer" to "$mainUrl/"
-                                                    )
-                                                }
-                                            )
-                                            true
-                                        } else false
-                                    }
-                                    mappedServerName.equals("neko_mp4", ignoreCase = true) -> {
+                    loadedResults.add(async {
+                        try {
+                            when {
+                                mappedServerName.equals("hadfree", ignoreCase = true) -> {
+                                    val apiResp = app.get(
+                                        url = "$mainUrl/api/hadfree?slug=$slug",
+                                        headers = mapOf(
+                                            "User-Agent" to userAgent,
+                                            "Referer" to "$mainUrl/"
+                                        )
+                                    ).text
+                                    val streamUrl = mapper.readTree(apiResp).get("streamUrl")?.asText()
+                                    if (!streamUrl.isNullOrEmpty()) {
                                         callback(
                                             newExtractorLink(
-                                                source = "neko_mp4",
-                                                name = "Neko MP4",
-                                                url = slug.replace(" ", "%20"),
+                                                source = "Hadfree",
+                                                name = "Hadfree",
+                                                url = streamUrl,
                                                 type = ExtractorLinkType.VIDEO
                                             ) {
                                                 this.headers = mapOf(
                                                     "User-Agent" to userAgent,
                                                     "Referer" to "$mainUrl/"
                                                 )
+                                                this.referer = "$mainUrl/"
                                             }
                                         )
                                         true
+                                    } else {
+                                        false
                                     }
-                                    mappedServerName.equals("mp4upload", ignoreCase = true) -> {
-                                        loadExtractor(
-                                            url = "https://www.mp4upload.com/embed-$slug.html",
-                                            referer = epUrl,
-                                            subtitleCallback = subtitleCallback,
-                                            callback = callback
-                                        )
-                                    }
-                                    mappedServerName.equals("meta_media_id", ignoreCase = true) -> {
-                                        loadExtractor(
-                                            url = "https://www.facebook.com/video/embed?video_id=$slug",
-                                            referer = epUrl,
-                                            subtitleCallback = subtitleCallback,
-                                            callback = callback
-                                        )
-                                    }
-                                    mappedServerName.equals("abyssplayer", ignoreCase = true) -> {
-                                        loadExtractor(
-                                            url = "https://abyssplayer.com/$slug",
-                                            referer = epUrl,
-                                            subtitleCallback = subtitleCallback,
-                                            callback = callback
-                                        )
-                                    }
-                                    slug.startsWith("http://") || slug.startsWith("https://") -> {
-                                        val encodedSlug = slug.replace(" ", "%20")
-                                        if (encodedSlug.contains(".mp4") || encodedSlug.contains(".m3u8")) {
-                                            callback(
-                                                newExtractorLink(
-                                                    source = mappedServerName.takeIf { it.isNotEmpty() } ?: "Direct",
-                                                    name = mappedServerName.takeIf { it.isNotEmpty() } ?: "Direct Link",
-                                                    url = encodedSlug,
-                                                    type = if (encodedSlug.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                                                ) {
-                                                    this.headers = mapOf(
-                                                        "User-Agent" to userAgent,
-                                                        "Referer" to "$mainUrl/"
-                                                    )
-                                                }
-                                            )
-                                            true
-                                        } else {
-                                            loadExtractor(
-                                                url = encodedSlug,
-                                                referer = epUrl,
-                                                subtitleCallback = subtitleCallback,
-                                                callback = callback
-                                            )
-                                        }
-                                    }
-                                    else -> false
                                 }
-                            } catch (e: Exception) {
-                                false
+                                mappedServerName.equals("mp4upload", ignoreCase = true) -> {
+                                    loadExtractor(
+                                        url = "https://www.mp4upload.com/embed-$slug.html",
+                                        referer = epUrl,
+                                        subtitleCallback = subtitleCallback,
+                                        callback = callback
+                                    )
+                                }
+                                mappedServerName.equals("meta_media_id", ignoreCase = true) -> {
+                                    loadExtractor(
+                                        url = "https://www.facebook.com/video/embed?video_id=$slug",
+                                        referer = epUrl,
+                                        subtitleCallback = subtitleCallback,
+                                        callback = callback
+                                    )
+                                }
+                                mappedServerName.equals("abyssplayer", ignoreCase = true) -> {
+                                    loadExtractor(
+                                        url = "https://abyssplayer.com/$slug",
+                                        referer = epUrl,
+                                        subtitleCallback = subtitleCallback,
+                                        callback = callback
+                                    )
+                                }
+                                slug.startsWith("http://") || slug.startsWith("https://") -> {
+                                    val encodedSlug = slug.replace(" ", "%20")
+                                    if (encodedSlug.contains(".mp4") || encodedSlug.contains(".m3u8")) {
+                                        callback(
+                                            newExtractorLink(
+                                                source = mappedServerName.takeIf { it.isNotEmpty() } ?: "Direct",
+                                                name = mappedServerName.takeIf { it.isNotEmpty() } ?: "Direct Link",
+                                                url = encodedSlug,
+                                                type = if (encodedSlug.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                                            ) {
+                                                this.headers = mapOf(
+                                                    "User-Agent" to userAgent,
+                                                    "Referer" to "$mainUrl/"
+                                                )
+                                                this.referer = "$mainUrl/"
+                                            }
+                                        )
+                                        true
+                                    } else {
+                                        loadExtractor(
+                                            url = encodedSlug,
+                                            referer = epUrl,
+                                            subtitleCallback = subtitleCallback,
+                                            callback = callback
+                                        )
+                                    }
+                                }
+                                else -> false
                             }
-                        })
-                    }
+                        } catch (e: Exception) {
+                            false
+                        }
+                    })
                 }
             }
         }
 
         // 2. Extra servers if MAL ID is available
         if (malId != null) {
-            // hiAnime (Only for subbed tab)
-            if (type == "sub") {
-                loadedResults.add(async {
-                    try {
-                        val apiRespText = app.get(
-                            url = "$mainUrl/api/hianime?mal_id=$malId&ep_num=$epNum",
-                            headers = mapOf(
-                                "User-Agent" to userAgent,
-                                "Referer" to epUrl
-                            )
-                        ).text
-                        val apiJson = mapper.readTree(apiRespText)
-                        val m3u8 = apiJson.get("m3u8")?.asText()
-                        val subtitleUrl = apiJson.get("subtitle")?.asText()
-                        if (!m3u8.isNullOrEmpty()) {
-                            if (!subtitleUrl.isNullOrEmpty()) {
-                                subtitleCallback(
-                                    newSubtitleFile("English", subtitleUrl) {
-                                        this.headers = mapOf("Referer" to "https://megaplay.buzz/")
-                                    }
-                                )
-                            }
-
-                            // 1. Direct link
-                            val directM3u8 = if (m3u8.contains("url=")) {
-                                java.net.URLDecoder.decode(m3u8.substringAfter("url=").substringBefore("&"), "UTF-8")
-                            } else {
-                                m3u8
-                            }
-
-                            callback(
-                                newExtractorLink(
-                                    source = "hiAnime",
-                                    name = "hiAnime (Direct)",
-                                    url = directM3u8,
-                                    type = ExtractorLinkType.M3U8
-                                ) {
-                                    this.headers = mapOf(
-                                        "User-Agent" to userAgent,
-                                        "Referer" to "https://megaplay.buzz/"
-                                    )
-                                }
-                            )
-
-                            // 2. Proxy link
-                            if (m3u8.contains("/m3u8-proxy")) {
-                                callback(
-                                    newExtractorLink(
-                                        source = "hiAnime",
-                                        name = "hiAnime (Proxy)",
-                                        url = m3u8,
-                                        type = ExtractorLinkType.M3U8
-                                    ) {
-                                        this.headers = mapOf(
-                                            "User-Agent" to userAgent,
-                                            "Referer" to "https://megaplay.buzz/"
-                                        )
-                                    }
-                                )
-                            }
-                            true
-                        } else {
-                            false
-                        }
-                    } catch (e: Exception) {
-                        false
-                    }
-                })
-            }
-
             // MegaPlay (Sub / Dub depending on the selected tab)
             loadedResults.add(async {
                 try {
@@ -479,30 +386,29 @@ class TwoDHiveProvider : MainAPI() {
                             url = "https://megaplay.buzz/stream/getSources?id=$playerId&type=$type",
                             headers = mapOf(
                                 "User-Agent" to userAgent,
-                                "Referer" to megaplayUrl,
-                                "X-Requested-With" to "XMLHttpRequest",
-                                "Origin" to "https://megaplay.buzz"
+                                "Referer" to megaplayUrl
                             )
                         ).text
 
                         val sourcesJson = mapper.readTree(sourcesText)
-                        val m3u8Url = sourcesJson.get("sources")?.get("file")?.asText()
+                        val sources = sourcesJson.get("sources")
+                        val m3u8Url = if (sources != null && sources.isArray) {
+                            sources.get(0)?.get("file")?.asText()
+                        } else {
+                            sources?.get("file")?.asText()
+                        }
+
+                        // Handle subtitles
+                        val tracks = sourcesJson.get("tracks")
+                        if (tracks != null && tracks.isArray) {
+                            tracks.forEach { track ->
+                                val file = track.get("file")?.asText() ?: return@forEach
+                                val label = track.get("label")?.asText() ?: "Unknown"
+                                subtitleCallback(SubtitleFile(label, file))
+                            }
+                        }
 
                         if (!m3u8Url.isNullOrEmpty()) {
-                            // Subtitles parsing
-                            sourcesJson.get("tracks")?.forEach { track ->
-                                val file = track.get("file")?.asText() ?: return@forEach
-                                val kind = track.get("kind")?.asText() ?: ""
-                                val label = track.get("label")?.asText() ?: "Subtitle"
-                                if (kind == "captions" || kind == "subtitles") {
-                                    subtitleCallback(
-                                        newSubtitleFile(label, file) {
-                                            this.headers = mapOf("Referer" to "https://megaplay.buzz/")
-                                        }
-                                    )
-                                }
-                            }
-
                             val displayName = if (type == "sub") "MegaPlay Sub" else "MegaPlay Dub"
 
                             // 1. Direct link
@@ -515,8 +421,10 @@ class TwoDHiveProvider : MainAPI() {
                                 ) {
                                     this.headers = mapOf(
                                         "User-Agent" to userAgent,
-                                        "Referer" to "https://megaplay.buzz/"
+                                        "Referer" to "https://megaplay.buzz/",
+                                        "Origin" to "https://megaplay.buzz"
                                     )
+                                    this.referer = "https://megaplay.buzz/"
                                 }
                             )
 
@@ -537,6 +445,7 @@ class TwoDHiveProvider : MainAPI() {
                                         "User-Agent" to userAgent,
                                         "Referer" to "https://megaplay.buzz/"
                                     )
+                                    this.referer = "https://megaplay.buzz/"
                                 }
                             )
                             true

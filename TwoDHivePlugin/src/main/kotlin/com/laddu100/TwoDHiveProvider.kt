@@ -386,7 +386,9 @@ class TwoDHiveProvider : MainAPI() {
                             url = "https://megaplay.buzz/stream/getSources?id=$playerId&type=$type",
                             headers = mapOf(
                                 "User-Agent" to userAgent,
-                                "Referer" to megaplayUrl
+                                "Referer" to megaplayUrl,
+                                "X-Requested-With" to "XMLHttpRequest",
+                                "Origin" to "https://megaplay.buzz"
                             )
                         ).text
 

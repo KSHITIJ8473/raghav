@@ -4,34 +4,21 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.newExtractorLink
+import com.lagradost.cloudstream3.utils.newDrmExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.Base64
+import kotlin.text.Charsets
 import javax.crypto.Cipher
 import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
 /**
  * LivXow Provider - Live Sports & TV Streaming
- *
  * Reverse-engineered from the LivXow Android APK (com.livxow.tv).
- *
- * Decryption Architecture (two separate AES keys):
- *   - HTTP Response Key (c6/f0.java): M8mkKlNL75K4nl15 / kN7m5Kl1pN5nk4xK
- *     Used for: app.txt, channels/<slug>.txt (config/channel list responses)
- *     Flow: substitution cipher -> Base64 -> AES/CBC
- *   - Stream Data Key (android/support/v4/media/session/b.java): l2K5wB8xC1wP7rK1 / n0K4nP8uB8hH1l18
- *     Used for: per-channel stream link responses
- *     Flow: Base64 -> AES/CBC
- *
- * API Flow:
- *   1. {base_url}app.txt -> HTTP key decrypt -> config JSON with sports_slug
- *   2. {base_url}{sports_slug} -> HTTP key decrypt -> channel array [{channel: "{name, logo, links, link_names}"}]
- *   3. {base_url}{channel.links} -> Stream key decrypt -> stream data
- *   4. Stream objects: { name, link, api, tokenApi, audio, scheme, secure_decoder }
  */
-class LivXowProvider : MainAPI() {
+open class LivXowProvider : MainAPI() {
     override var mainUrl = "https://sohaidoegeve2.shop/"
     override var name = "LivXow"
     override val supportedTypes = setOf(TvType.Live)
@@ -39,23 +26,12 @@ class LivXowProvider : MainAPI() {
     override val hasMainPage = true
     override val hasDownloadSupport = false
 
+    open val filterKeywords: List<String>? = null
+
     // ==================== DECRYPTION: Character Substitution Cipher (rc.a.b) ====================
 
-    private val standardAlphabet = charArrayOf(
-        'a', 'A', 'b', 'B', 'c', 'C', 'd', 'D', 'e', 'E', 'f', 'F', 'g', 'G',
-        'h', 'H', 'i', 'I', 'j', 'J', 'k', 'K', 'l', 'L', 'm', 'M', 'n', 'N',
-        'o', 'O', 'p', 'P', 'q', 'Q', 'r', 'R', 's', 'S', 't', 'T', 'u', 'U',
-        'v', 'V', 'w', 'W', 'x', 'X', 'y', 'Y', 'z', 'Z'
-    )
-
-    private val shuffledAlphabet = charArrayOf(
-        'f', 'F', 'g', 'G', 'j', 'J', 'k', 'K', 'a', 'A', 'p', 'P', 'b', 'B',
-        'm', 'M', 'o', 'O', 'z', 'Z', 'e', 'E', 'n', 'N', 'c', 'C', 'd', 'D',
-        'r', 'R', 'q', 'Q', 't', 'T', 'v', 'V', 'u', 'U', 'x', 'X', 'h', 'H',
-        'i', 'I', 'w', 'W', 'y', 'Y', 'l', 'L', 's', 'S'
-    )
-
-    // Decode table: shuffled char -> standard char (rc.a f11361d)
+    private val standardAlphabet = "aAbBcCdDeEfFgGhHiIjJkKlLmMnNoOpPqQrRsStTuUvVwWxXyYzZ"
+    private val shuffledAlphabet = "fFgGjJkKaApPbBmMoOzZeEnNcCdDrRqQtTvVuUxXhHiIwWyYlLsS"
     private val decodeTable = CharArray(128) { it.toChar() }
 
     init {
@@ -64,34 +40,28 @@ class LivXowProvider : MainAPI() {
         }
     }
 
-    /**
-     * Character substitution cipher (rc.a.b equivalent).
-     * Maps shuffled alphabet characters back to standard alphabet.
-     */
     private fun decryptSubstitution(str: String): String {
-        return String(CharArray(str.length) { i -> decodeTable[str[i].code] })
+        val chars = CharArray(str.length) { i ->
+            val c = str[i].code
+            if (c in 0..127) decodeTable[c] else str[i]
+        }
+        return String(chars)
     }
 
-    // ==================== DECRYPTION: HTTP Response AES (c6/f0.java j() method) ====================
+    // ==================== DECRYPTION: HTTP Response AES (c6/f0.java) ====================
 
-    /**
-     * AES/CBC/PKCS5Padding for HTTP response decryption (c6/f0.java).
-     * Key: "M8mkKlNL75K4nl15", IV: "kN7m5Kl1pN5nk4xK"
-     * Used for app.txt and channels/<slug>.txt responses.
-     *
-     * Full flow from f0.j():
-     *   1. If response starts with { or [ -> return as-is
-     *   2. Apply substitution cipher (rc.a.b)
-     *   3. Base64 decode
-     *   4. AES/CBC decrypt with this key/IV
-     */
-    private fun decryptHttpResponse(str: String): String {
+    fun decryptHttpResponse(str: String): String {
         if (str.startsWith("{") || str.startsWith("[")) {
             return str
         }
         return try {
             val substituted = decryptSubstitution(str)
-            val decoded = Base64.getDecoder().decode(substituted)
+            val padded = if (substituted.length % 4 != 0) {
+                substituted + "=".repeat(4 - (substituted.length % 4))
+            } else {
+                substituted
+            }
+            val decoded = Base64.getDecoder().decode(padded)
             val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
             val key = SecretKeySpec("M8mkKlNL75K4nl15".toByteArray(Charsets.UTF_8), "AES")
             val iv = IvParameterSpec("kN7m5Kl1pN5nk4xK".toByteArray(Charsets.UTF_8))
@@ -102,41 +72,13 @@ class LivXowProvider : MainAPI() {
         }
     }
 
-    // ==================== DECRYPTION: Stream Data AES (b.k() method) ====================
-
-    /**
-     * AES/CBC/PKCS5Padding for stream data decryption (b.k() method).
-     * Key: "l2K5wB8xC1wP7rK1", IV: "n0K4nP8uB8hH1l18"
-     * Used for per-channel stream link responses.
-     */
-    private fun decryptStreamData(str: String): String? {
-        if (str.startsWith("{") || str.startsWith("[")) {
-            return str
-        }
-        return try {
-            val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
-            val key = SecretKeySpec("l2K5wB8xC1wP7rK1".toByteArray(Charsets.UTF_8), "AES")
-            val iv = IvParameterSpec("n0K4nP8uB8hH1l18".toByteArray(Charsets.UTF_8))
-            cipher.init(Cipher.DECRYPT_MODE, key, iv)
-            String(cipher.doFinal(Base64.getDecoder().decode(str)), Charsets.UTF_8)
-        } catch (_: Exception) {
-            null
-        }
-    }
-
     // ==================== HEADERS ====================
 
     private val baseHeaders = mapOf(
-        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept" to "*/*",
-        "Accept-Language" to "en-US,en;q=0.5"
+        "User-Agent" to "okhttp/4.9.2",
+        "Accept" to "*/*"
     )
 
-    /**
-     * Parses headers from the pipe-separated format used by the app.
-     * Format: "key1=value1&key2=value2&user-agent=Mozilla..."
-     * Mirrors b.s() / vc.a.g() in the decompiled app.
-     */
     private fun parseHeaders(headerStr: String): Map<String, String> {
         val map = mutableMapOf<String, String>()
         for (part in headerStr.split("&")) {
@@ -154,10 +96,6 @@ class LivXowProvider : MainAPI() {
         return map
     }
 
-    /**
-     * Splits a URL that may contain pipe-separated headers.
-     * Returns Pair(url, headersMap).
-     */
     private fun splitUrlAndHeaders(raw: String): Pair<String, Map<String, String>> {
         if (!raw.contains("|")) {
             return Pair(raw, emptyMap())
@@ -170,10 +108,6 @@ class LivXowProvider : MainAPI() {
 
     // ==================== HTTP HELPERS ====================
 
-    /**
-     * Fetches a URL and decrypts using the HTTP response key (c6/f0.java).
-     * Used for app.txt and channels/<slug>.txt.
-     */
     private suspend fun fetchHttpDecrypted(url: String, headers: Map<String, String> = baseHeaders): String? {
         return try {
             val response = app.get(url, headers = headers, timeout = 30L)
@@ -181,23 +115,6 @@ class LivXowProvider : MainAPI() {
             val rawBody = response.text
             if (rawBody.isBlank()) return null
             decryptHttpResponse(rawBody)
-        } catch (_: Exception) {
-            null
-        }
-    }
-
-    /**
-     * Fetches a URL and decrypts using the stream data key (b.k()).
-     * Used for per-channel stream link responses.
-     */
-    private suspend fun fetchStreamDecrypted(url: String, headers: Map<String, String> = baseHeaders): JSONArray? {
-        return try {
-            val response = app.get(url, headers = headers, timeout = 30L)
-            if (!response.isSuccessful) return null
-            val rawBody = response.text
-            if (rawBody.isBlank()) return null
-            val decrypted = decryptStreamData(rawBody) ?: return null
-            JSONArray(decrypted)
         } catch (_: Exception) {
             null
         }
@@ -221,7 +138,7 @@ class LivXowProvider : MainAPI() {
             val config = try { JSONArray(configJson).optJSONObject(0) } catch (_: Exception) { null }
             if (config == null) return newHomePageResponse(emptyList())
 
-            // Step 2: Get sports_slug and fetch channels
+            // Get sports_slug and fetch channels
             var sportsSlug = config.optString("sports_slug", "")
             if (sportsSlug.isBlank()) {
                 sportsSlug = config.optString("abbasi_sports_slug", "")
@@ -234,19 +151,22 @@ class LivXowProvider : MainAPI() {
                 return newHomePageResponse(emptyList())
             }
 
+            // Step 2: Fetch and decrypt ongoing live events (events.txt)
+            val eventsUrl = "${mainUrl}events.txt"
+            val eventsJson = fetchHttpDecrypted(eventsUrl)
+
+            // Step 3: Fetch and decrypt channels list
             val channelsUrl = "$mainUrl$sportsSlug"
             val channelsJson = fetchHttpDecrypted(channelsUrl) ?: return newHomePageResponse(emptyList())
 
             val channelsArray = try { JSONArray(channelsJson) } catch (_: Exception) { null }
             if (channelsArray == null) return newHomePageResponse(emptyList())
 
-            // Step 3: Parse channels
-            val homeItems = mutableListOf<HomePageList>()
+            // Step 4: Parse channels
             val channelItems = mutableListOf<SearchResponse>()
 
             for (i in 0 until channelsArray.length()) {
                 val item = channelsArray.optJSONObject(i) ?: continue
-                // Each item has "channel" key containing a JSON string
                 val channelStr = item.optString("channel", "")
                 if (channelStr.isBlank()) continue
 
@@ -259,15 +179,23 @@ class LivXowProvider : MainAPI() {
 
                 if (channelName.isBlank() || channelLinks.isBlank()) continue
 
+                // Filter by sub-provider keywords if applicable
+                if (filterKeywords != null) {
+                    val matches = filterKeywords!!.any { kw ->
+                        channelName.contains(kw, ignoreCase = true)
+                    }
+                    if (!matches) continue
+                }
+
                 // For playlist-type channels, we create sub-items for each link name
                 if (isPlaylist && linkNames != null && linkNames.length() > 0) {
                     for (j in 0 until linkNames.length()) {
                         val subName = linkNames.optString(j, channelName)
-                        // Store full URL in the data field as a JSON with channel info
                         val dataObj = JSONObject().apply {
                             put("links", channelLinks)
                             put("name", subName)
                             put("logo", channelLogo)
+                            put("is_event", false)
                         }
                         channelItems.add(
                             newLiveSearchResponse(subName, dataObj.toString(), TvType.Live) {
@@ -280,6 +208,7 @@ class LivXowProvider : MainAPI() {
                         put("links", channelLinks)
                         put("name", channelName)
                         put("logo", channelLogo)
+                        put("is_event", false)
                     }
                     channelItems.add(
                         newLiveSearchResponse(channelName, dataObj.toString(), TvType.Live) {
@@ -289,20 +218,91 @@ class LivXowProvider : MainAPI() {
                 }
             }
 
-            homeItems.add(HomePageList("Live Channels", channelItems, isHorizontalImages = true))
+            // Step 5: Parse ongoing live events
+            val liveEvents = parseEvents(eventsJson ?: "")
 
-            return newHomePageResponse(homeItems.ifEmpty {
-                listOf(HomePageList("No Channels", emptyList(), isHorizontalImages = true))
-            })
+            val homeItems = mutableListOf<HomePageList>()
+
+            if (liveEvents.isNotEmpty()) {
+                homeItems.add(HomePageList("Ongoing Live Events", liveEvents, isHorizontalImages = true))
+            }
+
+            if (channelItems.isNotEmpty()) {
+                val sectionName = if (filterKeywords != null) "$name Channels" else "Sports Channels"
+                homeItems.add(HomePageList(sectionName, channelItems, isHorizontalImages = true))
+            }
+
+            return newHomePageResponse(homeItems)
         } catch (_: Exception) {
             return newHomePageResponse(emptyList())
         }
     }
 
+    private fun parseEvents(eventsJson: String): List<SearchResponse> {
+        val list = mutableListOf<SearchResponse>()
+        try {
+            val array = JSONArray(eventsJson)
+            for (i in 0 until array.length()) {
+                val itemObj = array.optJSONObject(i) ?: continue
+                val eventStr = itemObj.optString("event", "")
+                if (eventStr.isBlank()) continue
+                val eventObj = JSONObject(eventStr)
+
+                val visible = eventObj.optBoolean("visible", true)
+                if (!visible) continue
+
+                val eventName = eventObj.optString("eventName", "")
+                val teamAName = eventObj.optString("teamAName", "")
+                val teamBName = eventObj.optString("teamBName", "")
+                val category = eventObj.optString("category", "")
+                val links = eventObj.optString("links", "")
+                val logo = eventObj.optString("eventLogo", "")
+                val teamAFlag = eventObj.optString("teamAFlag", "")
+
+                if (links.isBlank()) continue
+
+                // Build display name
+                val displayName = if (teamAName.isNotBlank() && teamBName.isNotBlank()) {
+                    "$category: $teamAName vs $teamBName ($eventName)"
+                } else if (eventName.isNotBlank()) {
+                    "$category: $eventName"
+                } else {
+                    "$category Live Match"
+                }
+
+                // Filter by sub-provider keywords if applicable
+                if (filterKeywords != null) {
+                    val matches = filterKeywords!!.any { kw ->
+                        displayName.contains(kw, ignoreCase = true) ||
+                        category.contains(kw, ignoreCase = true) ||
+                        eventName.contains(kw, ignoreCase = true)
+                    }
+                    if (!matches) continue
+                }
+
+                val dataObj = JSONObject().apply {
+                    put("links", links)
+                    put("name", displayName)
+                    put("logo", logo.ifBlank { teamAFlag })
+                    put("is_event", true)
+                }
+
+                list.add(
+                    newLiveSearchResponse(displayName, dataObj.toString(), TvType.Live) {
+                        this.posterUrl = logo.ifBlank { teamAFlag.ifBlank { null } }
+                    }
+                )
+            }
+        } catch (_: Exception) {
+            // Ignore
+        }
+        return list
+    }
+
     // ==================== SEARCH ====================
 
     override suspend fun search(query: String): List<SearchResponse> {
-        val homeResponse = getMainPage(1, MainPageRequest(mainUrl))
+        val homeResponse = getMainPage(1, MainPageRequest(this.name, mainUrl, true))
         val allItems = homeResponse.items.flatMap { it.list }
         return allItems.filter {
             it.name.contains(query, ignoreCase = true)
@@ -340,7 +340,15 @@ class LivXowProvider : MainAPI() {
             if (links.isBlank()) return false
 
             val streamUrl = "$mainUrl$links"
-            val jsonArray = fetchStreamDecrypted(streamUrl) ?: return false
+            val response = app.get(streamUrl, headers = baseHeaders, timeout = 30L)
+            if (!response.isSuccessful) return false
+            val responseBody = response.text
+            if (responseBody.isBlank()) return false
+
+            val decrypted = decryptHttpResponse(responseBody)
+            if (decrypted.isBlank()) return false
+
+            val jsonArray = JSONArray(decrypted)
 
             for (i in 0 until jsonArray.length()) {
                 val streamObj = jsonArray.optJSONObject(i) ?: continue
@@ -351,11 +359,15 @@ class LivXowProvider : MainAPI() {
                     val (playlistUrl, playlistHeaders) = splitUrlAndHeaders(playlistRaw)
 
                     val mergedHeaders = baseHeaders.toMutableMap().apply { putAll(playlistHeaders) }
-                    val playlistArray = fetchStreamDecrypted(playlistUrl, mergedHeaders)
-                    if (playlistArray != null) {
-                        for (j in 0 until playlistArray.length()) {
-                            val pStream = playlistArray.optJSONObject(j) ?: continue
-                            processStreamObject(pStream, callback)
+                    val playlistResponse = app.get(playlistUrl, headers = mergedHeaders, timeout = 30L)
+                    if (playlistResponse.isSuccessful && playlistResponse.text.isNotBlank()) {
+                        val decryptedPlaylist = decryptHttpResponse(playlistResponse.text)
+                        if (decryptedPlaylist.isNotBlank()) {
+                            val playlistArray = JSONArray(decryptedPlaylist)
+                            for (j in 0 until playlistArray.length()) {
+                                val pStream = playlistArray.optJSONObject(j) ?: continue
+                                processStreamObject(pStream, callback)
+                            }
                         }
                     }
                     continue
@@ -370,17 +382,25 @@ class LivXowProvider : MainAPI() {
         }
     }
 
-    /**
-     * Processes a single stream JSON object and adds extractor links.
-     * Stream object fields (pc.h model):
-     *   - name: stream name/quality
-     *   - link: stream URL (may contain |headers)
-     *   - api: DRM license URL (may contain |encrypted_headers)
-     *   - tokenApi: token API URL
-     *   - audio: audio track
-     *   - scheme: DRM scheme (0=ClearKey, 1=Widevine)
-     *   - secure_decoder: whether secure decoder is required
-     */
+    private fun hexToBase64Unpadded(hex: String): String {
+        val bytes = ByteArray(hex.length / 2)
+        for (i in 0 until hex.length step 2) {
+            bytes[i / 2] = hex.substring(i, i + 2).toInt(16).toByte()
+        }
+        return Base64.getEncoder().encodeToString(bytes)
+            .replace("=", "")
+            .replace("+", "-")
+            .replace("/", "_")
+    }
+
+    private fun makeClearKeyJson(api: String): String {
+        val parts = api.split(":")
+        if (parts.size < 2) return ""
+        val kid = hexToBase64Unpadded(parts[0].trim())
+        val key = hexToBase64Unpadded(parts[1].trim())
+        return """{"keys":[{"kty":"oct","k":"$key","kid":"$kid"}],"type":"temporary"}"""
+    }
+
     private suspend fun processStreamObject(
         streamObj: JSONObject,
         callback: (ExtractorLink) -> Unit
@@ -394,16 +414,36 @@ class LivXowProvider : MainAPI() {
         // Determine stream type from URL extension
         val type = when {
             actualUrl.contains(".m3u8", ignoreCase = true) -> ExtractorLinkType.M3U8
-            actualUrl.contains(".mpd", ignoreCase = true) -> ExtractorLinkType.VIDEO
+            actualUrl.contains(".mpd", ignoreCase = true) -> ExtractorLinkType.DASH
             else -> ExtractorLinkType.VIDEO
         }
 
         // Merge headers
         val mergedHeaders = baseHeaders.toMutableMap().apply { putAll(extraHeaders) }
 
-        // Get DRM info from pc.h model
-        val drmApiRaw = streamObj.optString("api", null)
-        val tokenApi = streamObj.optString("tokenApi", null)
+        // Get DRM info
+        val drmApiRaw = streamObj.optString("api").ifBlank { null }
+        val scheme = streamObj.optInt("scheme", 0)
+
+        // If it's a ClearKey DRM stream (api key present, not url)
+        if (!drmApiRaw.isNullOrBlank() && !drmApiRaw.startsWith("http")) {
+            val clearkeyJson = makeClearKeyJson(drmApiRaw)
+            if (clearkeyJson.isNotBlank()) {
+                callback(
+                    newDrmExtractorLink(
+                        source = name,
+                        name = "$name - $streamName (ClearKey)",
+                        url = actualUrl,
+                        type = ExtractorLinkType.DASH,
+                        uuid = java.util.UUID.fromString("1074bf19-7a17-4d2d-8a82-e9b1470fd211")
+                    ) {
+                        this.licenseUrl = "data:application/json," + clearkeyJson
+                        this.headers = mergedHeaders
+                    }
+                )
+                return
+            }
+        }
 
         // Add the main stream link
         callback(
@@ -419,13 +459,12 @@ class LivXowProvider : MainAPI() {
             }
         )
 
-        // Handle DRM/api field if present
-        if (!drmApiRaw.isNullOrBlank()) {
+        // Handle DRM/api field if it is a license URL (starts with http)
+        if (!drmApiRaw.isNullOrBlank() && drmApiRaw.startsWith("http")) {
             val (drmUrl, drmHeadersRaw) = if (drmApiRaw.contains("|")) {
                 val pipeIdx = drmApiRaw.indexOf('|')
                 val url = drmApiRaw.substring(0, pipeIdx)
                 val headersEncrypted = drmApiRaw.substring(pipeIdx + 1)
-                // Decrypt headers using substitution cipher
                 val headersDecrypted = decryptSubstitution(headersEncrypted)
                 Pair(url, parseHeaders(headersDecrypted))
             } else {
@@ -433,38 +472,71 @@ class LivXowProvider : MainAPI() {
             }
 
             val drmHeaders = baseHeaders.toMutableMap().apply { putAll(drmHeadersRaw) }
+            val uuid = if (scheme == 1) {
+                java.util.UUID.fromString("edef8ba9-79d6-4ace-a3c8-27dcd51d21ed") // Widevine UUID
+            } else {
+                java.util.UUID.fromString("1074bf19-7a17-4d2d-8a82-e9b1470fd211") // ClearKey UUID
+            }
 
             callback(
-                newExtractorLink(
+                newDrmExtractorLink(
                     source = name,
                     name = "$name - $streamName (DRM)",
-                    url = drmUrl,
-                    type = type
+                    url = actualUrl,
+                    type = ExtractorLinkType.DASH,
+                    uuid = uuid
                 ) {
+                    this.licenseUrl = drmUrl
                     this.headers = drmHeaders
-                    this.quality = Qualities.Unknown.value
-                    this.referer = mainUrl
-                }
-            )
-        }
-
-        // Handle tokenApi if present
-        if (!tokenApi.isNullOrBlank()) {
-            val (tokenUrl, tokenHeaders) = splitUrlAndHeaders(tokenApi)
-            val tokenMergedHeaders = baseHeaders.toMutableMap().apply { putAll(tokenHeaders) }
-
-            callback(
-                newExtractorLink(
-                    source = name,
-                    name = "$name - $streamName (Token)",
-                    url = tokenUrl,
-                    type = type
-                ) {
-                    this.headers = tokenMergedHeaders
-                    this.quality = Qualities.Unknown.value
-                    this.referer = mainUrl
                 }
             )
         }
     }
+}
+
+// ==================== SUB-PROVIDERS / SUB-PLUGINS ====================
+
+class FancodeProvider : LivXowProvider() {
+    override var name = "FanCode"
+    override val filterKeywords = listOf("Fancode")
+}
+
+class StarSportsProvider : LivXowProvider() {
+    override var name = "Star Sports"
+    override val filterKeywords = listOf("Star Sports")
+}
+
+class SonySportsProvider : LivXowProvider() {
+    override var name = "Sony Sports"
+    override val filterKeywords = listOf("Sony Sports", "SonyLIV")
+}
+
+class WillowSportsProvider : LivXowProvider() {
+    override var name = "Willow"
+    override val filterKeywords = listOf("Willow")
+}
+
+class PTVSportsProvider : LivXowProvider() {
+    override var name = "PTV Sports"
+    override val filterKeywords = listOf("PTV Sports")
+}
+
+class SkySportsProvider : LivXowProvider() {
+    override var name = "Sky Sports"
+    override val filterKeywords = listOf("Sky Sports")
+}
+
+class FoxSportsProvider : LivXowProvider() {
+    override var name = "Fox Sports"
+    override val filterKeywords = listOf("Fox Sports", "Fox Cricket")
+}
+
+class ESPNProvider : LivXowProvider() {
+    override var name = "ESPN"
+    override val filterKeywords = listOf("ESPN")
+}
+
+class WWEProvider : LivXowProvider() {
+    override var name = "WWE & Wrestling"
+    override val filterKeywords = listOf("WWE", "RAW", "SmackDown", "AEW", "TNA", "Boxing", "UFC")
 }

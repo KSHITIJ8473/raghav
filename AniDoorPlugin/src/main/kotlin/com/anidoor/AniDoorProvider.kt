@@ -1,5 +1,6 @@
 package com.anidoor
 
+import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.fasterxml.jackson.databind.DeserializationFeature
 import com.fasterxml.jackson.databind.ObjectMapper
@@ -8,6 +9,9 @@ import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.loadExtractor
 import com.lagradost.cloudstream3.utils.newExtractorLink
+import com.lagradost.cloudstream3.utils.AppUtils.toJson
+import okhttp3.MediaType.Companion.toMediaTypeOrNull
+import okhttp3.RequestBody.Companion.toRequestBody
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -29,14 +33,18 @@ class AniDoorProvider : MainAPI() {
     )
 
     private suspend fun queryAniList(query: String, variables: Map<String, Any>): String? {
-        val body = mapOf(
+        val requestData = mapOf(
             "query" to query,
             "variables" to variables
-        )
+        ).toJson().toRequestBody(com.lagradost.nicehttp.RequestBodyTypes.JSON.toMediaTypeOrNull())
+
         val res = app.post(
             "https://graphql.anilist.co",
-            headers = mapOf("Content-Type" to "application/json"),
-            json = body
+            headers = mapOf(
+                "Accept" to "application/json",
+                "Content-Type" to "application/json"
+            ),
+            requestBody = requestData
         )
         return if (res.code == 200) res.text else null
     }
@@ -79,13 +87,13 @@ class AniDoorProvider : MainAPI() {
         val results = mutableListOf<SearchResponse>()
         if (mediaList.isArray) {
             for (media in mediaList) {
-                val id = media.get("id")?.asInt() ?: continue
+                val id = media.get("id")?.intOrNull() ?: continue
                 val titleNode = media.get("title")
-                val title = titleNode?.get("english")?.asText()?.takeIf { it.isNotBlank() }
-                    ?: titleNode?.get("romaji")?.asText()
+                val title = titleNode?.get("english")?.textOrNull()?.takeIf { it.isNotBlank() }
+                    ?: titleNode?.get("romaji")?.textOrNull()
                     ?: "Anime"
-                val poster = media.get("coverImage")?.get("large")?.asText()
-                val format = media.get("format")?.asText() ?: ""
+                val poster = media.get("coverImage")?.get("large")?.textOrNull()
+                val format = media.get("format")?.textOrNull() ?: ""
                 val tvType = if (format == "MOVIE") TvType.AnimeMovie else TvType.Anime
                 
                 val linkUrl = "$mainUrl/watch/?al=$id"
@@ -130,13 +138,13 @@ class AniDoorProvider : MainAPI() {
         val results = mutableListOf<SearchResponse>()
         if (mediaList.isArray) {
             for (media in mediaList) {
-                val id = media.get("id")?.asInt() ?: continue
+                val id = media.get("id")?.intOrNull() ?: continue
                 val titleNode = media.get("title")
-                val title = titleNode?.get("english")?.asText()?.takeIf { it.isNotBlank() }
-                    ?: titleNode?.get("romaji")?.asText()
+                val title = titleNode?.get("english")?.textOrNull()?.takeIf { it.isNotBlank() }
+                    ?: titleNode?.get("romaji")?.textOrNull()
                     ?: "Anime"
-                val poster = media.get("coverImage")?.get("large")?.asText()
-                val format = media.get("format")?.asText() ?: ""
+                val poster = media.get("coverImage")?.get("large")?.textOrNull()
+                val format = media.get("format")?.textOrNull() ?: ""
                 val tvType = if (format == "MOVIE") TvType.AnimeMovie else TvType.Anime
                 
                 val linkUrl = "$mainUrl/watch/?al=$id"
@@ -182,18 +190,18 @@ class AniDoorProvider : MainAPI() {
         val responseText = queryAniList(graphQuery, vars) ?: throw ErrorLoadingException("Failed to fetch data from AniList")
         val mediaNode = mapper.readTree(responseText).get("data")?.get("Media") ?: throw ErrorLoadingException("Anime not found")
         
-        val malId = mediaNode.get("idMal")?.asInt()
+        val malId = mediaNode.get("idMal")?.intOrNull()
         val titleNode = mediaNode.get("title")
-        val title = titleNode?.get("english")?.asText()?.takeIf { it.isNotBlank() }
-            ?: titleNode?.get("romaji")?.asText()
+        val title = titleNode?.get("english")?.textOrNull()?.takeIf { it.isNotBlank() }
+            ?: titleNode?.get("romaji")?.textOrNull()
             ?: "Anime"
-        val poster = mediaNode.get("coverImage")?.get("extraLarge")?.asText()
-            ?: mediaNode.get("coverImage")?.get("large")?.asText()
-        val synopsis = mediaNode.get("description")?.asText()?.replace(Regex("<[^>]*>"), "")
-        val year = mediaNode.get("seasonYear")?.asInt()
-        val genres = mediaNode.get("genres")?.mapNotNull { it.asText() } ?: emptyList()
+        val poster = mediaNode.get("coverImage")?.get("extraLarge")?.textOrNull()
+            ?: mediaNode.get("coverImage")?.get("large")?.textOrNull()
+        val synopsis = mediaNode.get("description")?.textOrNull()?.replace(Regex("<[^>]*>"), "")
+        val year = mediaNode.get("seasonYear")?.intOrNull()
+        val genres = mediaNode.get("genres")?.mapNotNull { it.textOrNull() } ?: emptyList()
 
-        val status = when (mediaNode.get("status")?.asText()?.lowercase()) {
+        val status = when (mediaNode.get("status")?.textOrNull()?.lowercase()) {
             "finished" -> ShowStatus.Completed
             "releasing" -> ShowStatus.Ongoing
             else -> null
@@ -216,9 +224,9 @@ class AniDoorProvider : MainAPI() {
                 this.episode = 1
             })
         } else {
-            val totalEps = mediaNode.get("episodes")?.asInt() ?: 1
-            val nextAiringEpisodeNode = mediaNode.get("nextAiringEpisode")
-            val nextEpNum = nextAiringEpisodeNode?.get("episode")?.asInt()
+            val totalEps = mediaNode.get("episodes")?.takeIf { !it.isNull }?.asInt() ?: 1
+            val nextAiringEpisodeNode = mediaNode.get("nextAiringEpisode")?.takeIf { !it.isNull }
+            val nextEpNum = nextAiringEpisodeNode?.get("episode")?.takeIf { !it.isNull }?.asInt()
             val displayCount = if (nextEpNum != null) {
                 maxOf(totalEps, nextEpNum - 1)
             } else {
@@ -333,3 +341,6 @@ class AniDoorProvider : MainAPI() {
 
     class ErrorLoadingException(message: String) : RuntimeException(message)
 }
+
+private fun JsonNode.textOrNull(): String? = if (this.isNull) null else this.asText()
+private fun JsonNode.intOrNull(): Int? = if (this.isNull) null else this.asInt()

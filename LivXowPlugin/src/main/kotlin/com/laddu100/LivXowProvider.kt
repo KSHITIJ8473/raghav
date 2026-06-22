@@ -216,10 +216,10 @@ class LivXowProvider : MainAPI() {
         try {
             // Step 1: Fetch and decrypt app.txt config
             val configUrl = "${mainUrl}app.txt"
-            val configJson = fetchHttpDecrypted(configUrl) ?: return HomePageResponse(emptyList())
+            val configJson = fetchHttpDecrypted(configUrl) ?: return newHomePageResponse(emptyList())
 
             val config = try { JSONArray(configJson).optJSONObject(0) } catch (_: Exception) { null }
-            if (config == null) return HomePageResponse(emptyList())
+            if (config == null) return newHomePageResponse(emptyList())
 
             // Step 2: Get sports_slug and fetch channels
             var sportsSlug = config.optString("sports_slug", "")
@@ -231,14 +231,14 @@ class LivXowProvider : MainAPI() {
             }
 
             if (sportsSlug.isBlank()) {
-                return HomePageResponse(emptyList())
+                return newHomePageResponse(emptyList())
             }
 
             val channelsUrl = "$mainUrl$sportsSlug"
-            val channelsJson = fetchHttpDecrypted(channelsUrl) ?: return HomePageResponse(emptyList())
+            val channelsJson = fetchHttpDecrypted(channelsUrl) ?: return newHomePageResponse(emptyList())
 
             val channelsArray = try { JSONArray(channelsJson) } catch (_: Exception) { null }
-            if (channelsArray == null) return HomePageResponse(emptyList())
+            if (channelsArray == null) return newHomePageResponse(emptyList())
 
             // Step 3: Parse channels
             val homeItems = mutableListOf<HomePageList>()
@@ -270,7 +270,7 @@ class LivXowProvider : MainAPI() {
                             put("logo", channelLogo)
                         }
                         channelItems.add(
-                            newLiveSearchResponse(subName, dataObj.toString()) {
+                            newLiveSearchResponse(subName, dataObj.toString(), TvType.Live) {
                                 this.posterUrl = channelLogo.ifBlank { null }
                             }
                         )
@@ -282,20 +282,20 @@ class LivXowProvider : MainAPI() {
                         put("logo", channelLogo)
                     }
                     channelItems.add(
-                        newLiveSearchResponse(channelName, dataObj.toString()) {
+                        newLiveSearchResponse(channelName, dataObj.toString(), TvType.Live) {
                             this.posterUrl = channelLogo.ifBlank { null }
                         }
                     )
                 }
             }
 
-            homeItems.add(HomePageList("Live Channels", channelItems))
+            homeItems.add(HomePageList("Live Channels", channelItems, isHorizontalImages = true))
 
-            return HomePageResponse(homeItems.ifEmpty {
-                listOf(HomePageList("No Channels", emptyList()))
+            return newHomePageResponse(homeItems.ifEmpty {
+                listOf(HomePageList("No Channels", emptyList(), isHorizontalImages = true))
             })
         } catch (_: Exception) {
-            return HomePageResponse(emptyList())
+            return newHomePageResponse(emptyList())
         }
     }
 
@@ -316,13 +316,12 @@ class LivXowProvider : MainAPI() {
             val dataObj = JSONObject(url)
             val name = dataObj.optString("name", "Live Channel")
             val logo = dataObj.optString("logo", "")
-            return newLiveLoadResponse(name, url) {
+            return newLiveStreamLoadResponse(name, url, this.name) {
                 this.posterUrl = logo.ifBlank { null }
-                this.plot = "Live streaming channel"
             }
         } catch (_: Exception) {
-            return newLiveLoadResponse("Live Channel", url) {
-                this.plot = "Live streaming channel"
+            return newLiveStreamLoadResponse("Live Channel", url, this.name) {
+                this.posterUrl = null
             }
         }
     }
@@ -395,7 +394,7 @@ class LivXowProvider : MainAPI() {
         // Determine stream type from URL extension
         val type = when {
             actualUrl.contains(".m3u8", ignoreCase = true) -> ExtractorLinkType.M3U8
-            actualUrl.contains(".mpd", ignoreCase = true) -> ExtractorLinkType.MPD
+            actualUrl.contains(".mpd", ignoreCase = true) -> ExtractorLinkType.VIDEO
             else -> ExtractorLinkType.VIDEO
         }
 
@@ -412,11 +411,11 @@ class LivXowProvider : MainAPI() {
                 source = name,
                 name = "$name - $streamName",
                 url = actualUrl,
-                type = type,
-                referer = mainUrl
+                type = type
             ) {
                 this.headers = mergedHeaders
                 this.quality = Qualities.Unknown.value
+                this.referer = mainUrl
             }
         )
 
@@ -440,11 +439,11 @@ class LivXowProvider : MainAPI() {
                     source = name,
                     name = "$name - $streamName (DRM)",
                     url = drmUrl,
-                    type = type,
-                    referer = mainUrl
+                    type = type
                 ) {
                     this.headers = drmHeaders
                     this.quality = Qualities.Unknown.value
+                    this.referer = mainUrl
                 }
             )
         }
@@ -459,11 +458,11 @@ class LivXowProvider : MainAPI() {
                     source = name,
                     name = "$name - $streamName (Token)",
                     url = tokenUrl,
-                    type = type,
-                    referer = mainUrl
+                    type = type
                 ) {
                     this.headers = tokenMergedHeaders
                     this.quality = Qualities.Unknown.value
+                    this.referer = mainUrl
                 }
             )
         }

@@ -10,7 +10,7 @@ cloudstream {
         "Live",
         "TvSeries"
     )
-    iconUrl = "https://sohaidoegeve2.shop/favicon.ico"
+    iconUrl = "https://www.livxow.site/logo.jpg"
 }
 
 android {

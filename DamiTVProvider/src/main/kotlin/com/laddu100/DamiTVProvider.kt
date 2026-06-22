@@ -30,7 +30,9 @@ class DamiTVProvider : MainAPI() {
         val title: String,
         val url: String, // Stores the match/substream ID
         val posterUrl: String?,
-        val category: String?
+        val category: String?,
+        val status: String? = null,
+        val date: Long? = null
     )
 
     data class StreamLoadData(
@@ -74,31 +76,18 @@ class DamiTVProvider : MainAPI() {
         @JsonProperty("error") val error: String?
     )
 
-    // ── Main Page ─────────────────────────────────────────────────────────────
+    // ── Helpers ───────────────────────────────────────────────────────────────
 
-    override suspend fun getMainPage(
-        page: Int,
-        request: MainPageRequest
-    ): HomePageResponse {
-        val lists = mutableListOf<HomePageList>()
-
-        // Live Sports Matches
-        try {
-            val liveText = app.get("$mainUrl/papi/matches/live", headers = baseHeaders).text
-            val liveMatches = parseJson<List<DamiMatch>>(liveText)
-            val filteredMatches = liveMatches.filter { match ->
-                val cat = match.category?.lowercase() ?: ""
-                cat.isNotBlank() && cat != "24/7-streams" && cat != "live-tv" && cat != "channels" && !cat.contains("stream")
-            }
-            if (filteredMatches.isNotEmpty()) {
-                val items = filteredMatches.map { matchToSearchResponse(it) }
-                lists.add(HomePageList("🟢 Live Sports Events", items, isHorizontalImages = true))
-            }
+    private fun formatMatchDate(timestamp: Long?): String {
+        if (timestamp == null) return "soon"
+        return try {
+            val date = java.util.Date(timestamp)
+            val sdf = java.text.SimpleDateFormat("dd MMM, HH:mm", java.util.Locale.US)
+            sdf.timeZone = java.util.TimeZone.getDefault()
+            sdf.format(date)
         } catch (e: Exception) {
-            println("DamiTV: Failed to load live matches - ${e.message}")
+            "soon"
         }
-
-        return newHomePageResponse(lists, hasNext = false)
     }
 
     private fun matchToSearchResponse(match: DamiMatch): SearchResponse {
@@ -108,25 +97,90 @@ class DamiTVProvider : MainAPI() {
             title = title,
             url = match.id,
             posterUrl = posterUrl,
-            category = match.category
+            category = match.category,
+            status = match.status,
+            date = match.date
         )
         return newLiveSearchResponse(title, loadData.toJson(), TvType.Live) {
             this.posterUrl = posterUrl
         }
     }
 
+    private fun matchToUpcomingSearchResponse(match: DamiMatch): SearchResponse {
+        val dateStr = formatMatchDate(match.date)
+        val title = "${match.title} [Upcoming - Starts: $dateStr]"
+        val posterUrl = match.poster ?: ""
+        val loadData = EventLoadData(
+            title = match.title,
+            url = match.id,
+            posterUrl = posterUrl,
+            category = match.category,
+            status = match.status,
+            date = match.date
+        )
+        return newLiveSearchResponse(title, loadData.toJson(), TvType.Live) {
+            this.posterUrl = posterUrl
+        }
+    }
+
+    // ── Main Page ─────────────────────────────────────────────────────────────
+
+    override suspend fun getMainPage(
+        page: Int,
+        request: MainPageRequest
+    ): HomePageResponse {
+        val lists = mutableListOf<HomePageList>()
+
+        try {
+            val allText = app.get("$mainUrl/papi/matches/all", headers = baseHeaders).text
+            val allMatches = parseJson<List<DamiMatch>>(allText)
+
+            // 1. Live Matches
+            val liveMatches = allMatches.filter { match ->
+                val status = match.status?.lowercase() ?: ""
+                val cat = match.category?.lowercase() ?: ""
+                status == "live" && cat.isNotBlank() && cat != "24/7-streams" && cat != "live-tv" && cat != "channels" && !cat.contains("stream")
+            }
+            if (liveMatches.isNotEmpty()) {
+                val items = liveMatches.map { matchToSearchResponse(it) }
+                lists.add(HomePageList("🟢 Live Sports Events", items, isHorizontalImages = true))
+            }
+
+            // 2. Upcoming Matches
+            val upcomingMatches = allMatches.filter { match ->
+                val status = match.status?.lowercase() ?: ""
+                val cat = match.category?.lowercase() ?: ""
+                status == "upcoming" && cat.isNotBlank() && cat != "24/7-streams" && cat != "live-tv" && cat != "channels" && !cat.contains("stream")
+            }
+            if (upcomingMatches.isNotEmpty()) {
+                val items = upcomingMatches.map { matchToUpcomingSearchResponse(it) }
+                lists.add(HomePageList("📅 Upcoming Matches (Live soon)", items, isHorizontalImages = true))
+            }
+        } catch (e: Exception) {
+            println("DamiTV: Failed to load matches - ${e.message}")
+        }
+
+        return newHomePageResponse(lists, hasNext = false)
+    }
+
     // ── Search ────────────────────────────────────────────────────────────────
 
     override suspend fun search(query: String): List<SearchResponse> {
         return try {
-            val text = app.get("$mainUrl/papi/matches/live", headers = baseHeaders).text
-            val liveMatches = parseJson<List<DamiMatch>>(text)
-            liveMatches.filter { match ->
+            val text = app.get("$mainUrl/papi/matches/all", headers = baseHeaders).text
+            val allMatches = parseJson<List<DamiMatch>>(text)
+            allMatches.filter { match ->
                 val cat = match.category?.lowercase() ?: ""
                 val isSport = cat.isNotBlank() && cat != "24/7-streams" && cat != "live-tv" && cat != "channels" && !cat.contains("stream")
                 isSport && (match.title.contains(query, ignoreCase = true) ||
                 (match.league?.contains(query, ignoreCase = true) ?: false))
-            }.map { matchToSearchResponse(it) }
+            }.map { match ->
+                if (match.status == "upcoming") {
+                    matchToUpcomingSearchResponse(match)
+                } else {
+                    matchToSearchResponse(match)
+                }
+            }
         } catch (e: Exception) {
             println("DamiTV: Search failed - ${e.message}")
             emptyList()
@@ -140,26 +194,31 @@ class DamiTVProvider : MainAPI() {
         val matchId = eventData.url
         val title = eventData.title
         val posterUrl = eventData.posterUrl
+        val isUpcoming = eventData.status == "upcoming"
+        val dateStr = formatMatchDate(eventData.date)
 
         val streamsList = mutableListOf<StreamInfo>()
         try {
             val text = app.get("$mainUrl/papi/extract-url/$matchId", headers = baseHeaders).text
             val response = parseJson<ExtractUrlResponse>(text)
             if (response.success) {
-                // Add main stream
-                streamsList.add(StreamInfo(name = "Main Stream", url = matchId))
+                val mainStreamName = if (isUpcoming) "Upcoming - Live soon (Starts: $dateStr)" else "Main Stream"
+                streamsList.add(StreamInfo(name = mainStreamName, url = matchId))
 
                 // Add substreams
                 response.substreams?.forEach { sub ->
                     val localeSuffix = if (!sub.locale.isNullOrBlank()) " (${sub.locale})" else ""
-                    streamsList.add(StreamInfo(name = "${sub.name}$localeSuffix", url = sub.id))
+                    val subName = if (isUpcoming) "${sub.name}$localeSuffix (Upcoming)" else "${sub.name}$localeSuffix"
+                    streamsList.add(StreamInfo(name = subName, url = sub.id))
                 }
             } else {
-                streamsList.add(StreamInfo(name = "Main Stream", url = matchId))
+                val mainStreamName = if (isUpcoming) "Upcoming - Live soon (Starts: $dateStr)" else "Main Stream"
+                streamsList.add(StreamInfo(name = mainStreamName, url = matchId))
             }
         } catch (e: Exception) {
             println("DamiTV: Load failed to query extract-url - ${e.message}")
-            streamsList.add(StreamInfo(name = "Main Stream", url = matchId))
+            val mainStreamName = if (isUpcoming) "Upcoming - Live soon (Starts: $dateStr)" else "Main Stream"
+            streamsList.add(StreamInfo(name = mainStreamName, url = matchId))
         }
 
         val streamData = StreamLoadData(title, streamsList)

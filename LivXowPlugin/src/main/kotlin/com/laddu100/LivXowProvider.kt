@@ -8,7 +8,7 @@ import com.lagradost.cloudstream3.utils.newDrmExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import org.json.JSONArray
 import org.json.JSONObject
-import java.util.Base64
+import android.util.Base64
 import kotlin.text.Charsets
 import javax.crypto.Cipher
 import javax.crypto.spec.IvParameterSpec
@@ -61,7 +61,7 @@ open class LivXowProvider : MainAPI() {
             } else {
                 substituted
             }
-            val decoded = Base64.getDecoder().decode(padded)
+            val decoded = Base64.decode(padded, Base64.DEFAULT)
             val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
             val key = SecretKeySpec("M8mkKlNL75K4nl15".toByteArray(Charsets.UTF_8), "AES")
             val iv = IvParameterSpec("kN7m5Kl1pN5nk4xK".toByteArray(Charsets.UTF_8))
@@ -387,10 +387,7 @@ open class LivXowProvider : MainAPI() {
         for (i in 0 until hex.length step 2) {
             bytes[i / 2] = hex.substring(i, i + 2).toInt(16).toByte()
         }
-        return Base64.getEncoder().encodeToString(bytes)
-            .replace("=", "")
-            .replace("+", "-")
-            .replace("/", "_")
+        return Base64.encodeToString(bytes, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
     }
 
     private fun makeClearKeyJson(api: String): String {

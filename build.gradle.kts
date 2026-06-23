@@ -80,8 +80,8 @@ subprojects {
         implementation(kotlin("stdlib"))
         implementation("com.github.Blatzar:NiceHttp:0.4.18")
         implementation("org.jsoup:jsoup:1.22.2")
-        implementation("com.fasterxml.jackson.module:jackson-module-kotlin:2.13.1")
-        implementation("com.fasterxml.jackson.core:jackson-databind:2.13.1")
+        implementation("com.fasterxml.jackson.module:jackson-module-kotlin:2.17.1")
+        implementation("com.fasterxml.jackson.core:jackson-databind:2.17.1")
         implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
         implementation("com.google.code.gson:gson:2.14.0")
     }

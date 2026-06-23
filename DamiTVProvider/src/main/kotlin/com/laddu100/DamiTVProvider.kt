@@ -305,11 +305,11 @@ class DamiTVProvider : MainAPI() {
                         // Use embedindia.st as referer — BunnyCDN whitelists this domain
                         callback.invoke(
                             newExtractorLink(
-                                source = this.name,
-                                name = "${stream.name} (Direct)",
-                                url = response.hlsUrl,
-                                referer = "$EMBED_DOMAIN/",
-                                type = ExtractorLinkType.M3U8
+                                this.name,
+                                "${stream.name} (Direct)",
+                                response.hlsUrl,
+                                "$EMBED_DOMAIN/",
+                                ExtractorLinkType.M3U8
                             ) {
                                 this.headers = hlsPlayHeaders
                             }

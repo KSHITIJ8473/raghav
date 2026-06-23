@@ -623,6 +623,12 @@ class BinTVProvider : MainAPI() {
             try {
                 val reader = socket.getInputStream().bufferedReader()
                 val firstLine = reader.readLine() ?: return
+                // Consume all HTTP request headers to prevent TCP RST on socket close
+                while (true) {
+                    val line = reader.readLine()
+                    if (line.isNullOrEmpty()) break
+                }
+
                 val parts = firstLine.split(" ")
                 if (parts.size < 2) return
                 val path = parts[1]
@@ -637,10 +643,34 @@ class BinTVProvider : MainAPI() {
                     val playlistText = response.text
                     val baseUrl = targetUrl.substringBeforeLast("/")
 
+                    var isStreamInf = false
                     val rewritten = playlistText.lineSequence().map { line ->
                         val trimmed = line.trim()
-                        if (trimmed.isEmpty() || trimmed.startsWith("#")) {
+                        if (trimmed.isEmpty() || (trimmed.startsWith("#") && !trimmed.contains("URI=\""))) {
+                            isStreamInf = trimmed.startsWith("#EXT-X-STREAM-INF")
                             line
+                        } else if (trimmed.startsWith("#") && trimmed.contains("URI=\"")) {
+                            val preUri = line.substringBefore("URI=\"")
+                            val uriVal = line.substringAfter("URI=\"").substringBefore("\"")
+                            val postUri = line.substringAfter("URI=\"").substringAfter("\"")
+
+                            val absoluteUrl = if (uriVal.startsWith("http")) {
+                                uriVal
+                            } else if (uriVal.startsWith("/")) {
+                                val host = getBaseUrl(targetUrl)
+                                "$host$uriVal"
+                            } else {
+                                "$baseUrl/$uriVal"
+                            }
+                            val encodedUrl = java.net.URLEncoder.encode(absoluteUrl, "UTF-8")
+                            val encodedReferer = java.net.URLEncoder.encode(referer, "UTF-8")
+
+                            val proxiedUri = if (absoluteUrl.substringBefore("?").endsWith(".m3u8", ignoreCase = true)) {
+                                "http://127.0.0.1:$port/playlist.m3u8?referer=$encodedReferer&url=$encodedUrl"
+                            } else {
+                                "http://127.0.0.1:$port/proxy?referer=$encodedReferer&url=$encodedUrl"
+                            }
+                            "${preUri}URI=\"$proxiedUri\"$postUri"
                         } else {
                             val absoluteUrl = if (trimmed.startsWith("http")) {
                                 trimmed
@@ -652,7 +682,14 @@ class BinTVProvider : MainAPI() {
                             }
                             val encodedUrl = java.net.URLEncoder.encode(absoluteUrl, "UTF-8")
                             val encodedReferer = java.net.URLEncoder.encode(referer, "UTF-8")
-                            "http://127.0.0.1:$port/proxy?referer=$encodedReferer&url=$encodedUrl"
+
+                            val result = if (isStreamInf || absoluteUrl.substringBefore("?").endsWith(".m3u8", ignoreCase = true)) {
+                                "http://127.0.0.1:$port/playlist.m3u8?referer=$encodedReferer&url=$encodedUrl"
+                            } else {
+                                "http://127.0.0.1:$port/proxy?referer=$encodedReferer&url=$encodedUrl"
+                            }
+                            isStreamInf = false
+                            result
                         }
                     }.joinToString("\n")
 

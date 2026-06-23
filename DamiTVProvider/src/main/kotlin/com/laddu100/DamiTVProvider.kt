@@ -118,7 +118,7 @@ class DamiTVProvider : MainAPI() {
         @JsonProperty("error") val error: String?
     )
 
-    // ── Helpers ────────���────────────────────────────────────────────────
+    // ── Helpers ────────────────────────────────────────────────────────────
 
     private fun formatMatchDate(timestamp: Long?): String {
         if (timestamp == null) return "soon"
@@ -231,7 +231,7 @@ class DamiTVProvider : MainAPI() {
         }
     }
 
-    // ── Load ──────────────────────────────────────────────────────────
+    // ─�� Load ──────────────────────────────────────────────────────────
 
     override suspend fun load(url: String): LoadResponse {
         loadFirebaseUrl()
@@ -304,15 +304,15 @@ class DamiTVProvider : MainAPI() {
                     if (!response.hlsUrl.isNullOrBlank()) {
                         // Use embedindia.st as referer — BunnyCDN whitelists this domain
                         callback.invoke(
-                            ExtractorLink(
+                            newExtractorLink(
                                 source = this.name,
                                 name = "${stream.name} (Direct)",
                                 url = response.hlsUrl,
                                 referer = "$EMBED_DOMAIN/",
-                                quality = Qualities.Unknown.value,
-                                isM3u8 = true,
-                                headers = hlsPlayHeaders
-                            )
+                                type = ExtractorLinkType.M3U8
+                            ) {
+                                this.headers = hlsPlayHeaders
+                            }
                         )
                         foundAny = true
                     }
@@ -336,15 +336,15 @@ class DamiTVProvider : MainAPI() {
                                     .replace("\\u0026", "&")
                                     .replace("\\/", "/")
                                 callback.invoke(
-                                    ExtractorLink(
+                                    newExtractorLink(
                                         source = this.name,
                                         name = "${stream.name} (Embed ${idx + 1})",
                                         url = m3u8Url,
                                         referer = "$EMBED_DOMAIN/",
-                                        quality = Qualities.Unknown.value,
-                                        isM3u8 = true,
-                                        headers = hlsPlayHeaders
-                                    )
+                                        type = ExtractorLinkType.M3U8
+                                    ) {
+                                        this.headers = hlsPlayHeaders
+                                    }
                                 )
                                 foundAny = true
                             }
@@ -365,15 +365,15 @@ class DamiTVProvider : MainAPI() {
                                     if (url.contains(".m3u8") && !m3u8Matches.any { it.value == url }) {
                                         val cleanUrl = if (!url.startsWith("http")) "https://$url" else url
                                         callback.invoke(
-                                            ExtractorLink(
+                                            newExtractorLink(
                                                 source = this.name,
                                                 name = "${stream.name} (JS)",
                                                 url = cleanUrl.replace("\\u0026", "&").replace("\\/", "/"),
                                                 referer = "$EMBED_DOMAIN/",
-                                                quality = Qualities.Unknown.value,
-                                                isM3u8 = true,
-                                                headers = hlsPlayHeaders
-                                            )
+                                                type = ExtractorLinkType.M3U8
+                                            ) {
+                                                this.headers = hlsPlayHeaders
+                                            }
                                         )
                                         foundAny = true
                                     }

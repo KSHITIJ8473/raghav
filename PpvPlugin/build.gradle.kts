@@ -1,4 +1,4 @@
-version = 2
+version = 3
 
 cloudstream {
     description = "PPV Live Streams – lists currently live matches from ppv.to"

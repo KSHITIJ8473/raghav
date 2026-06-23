@@ -317,6 +317,23 @@ class StreamEastProvider : MainAPI() {
             lists.add(HomePageList("📅 StreamEast - Upcoming Games", upcomingItems, isHorizontalImages = true))
         }
 
+        if (lists.isEmpty()) {
+            val dummyLoadData = EventLoadData(
+                title = "No live matches right now",
+                url = "dummy",
+                posterUrl = "https://images.unsplash.com/photo-1461896836934-ffe607ba8211?q=80&w=500",
+                isLive = false
+            )
+            val dummyItem = newLiveSearchResponse(
+                name = "No live matches right now",
+                url = dummyLoadData.toJson(),
+                type = TvType.Live
+            ) {
+                this.posterUrl = dummyLoadData.posterUrl
+            }
+            lists.add(HomePageList("No live matches right now. Please check back later!", listOf(dummyItem), isHorizontalImages = true))
+        }
+
         return newHomePageResponse(lists, hasNext = false)
     }
 
@@ -347,6 +364,14 @@ class StreamEastProvider : MainAPI() {
         val eventData = parseJson<EventLoadData>(url)
         val eventUrl = eventData.url
         val title = eventData.title
+
+        if (eventUrl == "dummy") {
+            return newLiveStreamLoadResponse(title, url, this.name) {
+                this.posterUrl = eventData.posterUrl
+                this.plot = "There are no live StreamEast streams scheduled at the moment. Please check back later when a match starts!"
+                this.dataUrl = StreamLoadData(title, emptyList()).toJson()
+            }
+        }
 
         val streamsList = mutableListOf<StreamInfo>()
         try {

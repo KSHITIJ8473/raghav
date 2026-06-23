@@ -80,7 +80,20 @@ open class PpvProvider : MainAPI() {
             }
         }
         return if (items.isEmpty()) {
-            newHomePageResponse(emptyList())
+            val dummyLoad = JSONObject().apply {
+                put("title", "No live matches right now")
+                put("iframe", "dummy")
+                put("poster", "https://i.imgur.com/6X8K9RM.png")
+            }.toString()
+            val dummyItem = newLiveSearchResponse(
+                "No live matches right now",
+                dummyLoad,
+                TvType.Live
+            ) {
+                this.posterUrl = "https://i.imgur.com/6X8K9RM.png"
+            }
+            val list = HomePageList("No live matches right now. Please check back later!", listOf(dummyItem), isHorizontalImages = true)
+            newHomePageResponse(listOf(list), hasNext = false)
         } else {
             val list = HomePageList("Live Matches (PPV)", items, isHorizontalImages = true)
             newHomePageResponse(listOf(list), hasNext = false)
@@ -94,6 +107,13 @@ open class PpvProvider : MainAPI() {
         val title = obj.optString("title")
         val iframe = obj.optString("iframe")
         val poster = obj.optString("poster", "")
+        if (iframe == "dummy") {
+            return newLiveStreamLoadResponse(title, iframe, this.name) {
+                this.posterUrl = if (poster.isNotBlank()) poster else null
+                this.plot = "There are no live PPV streams scheduled at the moment. Please check back when a match is live!"
+                this.dataUrl = url
+            }
+        }
         return newLiveStreamLoadResponse(title, iframe, this.name) {
             this.posterUrl = if (poster.isNotBlank()) poster else null
             this.plot = "Live stream from PPV. Open the link to start playback."
@@ -111,7 +131,7 @@ open class PpvProvider : MainAPI() {
         val obj = try { JSONObject(data) } catch (e: Exception) { return false }
         val title = obj.optString("title")
         val iframe = obj.optString("iframe")
-        if (iframe.isBlank()) return false
+        if (iframe.isBlank() || iframe == "dummy") return false
         callback(
             newExtractorLink(
                 source = name,

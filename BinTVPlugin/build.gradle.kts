@@ -1,4 +1,4 @@
-version = 3
+version = 4
 
 cloudstream {
     description = "BINTV Live Sport 4k only work in high end device with 4k support otherwise you make face lag"

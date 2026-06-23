@@ -118,7 +118,7 @@ class DamiTVProvider : MainAPI() {
         @JsonProperty("error") val error: String?
     )
 
-    // ── Helpers ───────────────────────────────────────────────────────────────
+    // ── Helpers ────────���────────────────────────────────────────────────
 
     private fun formatMatchDate(timestamp: Long?): String {
         if (timestamp == null) return "soon"
@@ -165,7 +165,7 @@ class DamiTVProvider : MainAPI() {
         }
     }
 
-    // ── Main Page ─────────────────────────────────────────────────────────────
+    // ── Main Page ─────────────────────────────────────────────────────────
 
     override suspend fun getMainPage(
         page: Int,
@@ -206,7 +206,7 @@ class DamiTVProvider : MainAPI() {
         return newHomePageResponse(lists, hasNext = false)
     }
 
-    // ── Search ────────────────────────────────────────────────────────────────
+    // ── Search ──────────────────────────────────────────────────────────
 
     override suspend fun search(query: String): List<SearchResponse> {
         loadFirebaseUrl()
@@ -231,7 +231,7 @@ class DamiTVProvider : MainAPI() {
         }
     }
 
-    // ── Load ──────────────────────────────────────────────────────────────────
+    // ── Load ──────────────────────────────────────────────────────────
 
     override suspend fun load(url: String): LoadResponse {
         loadFirebaseUrl()
@@ -274,7 +274,7 @@ class DamiTVProvider : MainAPI() {
         }
     }
 
-    // ── Load Links ────────────────────────────────────────────────────────────
+    // ── Load Links ────────────────────────────────────────────────────────
 
     override suspend fun loadLinks(
         data: String,
@@ -310,7 +310,7 @@ class DamiTVProvider : MainAPI() {
                                 url = response.hlsUrl,
                                 referer = "$EMBED_DOMAIN/",
                                 quality = Qualities.Unknown.value,
-                                type = INFER_TYPE,
+                                isM3u8 = true,
                                 headers = hlsPlayHeaders
                             )
                         )
@@ -342,7 +342,7 @@ class DamiTVProvider : MainAPI() {
                                         url = m3u8Url,
                                         referer = "$EMBED_DOMAIN/",
                                         quality = Qualities.Unknown.value,
-                                        type = INFER_TYPE,
+                                        isM3u8 = true,
                                         headers = hlsPlayHeaders
                                     )
                                 )
@@ -371,7 +371,7 @@ class DamiTVProvider : MainAPI() {
                                                 url = cleanUrl.replace("\\u0026", "&").replace("\\/", "/"),
                                                 referer = "$EMBED_DOMAIN/",
                                                 quality = Qualities.Unknown.value,
-                                                type = INFER_TYPE,
+                                                isM3u8 = true,
                                                 headers = hlsPlayHeaders
                                             )
                                         )

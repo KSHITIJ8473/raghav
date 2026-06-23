@@ -6,7 +6,7 @@ cloudstream {
     status = 1
     tvTypes = listOf("Live")
     language = "en"
-    iconUrl = "https://i.imgur.com/6X8K9RM.png"
+    iconUrl = "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcTVgXotVMUiHc-BjE8KnZWLw256jTJcM2RywSh432dr9qWdg0iFDqRZVscp&s=10"
 }
 
 android {

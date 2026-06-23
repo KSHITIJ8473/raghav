@@ -1,7 +1,7 @@
 version = 3
 
 cloudstream {
-    description = "PPV Live Streams – lists currently live matches from ppv.to"
+    description = "under work dont install"
     authors = listOf("KSHITIJ8473")
     status = 1
     tvTypes = listOf("Live")

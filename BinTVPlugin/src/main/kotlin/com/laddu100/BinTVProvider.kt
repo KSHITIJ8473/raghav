@@ -573,16 +573,25 @@ class BinTVProvider : MainAPI() {
 
         @Synchronized
         fun startProxy() {
-            if (serverSocket != null) return
+            if (serverSocket != null && !serverSocket!!.isClosed) return
             try {
                 serverSocket = ServerSocket(0)
                 port = serverSocket!!.localPort
                 thread(start = true, isDaemon = true) {
-                    while (true) {
-                        val socket = serverSocket?.accept() ?: break
-                        thread {
-                            handleSocket(socket)
+                    try {
+                        while (true) {
+                            val socket = serverSocket?.accept() ?: break
+                            thread {
+                                handleSocket(socket)
+                            }
                         }
+                    } catch (e: Exception) {
+                        println("BinTV: Proxy accept loop error - ${e.message}")
+                    } finally {
+                        try {
+                            serverSocket?.close()
+                        } catch (e: Exception) {}
+                        serverSocket = null
                     }
                 }
                 println("BinTV: LocalProxy started on port $port")
@@ -621,6 +630,7 @@ class BinTVProvider : MainAPI() {
 
         private fun handleSocket(socket: Socket) {
             try {
+                socket.soTimeout = 5000
                 val reader = socket.getInputStream().bufferedReader()
                 val firstLine = reader.readLine() ?: return
                 // Consume all HTTP request headers to prevent TCP RST on socket close
@@ -638,7 +648,14 @@ class BinTVProvider : MainAPI() {
                     val referer = getQueryParam(path, "referer") ?: getBaseUrl(targetUrl)
 
                     val response = runBlocking {
-                        app.get(targetUrl, headers = mapOf("Referer" to referer), timeout = 15L)
+                        app.get(
+                            targetUrl,
+                            headers = mapOf(
+                                "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+                                "Referer" to referer
+                            ),
+                            timeout = 30L
+                        )
                     }
                     val playlistText = response.text
                     val baseUrl = targetUrl.substringBeforeLast("/")
@@ -698,6 +715,7 @@ class BinTVProvider : MainAPI() {
                     out.write("HTTP/1.1 200 OK\r\n".toByteArray())
                     out.write("Content-Type: application/vnd.apple.mpegurl\r\n".toByteArray())
                     out.write("Content-Length: ${bytes.size}\r\n".toByteArray())
+                    out.write("Connection: close\r\n".toByteArray())
                     out.write("Access-Control-Allow-Origin: *\r\n".toByteArray())
                     out.write("\r\n".toByteArray())
                     out.write(bytes)
@@ -713,7 +731,7 @@ class BinTVProvider : MainAPI() {
                                 "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
                                 "Referer" to referer
                             ),
-                            timeout = 15L
+                            timeout = 30L
                         )
                     }
                     val bytes = response.body.bytes()
@@ -732,6 +750,7 @@ class BinTVProvider : MainAPI() {
                     out.write("HTTP/1.1 200 OK\r\n".toByteArray())
                     out.write("Content-Type: video/mp2t\r\n".toByteArray())
                     out.write("Content-Length: ${cleanBytes.size}\r\n".toByteArray())
+                    out.write("Connection: close\r\n".toByteArray())
                     out.write("Access-Control-Allow-Origin: *\r\n".toByteArray())
                     out.write("\r\n".toByteArray())
                     out.write(cleanBytes)
@@ -740,7 +759,12 @@ class BinTVProvider : MainAPI() {
             } catch (e: Exception) {
                 println("BinTV: Proxy error - ${e.message}")
             } finally {
-                socket.close()
+                try {
+                    socket.shutdownOutput()
+                } catch (e: Exception) {}
+                try {
+                    socket.close()
+                } catch (e: Exception) {}
             }
         }
     }

@@ -1,7 +1,7 @@
-version = 1
+version = 2
 
 cloudstream {
-    description = "BINTV Live Sports – watch global live events, World Cup, NBA, and IPL"
+    description = "BINTV Live Sport 4k only work in high end device with 4k support otherwise you make face lag"
     authors = listOf("KSHITIJ8473")
     status = 1
     tvTypes = listOf("Live")

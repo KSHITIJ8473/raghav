@@ -20,6 +20,11 @@ class DamiTVProvider : MainAPI() {
 
     private var isUrlLoaded = false
 
+    companion object {
+        // The embed domain that serves as the legitimate referer for BunnyCDN
+        private const val EMBED_DOMAIN = "https://embedindia.st"
+    }
+
     data class FirebaseConfig(
         @JsonProperty("dami") val dami: String? = null,
         @JsonProperty("dami_url") val dami_url: String? = null,
@@ -43,12 +48,22 @@ class DamiTVProvider : MainAPI() {
         }
     }
 
-    private val baseHeaders: Map<String, String>
+    private val apiHeaders: Map<String, String>
         get() = mapOf(
             "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
             "Accept" to "application/json, text/plain, */*",
             "Referer" to "$mainUrl/",
             "Origin" to mainUrl
+        )
+
+    // Headers for playing HLS streams from BunnyCDN
+    // The CDN checks referer — embedindia.st is the whitelisted origin
+    private val hlsPlayHeaders: Map<String, String>
+        get() = mapOf(
+            "User-Agent" to "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36",
+            "Referer" to "$EMBED_DOMAIN/",
+            "Origin" to EMBED_DOMAIN,
+            "Accept" to "*/*"
         )
 
     // ── Data classes for API JSON structures ───────────────────────────────────
@@ -160,7 +175,7 @@ class DamiTVProvider : MainAPI() {
         val lists = mutableListOf<HomePageList>()
 
         try {
-            val allText = app.get("$mainUrl/papi/matches/all", headers = baseHeaders).text
+            val allText = app.get("$mainUrl/papi/matches/all", headers = apiHeaders).text
             val allMatches = parseJson<List<DamiMatch>>(allText)
 
             // 1. Live Matches
@@ -196,7 +211,7 @@ class DamiTVProvider : MainAPI() {
     override suspend fun search(query: String): List<SearchResponse> {
         loadFirebaseUrl()
         return try {
-            val text = app.get("$mainUrl/papi/matches/all", headers = baseHeaders).text
+            val text = app.get("$mainUrl/papi/matches/all", headers = apiHeaders).text
             val allMatches = parseJson<List<DamiMatch>>(text)
             allMatches.filter { match ->
                 val cat = match.category?.lowercase() ?: ""
@@ -229,7 +244,7 @@ class DamiTVProvider : MainAPI() {
 
         val streamsList = mutableListOf<StreamInfo>()
         try {
-            val text = app.get("$mainUrl/papi/extract-url/$matchId", headers = baseHeaders).text
+            val text = app.get("$mainUrl/papi/extract-url/$matchId", headers = apiHeaders).text
             val response = parseJson<ExtractUrlResponse>(text)
             if (response.success) {
                 val mainStreamName = if (isUpcoming) "Upcoming - Live soon (Starts: $dateStr)" else "Main Stream"
@@ -277,23 +292,104 @@ class DamiTVProvider : MainAPI() {
 
         if (streamData.streams.isEmpty()) return false
 
+        var foundAny = false
+
         streamData.streams.forEach { stream ->
             try {
                 // Fetch fresh signed HLS URL from extract-url API right before playing
-                val text = app.get("$mainUrl/papi/extract-url/${stream.url}", headers = baseHeaders).text
+                val text = app.get("$mainUrl/papi/extract-url/${stream.url}", headers = apiHeaders).text
                 val response = parseJson<ExtractUrlResponse>(text)
                 if (response.success) {
+                    // === PRIMARY: Direct HLS from BunnyCDN ===
                     if (!response.hlsUrl.isNullOrBlank()) {
+                        // Use embedindia.st as referer — BunnyCDN whitelists this domain
                         callback.invoke(
-                            newExtractorLink(name, stream.name, response.hlsUrl, ExtractorLinkType.M3U8) {
-                                this.quality = Qualities.Unknown.value
-                                this.headers = baseHeaders
-                                this.referer = "$mainUrl/"
-                            }
+                            ExtractorLink(
+                                source = this.name,
+                                name = "${stream.name} (Direct)",
+                                url = response.hlsUrl,
+                                referer = "$EMBED_DOMAIN/",
+                                quality = Qualities.Unknown.value,
+                                type = INFER_TYPE,
+                                headers = hlsPlayHeaders
+                            )
                         )
+                        foundAny = true
                     }
+
+                    // === FALLBACK: Try embed page extraction ===
                     if (!response.embedUrl.isNullOrBlank()) {
-                        loadExtractor(response.embedUrl, "$mainUrl/", subtitleCallback, callback)
+                        try {
+                            val embedHtml = app.get(
+                                response.embedUrl,
+                                headers = mapOf(
+                                    "User-Agent" to "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36",
+                                    "Referer" to "$mainUrl/"
+                                )
+                            ).text
+
+                            // Try to extract any m3u8 URLs from the embed page
+                            val m3u8Pattern = Regex("""(https?://[^\s"']+\.m3u8[^\s"']*)""")
+                            val m3u8Matches = m3u8Pattern.findAll(embedHtml)
+                            m3u8Matches.forEachIndexed { idx, match ->
+                                val m3u8Url = match.value
+                                    .replace("\\u0026", "&")
+                                    .replace("\\/", "/")
+                                callback.invoke(
+                                    ExtractorLink(
+                                        source = this.name,
+                                        name = "${stream.name} (Embed ${idx + 1})",
+                                        url = m3u8Url,
+                                        referer = "$EMBED_DOMAIN/",
+                                        quality = Qualities.Unknown.value,
+                                        type = INFER_TYPE,
+                                        headers = hlsPlayHeaders
+                                    )
+                                )
+                                foundAny = true
+                            }
+
+                            // Also try to find the stream URL in JavaScript variables
+                            val jsPatterns = listOf(
+                                Regex("""['"]?(hlsUrl|streamUrl|source|file|src)['"]?\s*[:=]\s*['"]([^'"]+\.m3u8[^'"]*)['"]"""),
+                                Regex("""setStream\(['"]([^'"]+)['"]"""),
+                                Regex("""b-cdn\.net[^\s"']*\.m3u8[^\s"']*""")
+                            )
+                            for (pattern in jsPatterns) {
+                                pattern.findAll(embedHtml).forEach { jsMatch ->
+                                    val url = if (jsMatch.groups.size > 2) {
+                                        jsMatch.groups[2]?.value ?: jsMatch.value
+                                    } else {
+                                        jsMatch.value
+                                    }
+                                    if (url.contains(".m3u8") && !m3u8Matches.any { it.value == url }) {
+                                        val cleanUrl = if (!url.startsWith("http")) "https://$url" else url
+                                        callback.invoke(
+                                            ExtractorLink(
+                                                source = this.name,
+                                                name = "${stream.name} (JS)",
+                                                url = cleanUrl.replace("\\u0026", "&").replace("\\/", "/"),
+                                                referer = "$EMBED_DOMAIN/",
+                                                quality = Qualities.Unknown.value,
+                                                type = INFER_TYPE,
+                                                headers = hlsPlayHeaders
+                                            )
+                                        )
+                                        foundAny = true
+                                    }
+                                }
+                            }
+                        } catch (embedError: Exception) {
+                            println("DamiTV: Embed extraction failed for ${stream.name} - ${embedError.message}")
+                        }
+
+                        // Also try loading via CloudStream's built-in extractors
+                        try {
+                            loadExtractor(response.embedUrl, "$mainUrl/", subtitleCallback, callback)
+                            foundAny = true
+                        } catch (extractError: Exception) {
+                            println("DamiTV: loadExtractor failed for ${stream.name} - ${extractError.message}")
+                        }
                     }
                 }
             } catch (e: Exception) {
@@ -301,6 +397,6 @@ class DamiTVProvider : MainAPI() {
             }
         }
 
-        return true
+        return foundAny
     }
 }

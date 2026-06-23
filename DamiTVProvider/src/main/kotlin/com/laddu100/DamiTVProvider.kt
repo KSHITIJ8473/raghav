@@ -305,11 +305,10 @@ class DamiTVProvider : MainAPI() {
                         // Use embedindia.st as referer — BunnyCDN whitelists this domain
                         callback.invoke(
                             newExtractorLink(
-                                this.name,
-                                "${stream.name} (Direct)",
-                                response.hlsUrl,
-                                "$EMBED_DOMAIN/",
-                                ExtractorLinkType.M3U8
+                                source = this.name,
+                                name = "${stream.name} (Direct)",
+                                url = response.hlsUrl,
+                                type = ExtractorLinkType.M3U8
                             ) {
                                 this.headers = hlsPlayHeaders
                             }
@@ -340,7 +339,6 @@ class DamiTVProvider : MainAPI() {
                                         source = this.name,
                                         name = "${stream.name} (Embed ${idx + 1})",
                                         url = m3u8Url,
-                                        referer = "$EMBED_DOMAIN/",
                                         type = ExtractorLinkType.M3U8
                                     ) {
                                         this.headers = hlsPlayHeaders
@@ -369,7 +367,6 @@ class DamiTVProvider : MainAPI() {
                                                 source = this.name,
                                                 name = "${stream.name} (JS)",
                                                 url = cleanUrl.replace("\\u0026", "&").replace("\\/", "/"),
-                                                referer = "$EMBED_DOMAIN/",
                                                 type = ExtractorLinkType.M3U8
                                             ) {
                                                 this.headers = hlsPlayHeaders

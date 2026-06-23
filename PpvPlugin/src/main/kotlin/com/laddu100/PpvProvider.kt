@@ -88,20 +88,17 @@ open class PpvProvider : MainAPI() {
     }
 
     /** Load details – return a simple description page */
-    override suspend fun load(url: String, referer: String?): LoadResponse {
+    override suspend fun load(url: String): LoadResponse? {
         // The url argument is the JSON string we stored in the SearchResponse
-        val obj = try { JSONObject(url) } catch (e: Exception) { null } ?: throw IllegalArgumentException("Invalid load data")
+        val obj = try { JSONObject(url) } catch (e: Exception) { null } ?: return null
         val title = obj.optString("title")
         val iframe = obj.optString("iframe")
         val poster = obj.optString("poster", "")
-        return LoadResponse(
-            name = title,
-            url = iframe,
-            dataUrl = url,
-            posterUrl = if (poster.isNotBlank()) poster else null,
-            plot = "Live stream from PPV. Open the link to start playback.",
-            type = TvType.Live
-        )
+        return newLiveStreamLoadResponse(title, iframe, this.name) {
+            this.posterUrl = if (poster.isNotBlank()) poster else null
+            this.plot = "Live stream from PPV. Open the link to start playback."
+            this.dataUrl = url
+        }
     }
 
     /** Extract the actual video link – we simply return the iframe URL. */
@@ -110,11 +107,11 @@ open class PpvProvider : MainAPI() {
         isCasting: Boolean,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
-    ) {
-        val obj = try { JSONObject(data) } catch (e: Exception) { return }
+    ): Boolean {
+        val obj = try { JSONObject(data) } catch (e: Exception) { return false }
         val title = obj.optString("title")
         val iframe = obj.optString("iframe")
-        if (iframe.isBlank()) return
+        if (iframe.isBlank()) return false
         callback(
             newExtractorLink(
                 source = name,
@@ -123,6 +120,7 @@ open class PpvProvider : MainAPI() {
                 type = ExtractorLinkType.VIDEO
             )
         )
+        return true
     }
 }
 

@@ -79,7 +79,8 @@ class BinTVProvider : MainAPI() {
         @JsonProperty("uri_name") val uri_name: String?,
         @JsonProperty("source_tag") val source_tag: String?,
         @JsonProperty("locale") val locale: String?,
-        @JsonProperty("iframe") val iframe: String?
+        @JsonProperty("iframe") val iframe: String?,
+        @JsonProperty("quality") val quality: String?
     )
 
     data class PpvStreamsResponse(
@@ -223,11 +224,24 @@ class BinTVProvider : MainAPI() {
 
                         val iframes = mutableListOf<MatchSource>()
                         if (!stream.iframe.isNullOrBlank()) {
-                            iframes.add(MatchSource(stream.source_tag ?: "Admin", stream.iframe))
+                            // Use source_tag for main stream name, fallback to "Main"
+                            val mainName = stream.source_tag?.takeIf { it.isNotBlank() } ?: "Main"
+                            iframes.add(MatchSource(mainName, stream.iframe))
                         }
-                        stream.substreams?.forEach { sub ->
+                        stream.substreams?.forEachIndexed { subIdx, sub ->
                             if (!sub.iframe.isNullOrBlank() && iframes.none { it.url == sub.iframe }) {
-                                iframes.add(MatchSource(sub.source_tag ?: "Admin", sub.iframe))
+                                // Build a human-readable name from uri_name or source_tag
+                                val rawName = sub.uri_name?.takeIf { it.isNotBlank() }
+                                    ?: sub.source_tag?.takeIf { it.isNotBlank() }
+                                    ?: sub.name?.takeIf { it.isNotBlank() }
+                                    ?: "Server ${subIdx + 1}"
+                                // Capitalize and clean up uri_name (e.g. "fox-4k" -> "FOX 4K")
+                                val prettyName = rawName
+                                    .split("-").joinToString(" ") { part ->
+                                        if (part.length <= 3) part.uppercase()
+                                        else part.replaceFirstChar { it.uppercase() }
+                                    }
+                                iframes.add(MatchSource(prettyName, sub.iframe))
                             }
                         }
 
@@ -235,7 +249,7 @@ class BinTVProvider : MainAPI() {
 
                         val numberedSources = iframes.mapIndexed { idx, src ->
                             MatchSource(
-                                name = if (src.name == "Admin") "Stream ${idx + 1}" else "${src.name} - Stream ${idx + 1}",
+                                name = "${src.name} [${idx + 1}]",
                                 url = src.url
                             )
                         }
@@ -492,16 +506,9 @@ class BinTVProvider : MainAPI() {
                         }
                     )
                     foundAny = true
-                } else if (embedUrl.contains("embedindia.st") || embedUrl.contains("ppv.to")) {
-                    // Standard PPV embedindia iframe, load it via standard loadExtractor
-                    try {
-                        loadExtractor(embedUrl, "https://ppv.to/", subtitleCallback, callback)
-                        foundAny = true
-                    } catch (e: Exception) {
-                        println("BinTV: loadExtractor failed for PPV stream - ${e.message}")
-                    }
                 } else {
-                    // Parse the embed page HTML to extract direct M3U8 source links
+                    // Parse the embed page HTML to extract direct M3U8 source links.
+                    // This handles embedindia.st, xyzstreams.shop, and all other embed page types.
                     val embedHost = try {
                         val uri = java.net.URI(embedUrl)
                         "${uri.scheme}://${uri.host}"
@@ -509,39 +516,46 @@ class BinTVProvider : MainAPI() {
                         null
                     }
 
-                    val headers = if (embedHost != null) {
-                        mapOf(
-                            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
-                            "Referer" to "$embedHost/"
-                        )
-                    } else {
-                        mapOf(
-                            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-                        )
+                    val fetchHeaders = mapOf(
+                        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+                        "Referer" to "${embedHost ?: "https://bintv.net"}/",
+                        "Origin" to (embedHost ?: "https://bintv.net")
+                    )
+
+                    val embedHtml = try {
+                        app.get(embedUrl, headers = fetchHeaders, timeout = 20L).text
+                    } catch (fetchErr: Exception) {
+                        println("BinTV: Failed to fetch embed page $embedUrl - ${fetchErr.message}")
+                        ""
                     }
 
-                    val embedHtml = app.get(embedUrl, headers = headers, timeout = 15L).text
-
-                    // Search for .m3u8 links
-                    val m3u8Pattern = Regex("""(https?://[^\s"']+\.m3u8[^\s"']*)""")
-                    val matches = m3u8Pattern.findAll(embedHtml)
+                    // Search for .m3u8 links — matches STREAM_URL assignments, HLS source configs, etc.
+                    val m3u8Pattern = Regex("""(https?://[^\s"'\\]+\.m3u8(?:[^\s"'\\]*)?)""")
+                    val m3u8Matches = m3u8Pattern.findAll(embedHtml)
                     var foundM3u8 = false
-                    matches.forEachIndexed { idx, match ->
+                    m3u8Matches.forEachIndexed { idx, match ->
                         val m3u8Url = match.value
                             .replace("\\u0026", "&")
                             .replace("\\/", "/")
-                        val referer = embedHost ?: getBaseUrl(m3u8Url)
-                        val proxiedUrl = getProxiedM3u8Url(m3u8Url, referer)
+                        // Use the m3u8 stream's own domain as referer so segment requests work
+                        val m3u8Host = try {
+                            val uri = java.net.URI(m3u8Url)
+                            "${uri.scheme}://${uri.host}"
+                        } catch (e: Exception) {
+                            embedHost ?: getBaseUrl(m3u8Url)
+                        }
+                        val proxiedUrl = getProxiedM3u8Url(m3u8Url, m3u8Host)
                         callback.invoke(
                             newExtractorLink(
                                 source = this.name,
-                                name = if (idx == 0) stream.name else "${stream.name} (Alt ${idx})",
+                                name = if (idx == 0) stream.name else "${stream.name} (Alt ${idx + 1})",
                                 url = proxiedUrl,
                                 type = ExtractorLinkType.M3U8
                             ) {
                                 this.headers = mapOf(
                                     "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
-                                    "Referer" to referer
+                                    "Referer" to "$m3u8Host/",
+                                    "Origin" to m3u8Host
                                 )
                             }
                         )
@@ -549,13 +563,13 @@ class BinTVProvider : MainAPI() {
                         foundAny = true
                     }
 
-                    // Fallback to loadExtractor if direct m3u8 extraction failed
+                    // Fallback: try loadExtractor if no m3u8 was found in page HTML
                     if (!foundM3u8) {
                         try {
-                            loadExtractor(embedUrl, "$embedHost/", subtitleCallback, callback)
+                            loadExtractor(embedUrl, "${embedHost ?: "https://bintv.net"}/", subtitleCallback, callback)
                             foundAny = true
                         } catch (e: Exception) {
-                            println("BinTV: fallback loadExtractor failed - ${e.message}")
+                            println("BinTV: fallback loadExtractor failed for $embedUrl - ${e.message}")
                         }
                     }
                 }

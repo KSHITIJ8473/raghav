@@ -7,6 +7,7 @@ import com.lagradost.cloudstream3.utils.AppUtils.toJson
 import com.fasterxml.jackson.annotation.JsonProperty
 import okhttp3.Interceptor
 import okhttp3.Response
+import android.util.Base64
 
 class DamiTVProvider : MainAPI() {
 
@@ -286,6 +287,7 @@ class DamiTVProvider : MainAPI() {
                         callback.invoke(
                             newExtractorLink(name, stream.name, response.hlsUrl, ExtractorLinkType.M3U8) {
                                 this.quality = Qualities.Unknown.value
+                                this.headers = baseHeaders
                                 this.referer = "$mainUrl/"
                             }
                         )

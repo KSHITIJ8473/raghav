@@ -5,6 +5,12 @@ import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.AppUtils.toJson
 import com.fasterxml.jackson.annotation.JsonProperty
+import java.net.ServerSocket
+import java.net.Socket
+import java.net.URLEncoder
+import java.net.URLDecoder
+import kotlin.concurrent.thread
+import kotlinx.coroutines.runBlocking
 
 class BinTVProvider : MainAPI() {
 
@@ -470,13 +476,20 @@ class BinTVProvider : MainAPI() {
 
                 // If it is a direct m3u8 playlist link
                 if (embedUrl.contains(".m3u8")) {
+                    val referer = getBaseUrl(embedUrl)
+                    val proxiedUrl = getProxiedM3u8Url(embedUrl, referer)
                     callback.invoke(
                         newExtractorLink(
                             source = this.name,
                             name = stream.name,
-                            url = embedUrl,
+                            url = proxiedUrl,
                             type = ExtractorLinkType.M3U8
-                        )
+                        ) {
+                            this.headers = mapOf(
+                                "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+                                "Referer" to referer
+                            )
+                        }
                     )
                     foundAny = true
                 } else if (embedUrl.contains("embedindia.st") || embedUrl.contains("ppv.to")) {
@@ -517,19 +530,19 @@ class BinTVProvider : MainAPI() {
                         val m3u8Url = match.value
                             .replace("\\u0026", "&")
                             .replace("\\/", "/")
+                        val referer = embedHost ?: getBaseUrl(m3u8Url)
+                        val proxiedUrl = getProxiedM3u8Url(m3u8Url, referer)
                         callback.invoke(
                             newExtractorLink(
                                 source = this.name,
                                 name = if (idx == 0) stream.name else "${stream.name} (Alt ${idx})",
-                                url = m3u8Url,
+                                url = proxiedUrl,
                                 type = ExtractorLinkType.M3U8
                             ) {
-                                if (embedHost != null) {
-                                    this.headers = mapOf(
-                                        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
-                                        "Referer" to "$embedHost/"
-                                    )
-                                }
+                                this.headers = mapOf(
+                                    "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+                                    "Referer" to referer
+                                )
                             }
                         )
                         foundM3u8 = true
@@ -552,5 +565,146 @@ class BinTVProvider : MainAPI() {
         }
 
         return foundAny
+    }
+
+    companion object {
+        private var serverSocket: ServerSocket? = null
+        private var port: Int = 0
+
+        @Synchronized
+        fun startProxy() {
+            if (serverSocket != null) return
+            try {
+                serverSocket = ServerSocket(0)
+                port = serverSocket!!.localPort
+                thread(start = true, isDaemon = true) {
+                    while (true) {
+                        val socket = serverSocket?.accept() ?: break
+                        thread {
+                            handleSocket(socket)
+                        }
+                    }
+                }
+                println("BinTV: LocalProxy started on port $port")
+            } catch (e: Exception) {
+                println("BinTV: LocalProxy start failed: ${e.message}")
+            }
+        }
+
+        private fun getProxiedM3u8Url(m3u8Url: String, referer: String): String {
+            startProxy()
+            val encodedUrl = java.net.URLEncoder.encode(m3u8Url, "UTF-8")
+            val encodedReferer = java.net.URLEncoder.encode(referer, "UTF-8")
+            return "http://127.0.0.1:$port/playlist.m3u8?referer=$encodedReferer&url=$encodedUrl"
+        }
+
+        private fun getBaseUrl(url: String): String {
+            return try {
+                val uri = java.net.URI(url)
+                "${uri.scheme}://${uri.host}"
+            } catch (e: Exception) {
+                ""
+            }
+        }
+
+        private fun getQueryParam(path: String, name: String): String? {
+            val query = path.substringAfter("?", "")
+            if (query.isEmpty()) return null
+            return query.split("&").firstOrNull { it.startsWith("$name=") }?.substringAfter("=")?.let {
+                try {
+                    java.net.URLDecoder.decode(it, "UTF-8")
+                } catch (e: Exception) {
+                    null
+                }
+            }
+        }
+
+        private fun handleSocket(socket: Socket) {
+            try {
+                val reader = socket.getInputStream().bufferedReader()
+                val firstLine = reader.readLine() ?: return
+                val parts = firstLine.split(" ")
+                if (parts.size < 2) return
+                val path = parts[1]
+
+                if (path.startsWith("/playlist.m3u8")) {
+                    val targetUrl = getQueryParam(path, "url") ?: return
+                    val referer = getQueryParam(path, "referer") ?: getBaseUrl(targetUrl)
+
+                    val response = runBlocking {
+                        app.get(targetUrl, headers = mapOf("Referer" to referer), timeout = 15L)
+                    }
+                    val playlistText = response.text
+                    val baseUrl = targetUrl.substringBeforeLast("/")
+
+                    val rewritten = playlistText.lineSequence().map { line ->
+                        val trimmed = line.trim()
+                        if (trimmed.isEmpty() || trimmed.startsWith("#")) {
+                            line
+                        } else {
+                            val absoluteUrl = if (trimmed.startsWith("http")) {
+                                trimmed
+                            } else if (trimmed.startsWith("/")) {
+                                val host = getBaseUrl(targetUrl)
+                                "$host$trimmed"
+                            } else {
+                                "$baseUrl/$trimmed"
+                            }
+                            val encodedUrl = java.net.URLEncoder.encode(absoluteUrl, "UTF-8")
+                            val encodedReferer = java.net.URLEncoder.encode(referer, "UTF-8")
+                            "http://127.0.0.1:$port/proxy?referer=$encodedReferer&url=$encodedUrl"
+                        }
+                    }.joinToString("\n")
+
+                    val out = socket.getOutputStream()
+                    val bytes = rewritten.toByteArray(Charsets.UTF_8)
+                    out.write("HTTP/1.1 200 OK\r\n".toByteArray())
+                    out.write("Content-Type: application/vnd.apple.mpegurl\r\n".toByteArray())
+                    out.write("Content-Length: ${bytes.size}\r\n".toByteArray())
+                    out.write("Access-Control-Allow-Origin: *\r\n".toByteArray())
+                    out.write("\r\n".toByteArray())
+                    out.write(bytes)
+                    out.flush()
+                } else if (path.startsWith("/proxy")) {
+                    val targetUrl = getQueryParam(path, "url") ?: return
+                    val referer = getQueryParam(path, "referer") ?: getBaseUrl(targetUrl)
+
+                    val response = runBlocking {
+                        app.get(
+                            targetUrl,
+                            headers = mapOf(
+                                "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+                                "Referer" to referer
+                            ),
+                            timeout = 15L
+                        )
+                    }
+                    val bytes = response.body.bytes()
+                    val hasPngHeader = bytes.size > 70 &&
+                            bytes[0] == 0x89.toByte() &&
+                            bytes[1] == 0x50.toByte() &&
+                            bytes[2] == 0x4E.toByte() &&
+                            bytes[3] == 0x47.toByte()
+                    val cleanBytes = if (hasPngHeader) {
+                        bytes.copyOfRange(70, bytes.size)
+                    } else {
+                        bytes
+                    }
+
+                    val out = socket.getOutputStream()
+                    out.write("HTTP/1.1 200 OK\r\n".toByteArray())
+                    out.write("Content-Type: video/mp2t\r\n".toByteArray())
+                    out.write("Content-Length: ${cleanBytes.size}\r\n".toByteArray())
+                    out.write("Access-Control-Allow-Origin: *\r\n".toByteArray())
+                    out.write("\r\n".toByteArray())
+                    out.write(cleanBytes)
+                    out.flush()
+                }
+            } catch (e: Exception) {
+                println("BinTV: Proxy error - ${e.message}")
+            } finally {
+                socket.close()
+            }
+        }
     }
 }

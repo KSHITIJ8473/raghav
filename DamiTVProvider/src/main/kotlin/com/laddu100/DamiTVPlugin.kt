@@ -14,6 +14,7 @@ import com.lagradost.cloudstream3.plugins.Plugin
 class DamiTVPlugin : Plugin() {
 
     override fun load(context: Context) {
+        DamiTVProvider.context = context
         registerMainAPI(DamiTVProvider())
     }
 }

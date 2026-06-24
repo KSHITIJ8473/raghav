@@ -21,6 +21,7 @@ class DamiTVProvider : MainAPI() {
     private var isUrlLoaded = false
 
     companion object {
+        var context: android.content.Context? = null
         // The embed domain that serves as the legitimate referer for BunnyCDN
         private const val EMBED_DOMAIN = "https://embedindia.st"
     }
@@ -450,37 +451,49 @@ class DamiTVProvider : MainAPI() {
                             // Fallback extraction
                             if (fallbackUrl.isNotEmpty()) {
                                 try {
-                                    val embedHtml = app.get(
-                                        fallbackUrl,
-                                        headers = mapOf(
-                                            "User-Agent" to "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36",
-                                            "Referer" to "$mainUrl/"
-                                        )
-                                    ).text
-
-                                    // Extract m3u8 matches from embed html
-                                    val m3u8Pattern = Regex("""(https?://[^\s"']+\.m3u8[^\s"']*)""")
-                                    val m3u8Matches = m3u8Pattern.findAll(embedHtml)
-                                    m3u8Matches.forEachIndexed { idx, match ->
-                                        val m3u8Url = match.value
-                                            .replace("\\u0026", "&")
-                                            .replace("\\/", "/")
-                                        callback.invoke(
-                                            newExtractorLink(
-                                                source = this.name,
-                                                name = "${stream.name} (Embed ${idx + 1})",
-                                                url = m3u8Url,
-                                                type = ExtractorLinkType.M3U8
-                                            ) {
-                                                this.headers = hlsPlayHeaders
-                                            }
+                                    val isEmbedIndia = fallbackUrl.contains("embedindia.st", ignoreCase = true) || fallbackUrl.contains("embed.st", ignoreCase = true)
+                                    if (isEmbedIndia && DamiTVProvider.context != null) {
+                                        val extractor = EmbedIndiaExtractor(DamiTVProvider.context!!)
+                                        extractor.getUrl(
+                                            url = fallbackUrl,
+                                            referer = "$mainUrl/",
+                                            subtitleCallback = subtitleCallback,
+                                            callback = callback
                                         )
                                         foundAny = true
-                                    }
+                                    } else {
+                                        val embedHtml = app.get(
+                                            fallbackUrl,
+                                            headers = mapOf(
+                                                "User-Agent" to "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36",
+                                                "Referer" to "$mainUrl/"
+                                            )
+                                        ).text
 
-                                    // Also try built-in extractors
-                                    loadExtractor(fallbackUrl, "$mainUrl/", subtitleCallback, callback)
-                                    foundAny = true
+                                        // Extract m3u8 matches from embed html
+                                        val m3u8Pattern = Regex("""(https?://[^\s"']+\.m3u8[^\s"']*)""")
+                                        val m3u8Matches = m3u8Pattern.findAll(embedHtml)
+                                        m3u8Matches.forEachIndexed { idx, match ->
+                                            val m3u8Url = match.value
+                                                .replace("\\u0026", "&")
+                                                .replace("\\/", "/")
+                                            callback.invoke(
+                                                newExtractorLink(
+                                                    source = this.name,
+                                                    name = "${stream.name} (Embed ${idx + 1})",
+                                                    url = m3u8Url,
+                                                    type = ExtractorLinkType.M3U8
+                                                ) {
+                                                    this.headers = hlsPlayHeaders
+                                                }
+                                            )
+                                            foundAny = true
+                                        }
+
+                                        // Also try built-in extractors
+                                        loadExtractor(fallbackUrl, "$mainUrl/", subtitleCallback, callback)
+                                        foundAny = true
+                                    }
                                 } catch (e: Exception) {
                                     println("DamiTV: Failed to load fallback stream for ${stream.name} - ${e.message}")
                                 }
@@ -514,73 +527,82 @@ class DamiTVProvider : MainAPI() {
                         // === FALLBACK: Try embed page extraction ===
                         if (!response.embedUrl.isNullOrBlank()) {
                             try {
-                                val embedHtml = app.get(
-                                    response.embedUrl,
-                                    headers = mapOf(
-                                        "User-Agent" to "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36",
-                                        "Referer" to "$mainUrl/"
-                                    )
-                                ).text
-
-                                // Try to extract any m3u8 URLs from the embed page
-                                val m3u8Pattern = Regex("""(https?://[^\s"']+\.m3u8[^\s"']*)""")
-                                val m3u8Matches = m3u8Pattern.findAll(embedHtml)
-                                m3u8Matches.forEachIndexed { idx, match ->
-                                    val m3u8Url = match.value
-                                        .replace("\\u0026", "&")
-                                        .replace("\\/", "/")
-                                    callback.invoke(
-                                        newExtractorLink(
-                                            source = this.name,
-                                            name = "${stream.name} (Embed ${idx + 1})",
-                                            url = m3u8Url,
-                                            type = ExtractorLinkType.M3U8
-                                        ) {
-                                            this.headers = hlsPlayHeaders
-                                        }
+                                val embedUrl = response.embedUrl!!
+                                val isEmbedIndia = embedUrl.contains("embedindia.st", ignoreCase = true) || embedUrl.contains("embed.st", ignoreCase = true)
+                                if (isEmbedIndia && DamiTVProvider.context != null) {
+                                    val extractor = EmbedIndiaExtractor(DamiTVProvider.context!!)
+                                    extractor.getUrl(
+                                        url = embedUrl,
+                                        referer = "$mainUrl/",
+                                        subtitleCallback = subtitleCallback,
+                                        callback = callback
                                     )
                                     foundAny = true
-                                }
+                                } else {
+                                    val embedHtml = app.get(
+                                        embedUrl,
+                                        headers = mapOf(
+                                            "User-Agent" to "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36",
+                                            "Referer" to "$mainUrl/"
+                                        )
+                                    ).text
 
-                                // Also try to find the stream URL in JavaScript variables
-                                val jsPatterns = listOf(
-                                    Regex("""['"]?(hlsUrl|streamUrl|source|file|src)['"]?\s*[:=]\s*['"]([^'"]+\.m3u8[^'"]*)['"]"""),
-                                    Regex("""setStream\(['"]([^'"]+)['"]"""),
-                                    Regex("""b-cdn\.net[^\s"']*\.m3u8[^\s"']*""")
-                                )
-                                for (pattern in jsPatterns) {
-                                    pattern.findAll(embedHtml).forEach { jsMatch ->
-                                        val url = if (jsMatch.groups.size > 2) {
-                                            jsMatch.groups[2]?.value ?: jsMatch.value
-                                        } else {
-                                            jsMatch.value
-                                        }
-                                        if (url.contains(".m3u8") && !m3u8Matches.any { it.value == url }) {
-                                            val cleanUrl = if (!url.startsWith("http")) "https://$url" else url
-                                            callback.invoke(
-                                                newExtractorLink(
-                                                    source = this.name,
-                                                    name = "${stream.name} (JS)",
-                                                    url = cleanUrl.replace("\\u0026", "&").replace("\\/", "/"),
-                                                    type = ExtractorLinkType.M3U8
-                                                ) {
-                                                    this.headers = hlsPlayHeaders
-                                                }
-                                            )
-                                            foundAny = true
+                                    // Try to extract any m3u8 URLs from the embed page
+                                    val m3u8Pattern = Regex("""(https?://[^\s"']+\.m3u8[^\s"']*)""")
+                                    val m3u8Matches = m3u8Pattern.findAll(embedHtml)
+                                    m3u8Matches.forEachIndexed { idx, match ->
+                                        val m3u8Url = match.value
+                                            .replace("\\u0026", "&")
+                                            .replace("\\/", "/")
+                                        callback.invoke(
+                                            newExtractorLink(
+                                                source = this.name,
+                                                name = "${stream.name} (Embed ${idx + 1})",
+                                                url = m3u8Url,
+                                                type = ExtractorLinkType.M3U8
+                                            ) {
+                                                this.headers = hlsPlayHeaders
+                                            }
+                                        )
+                                        foundAny = true
+                                    }
+
+                                    // Also try to find the stream URL in JavaScript variables
+                                    val jsPatterns = listOf(
+                                        Regex("""['"]?(hlsUrl|streamUrl|source|file|src)['"]?\s*[:=]\s*['"]([^'"]+\.m3u8[^'"]*)['"]"""),
+                                        Regex("""setStream\(['"]([^'"]+)['"]"""),
+                                        Regex("""b-cdn\.net[^\s"']*\.m3u8[^\s"']*""")
+                                    )
+                                    for (pattern in jsPatterns) {
+                                        pattern.findAll(embedHtml).forEach { jsMatch ->
+                                            val url = if (jsMatch.groups.size > 2) {
+                                                jsMatch.groups[2]?.value ?: jsMatch.value
+                                            } else {
+                                                jsMatch.value
+                                            }
+                                            if (url.contains(".m3u8") && !m3u8Matches.any { it.value == url }) {
+                                                val cleanUrl = if (!url.startsWith("http")) "https://$url" else url
+                                                callback.invoke(
+                                                    newExtractorLink(
+                                                        source = this.name,
+                                                        name = "${stream.name} (JS)",
+                                                        url = cleanUrl.replace("\\u0026", "&").replace("\\/", "/"),
+                                                        type = ExtractorLinkType.M3U8
+                                                    ) {
+                                                        this.headers = hlsPlayHeaders
+                                                    }
+                                                )
+                                                foundAny = true
+                                            }
                                         }
                                     }
+
+                                    // Also try loading via CloudStream's built-in extractors
+                                    loadExtractor(embedUrl, "$mainUrl/", subtitleCallback, callback)
+                                    foundAny = true
                                 }
                             } catch (embedError: Exception) {
                                 println("DamiTV: Embed extraction failed for ${stream.name} - ${embedError.message}")
-                            }
-
-                            // Also try loading via CloudStream's built-in extractors
-                            try {
-                                loadExtractor(response.embedUrl, "$mainUrl/", subtitleCallback, callback)
-                                foundAny = true
-                            } catch (extractError: Exception) {
-                                println("DamiTV: loadExtractor failed for ${stream.name} - ${extractError.message}")
                             }
                         }
                     }

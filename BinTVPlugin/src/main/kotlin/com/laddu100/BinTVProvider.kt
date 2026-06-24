@@ -7,10 +7,13 @@ import com.lagradost.cloudstream3.utils.AppUtils.toJson
 import com.fasterxml.jackson.annotation.JsonProperty
 import java.net.ServerSocket
 import java.net.Socket
-import java.net.URLEncoder
-import java.net.URLDecoder
 import kotlin.concurrent.thread
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 
 class BinTVProvider : MainAPI() {
 
@@ -124,15 +127,13 @@ class BinTVProvider : MainAPI() {
         }
     }
 
-    // ── Main Page ─────────────────────────────────────────────────────────
-
     override suspend fun getMainPage(
         page: Int,
         request: MainPageRequest
     ): HomePageResponse {
         val lists = mutableListOf<HomePageList>()
 
-        // 1. Fetch extras config maps (posters and high priority sources)
+        // Fetch extras config
         val extrasMap = mutableMapOf<String, ExtraMatch>()
         try {
             val extraText = app.get("https://prabashsapkota.github.io/Streamed-images-json/index.json", timeout = 15L).text
@@ -147,7 +148,7 @@ class BinTVProvider : MainAPI() {
             println("BinTV: failed to load extras - ${e.message}")
         }
 
-        // 2. Fetch BinTV matches
+        // Fetch BinTV matches
         val bintvMatches = mutableListOf<EventLoadData>()
         try {
             val bintvText = app.get("https://prabashsapkota.github.io/bintvjson/index.json", timeout = 15L).text
@@ -191,7 +192,7 @@ class BinTVProvider : MainAPI() {
             println("BinTV: failed to load bintvjson - ${e.message}")
         }
 
-        // Apply extras to BinTV matches
+        // Apply extras
         bintvMatches.forEachIndexed { index, m ->
             val key = m.title.trim().lowercase()
             val extra = extrasMap[key]
@@ -205,10 +206,10 @@ class BinTVProvider : MainAPI() {
             }
         }
 
-        // 3. Fetch PPV matches
+        // Fetch PPV matches
         val ppvMatches = mutableListOf<EventLoadData>()
         try {
-            val ppvText = app.get("https://api.ppv.to/api/streams", timeout = 15L).text
+            val ppvText = app.get("https://old.ppv.to/api/streams", timeout = 15L).text
             val ppvResponse = parseJson<PpvStreamsResponse>(ppvText)
             if (ppvResponse.success && !ppvResponse.streams.isNullOrEmpty()) {
                 val now = System.currentTimeMillis()
@@ -219,23 +220,23 @@ class BinTVProvider : MainAPI() {
                         if (name.isBlank()) return@forEach
                         val startMs = (stream.starts_at ?: 0) * 1000L
                         val endMs = (stream.ends_at ?: 0) * 1000L
-                        // Skip matches that ended more than 10 mins ago
+                        // Filter ended matches
                         if (stream.ends_at != null && endMs < now - 600000L) return@forEach
 
                         val iframes = mutableListOf<MatchSource>()
                         if (!stream.iframe.isNullOrBlank()) {
-                            // Use source_tag for main stream name, fallback to "Main"
+                            // Get stream name
                             val mainName = stream.source_tag?.takeIf { it.isNotBlank() } ?: "Main"
                             iframes.add(MatchSource(mainName, stream.iframe))
                         }
                         stream.substreams?.forEachIndexed { subIdx, sub ->
                             if (!sub.iframe.isNullOrBlank() && iframes.none { it.url == sub.iframe }) {
-                                // Build a human-readable name from uri_name or source_tag
+                                // Get fallback name
                                 val rawName = sub.uri_name?.takeIf { it.isNotBlank() }
                                     ?: sub.source_tag?.takeIf { it.isNotBlank() }
                                     ?: sub.name?.takeIf { it.isNotBlank() }
                                     ?: "Server ${subIdx + 1}"
-                                // Capitalize and clean up uri_name (e.g. "fox-4k" -> "FOX 4K")
+                                // Normalize name
                                 val prettyName = rawName
                                     .split("-").joinToString(" ") { part ->
                                         if (part.length <= 3) part.uppercase()
@@ -271,9 +272,65 @@ class BinTVProvider : MainAPI() {
             }
         } catch (e: Exception) {
             println("BinTV: failed to load PPV matches - ${e.message}")
+            // Fallback API
+            try {
+                val fallbackText = app.get("https://api.ppv.to/api/streams", timeout = 15L).text
+                val fallbackResponse = parseJson<PpvStreamsResponse>(fallbackText)
+                if (fallbackResponse.success && !fallbackResponse.streams.isNullOrEmpty()) {
+                    val now = System.currentTimeMillis()
+                    fallbackResponse.streams.forEach { group ->
+                        if (group.category == "24/7 Streams") return@forEach
+                        group.streams?.forEach { stream ->
+                            val name = stream.name ?: ""
+                            if (name.isBlank()) return@forEach
+                            val startMs = (stream.starts_at ?: 0) * 1000L
+                            val endMs = (stream.ends_at ?: 0) * 1000L
+                            if (stream.ends_at != null && endMs < now - 600000L) return@forEach
+
+                            val iframes = mutableListOf<MatchSource>()
+                            if (!stream.iframe.isNullOrBlank()) {
+                                val mainName = stream.source_tag?.takeIf { it.isNotBlank() } ?: "Main"
+                                iframes.add(MatchSource(mainName, stream.iframe))
+                            }
+                            stream.substreams?.forEachIndexed { subIdx, sub ->
+                                if (!sub.iframe.isNullOrBlank() && iframes.none { it.url == sub.iframe }) {
+                                    val rawName = sub.uri_name?.takeIf { it.isNotBlank() }
+                                        ?: sub.source_tag?.takeIf { it.isNotBlank() }
+                                        ?: sub.name?.takeIf { it.isNotBlank() }
+                                        ?: "Server ${subIdx + 1}"
+                                    val prettyName = rawName
+                                        .split("-").joinToString(" ") { part ->
+                                            if (part.length <= 3) part.uppercase()
+                                            else part.replaceFirstChar { it.uppercase() }
+                                        }
+                                    iframes.add(MatchSource(prettyName, sub.iframe))
+                                }
+                            }
+                            if (iframes.isEmpty()) return@forEach
+                            val numberedSources = iframes.mapIndexed { idx, src ->
+                                MatchSource(name = "${src.name} [${idx + 1}]", url = src.url)
+                            }
+                            ppvMatches.add(
+                                EventLoadData(
+                                    title = name,
+                                    poster = stream.poster,
+                                    date = startMs,
+                                    endsAt = endMs,
+                                    category = stream.category_name ?: group.category ?: "Other",
+                                    sources = numberedSources,
+                                    isPPV = true,
+                                    isBinTV = false
+                                )
+                            )
+                        }
+                    }
+                }
+            } catch (fallbackErr: Exception) {
+                println("BinTV: PPV fallback also failed - ${fallbackErr.message}")
+            }
         }
 
-        // Apply extras to PPV matches
+        // Apply extras
         ppvMatches.forEachIndexed { index, m ->
             val key = m.title.trim().lowercase()
             val extra = extrasMap[key]
@@ -287,12 +344,12 @@ class BinTVProvider : MainAPI() {
             }
         }
 
-        // Merge matches, deduplicating by slugified title
+        // Deduplicate and merge
         val existingTitles = bintvMatches.map { slugify(it.title) }.toSet()
         val filteredPpv = ppvMatches.filter { !existingTitles.contains(slugify(it.title)) }
         val allMatches = bintvMatches + filteredPpv
 
-        // 4. Split into Live and Upcoming
+        // Split live/upcoming
         val now = System.currentTimeMillis()
         val liveList = mutableListOf<EventLoadData>()
         val upcomingList = mutableListOf<EventLoadData>()
@@ -312,7 +369,7 @@ class BinTVProvider : MainAPI() {
             }
         }
 
-        // Helper to convert Match data to SearchResponse
+        // Map matches
         fun matchToSearch(m: EventLoadData, prefix: String = ""): SearchResponse {
             val title = if (prefix.isNotEmpty()) "$prefix ${m.title}" else m.title
             return newLiveSearchResponse(title, m.toJson(), TvType.Live) {
@@ -320,8 +377,7 @@ class BinTVProvider : MainAPI() {
             }
         }
 
-        // 5. Populate sections
-        // FIFA World Cup Live
+        // FIFA World Cup
         val wcLive = liveList.filter { m ->
             m.title.contains("world cup", ignoreCase = true) ||
             m.title.contains("fifa", ignoreCase = true) ||
@@ -332,7 +388,7 @@ class BinTVProvider : MainAPI() {
             lists.add(HomePageList("🏆 FIFA World Cup - Live", items, isHorizontalImages = true))
         }
 
-        // Sport Live sections
+        // Live Sports
         val sports = listOf(
             Pair("Football", "🟢 Live Football"),
             Pair("Basketball", "🟢 Live Basketball"),
@@ -358,7 +414,7 @@ class BinTVProvider : MainAPI() {
             }
         }
 
-        // Other Live Sports
+        // Other Live
         val otherLive = liveList.filter { m ->
             !wcLive.contains(m) && sports.none { (catKey, _) ->
                 m.category.contains(catKey, ignoreCase = true) ||
@@ -374,7 +430,7 @@ class BinTVProvider : MainAPI() {
             lists.add(HomePageList("🟢 Live Other Sports", items, isHorizontalImages = true))
         }
 
-        // FIFA World Cup Upcoming
+        // Upcoming FIFA
         val wcUpcoming = upcomingList.filter { m ->
             m.title.contains("world cup", ignoreCase = true) ||
             m.title.contains("fifa", ignoreCase = true) ||
@@ -385,7 +441,7 @@ class BinTVProvider : MainAPI() {
             lists.add(HomePageList("🏆 FIFA World Cup - Upcoming", items, isHorizontalImages = true))
         }
 
-        // General Upcoming Sports Schedule
+        // Upcoming schedule
         val otherUpcoming = upcomingList.filter { !wcUpcoming.contains(it) }
             .sortedBy { it.date ?: 0L }
         if (otherUpcoming.isNotEmpty()) {
@@ -399,7 +455,7 @@ class BinTVProvider : MainAPI() {
             lists.add(HomePageList("📅 Upcoming Sports Schedule", items, isHorizontalImages = true))
         }
 
-        // Empty State: Add a notification item if no live streams exist at all
+        // Empty state handling
         if (liveList.isEmpty()) {
             val dummyData = EventLoadData(
                 title = "No live matches right now",
@@ -424,14 +480,9 @@ class BinTVProvider : MainAPI() {
         return newHomePageResponse(lists, hasNext = false)
     }
 
-    // ── Search ──────────────────────────────────────────────────────────
-
     override suspend fun search(query: String): List<SearchResponse> {
-        // Search matches simply by matching the title in the main feed
-        return emptyList() // The plugin primarily relies on the mainpage categorizations
+        return emptyList()
     }
-
-    // ── Load ──────────────────────────────────────────────────────────
 
     override suspend fun load(url: String): LoadResponse {
         val eventData = parseJson<EventLoadData>(url)
@@ -458,8 +509,6 @@ class BinTVProvider : MainAPI() {
         }
     }
 
-    // ── Load Links ────────────────────────────────────────────────────────
-
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -474,111 +523,133 @@ class BinTVProvider : MainAPI() {
 
         if (streamData.streams.isEmpty()) return false
 
-        var foundAny = false
+        val dispatcher = kotlinx.coroutines.Dispatchers.IO
+        val semaphore = Semaphore(3)
 
-        streamData.streams.forEach { stream ->
-            try {
-                // If it is a noooooads wrapper URL:
-                // e.g. https://prabashsapkota.github.io/noooooads/?src=https://xyzstreams.shop/wc-5-embed
-                var embedUrl = stream.url
-                if (embedUrl.contains("noooooads/?src=")) {
-                    val extracted = embedUrl.substringAfter("noooooads/?src=").substringBefore("&")
-                    if (extracted.isNotBlank()) {
-                        embedUrl = java.net.URLDecoder.decode(extracted, "UTF-8")
-                    }
-                }
-
-                // If it is a direct m3u8 playlist link
-                if (embedUrl.contains(".m3u8")) {
-                    val referer = getBaseUrl(embedUrl)
-                    val proxiedUrl = getProxiedM3u8Url(embedUrl, referer)
-                    callback.invoke(
-                        newExtractorLink(
-                            source = this.name,
-                            name = stream.name,
-                            url = proxiedUrl,
-                            type = ExtractorLinkType.M3U8
-                        ) {
-                            this.headers = mapOf(
-                                "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
-                                "Referer" to referer
-                            )
-                        }
-                    )
-                    foundAny = true
-                } else {
-                    // Parse the embed page HTML to extract direct M3U8 source links.
-                    // This handles embedindia.st, xyzstreams.shop, and all other embed page types.
-                    val embedHost = try {
-                        val uri = java.net.URI(embedUrl)
-                        "${uri.scheme}://${uri.host}"
-                    } catch (e: Exception) {
-                        null
-                    }
-
-                    val fetchHeaders = mapOf(
-                        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
-                        "Referer" to "${embedHost ?: "https://bintv.net"}/",
-                        "Origin" to (embedHost ?: "https://bintv.net")
-                    )
-
-                    val embedHtml = try {
-                        app.get(embedUrl, headers = fetchHeaders, timeout = 20L).text
-                    } catch (fetchErr: Exception) {
-                        println("BinTV: Failed to fetch embed page $embedUrl - ${fetchErr.message}")
-                        ""
-                    }
-
-                    // Search for .m3u8 links — matches STREAM_URL assignments, HLS source configs, etc.
-                    val m3u8Pattern = Regex("""(https?://[^\s"'\\]+\.m3u8(?:[^\s"'\\]*)?)""")
-                    val m3u8Matches = m3u8Pattern.findAll(embedHtml)
-                    var foundM3u8 = false
-                    m3u8Matches.forEachIndexed { idx, match ->
-                        val m3u8Url = match.value
-                            .replace("\\u0026", "&")
-                            .replace("\\/", "/")
-                        // Use the m3u8 stream's own domain as referer so segment requests work
-                        val m3u8Host = try {
-                            val uri = java.net.URI(m3u8Url)
-                            "${uri.scheme}://${uri.host}"
-                        } catch (e: Exception) {
-                            embedHost ?: getBaseUrl(m3u8Url)
-                        }
-                        val proxiedUrl = getProxiedM3u8Url(m3u8Url, m3u8Host)
-                        callback.invoke(
-                            newExtractorLink(
-                                source = this.name,
-                                name = if (idx == 0) stream.name else "${stream.name} (Alt ${idx + 1})",
-                                url = proxiedUrl,
-                                type = ExtractorLinkType.M3U8
-                            ) {
-                                this.headers = mapOf(
-                                    "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
-                                    "Referer" to "$m3u8Host/",
-                                    "Origin" to m3u8Host
-                                )
-                            }
-                        )
-                        foundM3u8 = true
-                        foundAny = true
-                    }
-
-                    // Fallback: try loadExtractor if no m3u8 was found in page HTML
-                    if (!foundM3u8) {
+        val results = coroutineScope {
+            streamData.streams.map { stream ->
+                async(dispatcher) {
+                    semaphore.withPermit {
+                        var streamFound = false
                         try {
-                            loadExtractor(embedUrl, "${embedHost ?: "https://bintv.net"}/", subtitleCallback, callback)
-                            foundAny = true
+                            // Extract source from noooooads wrapper
+                            var embedUrl = stream.url
+                            if (embedUrl.contains("noooooads/?src=")) {
+                                val extracted = embedUrl.substringAfter("noooooads/?src=").substringBefore("&")
+                                if (extracted.isNotBlank()) {
+                                    embedUrl = java.net.URLDecoder.decode(extracted, "UTF-8")
+                                }
+                            }
+
+                            // Direct m3u8 HLS
+                            if (embedUrl.contains(".m3u8")) {
+                                val referer = getBaseUrl(embedUrl)
+                                val proxiedUrl = getProxiedM3u8Url(embedUrl, referer)
+                                callback.invoke(
+                                    newExtractorLink(
+                                        source = this@BinTVProvider.name,
+                                        name = stream.name,
+                                        url = proxiedUrl,
+                                        type = ExtractorLinkType.M3U8
+                                    ) {
+                                        this.headers = mapOf(
+                                            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+                                            "Referer" to referer
+                                        )
+                                    }
+                                )
+                                streamFound = true
+                            } else {
+                                // Parse embed HTML
+                                val embedHost = try {
+                                    val uri = java.net.URI(embedUrl)
+                                    "${uri.scheme}://${uri.host}"
+                                } catch (e: Exception) {
+                                    null
+                                }
+
+                                val isEmbedIndia = embedUrl.contains("embedindia.st", ignoreCase = true)
+                                if (isEmbedIndia) {
+                                    try {
+                                        val extractor = EmbedIndiaExtractor()
+                                        extractor.getUrl(
+                                            url = embedUrl,
+                                            referer = "${embedHost ?: "https://bintv.net"}/",
+                                            subtitleCallback = subtitleCallback,
+                                            callback = callback
+                                        )
+                                        streamFound = true
+                                    } catch (e: Exception) {
+                                        println("BinTV: EmbedIndiaExtractor failed for $embedUrl - ${e.message}")
+                                    }
+                                } else {
+                                    val fetchHeaders = mapOf(
+                                        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+                                        "Referer" to "${embedHost ?: "https://bintv.net"}/",
+                                        "Origin" to (embedHost ?: "https://bintv.net")
+                                    )
+
+                                    val embedHtml = try {
+                                        app.get(embedUrl, headers = fetchHeaders, timeout = 10L).text
+                                    } catch (fetchErr: Exception) {
+                                        println("BinTV: Failed to fetch embed page $embedUrl - ${fetchErr.message}")
+                                        ""
+                                    }
+
+                                    // Search for m3u8 links
+                                    val m3u8Pattern = Regex("""(https?://[^\s"'\\]+\.m3u8(?:[^\s"'\\]*)?)""")
+                                    val m3u8Matches = m3u8Pattern.findAll(embedHtml)
+                                    var foundM3u8 = false
+                                    m3u8Matches.forEachIndexed { idx, match ->
+                                        val m3u8Url = match.value
+                                            .replace("\\u0026", "&")
+                                            .replace("\\/", "/")
+                                        val m3u8Host = try {
+                                            val uri = java.net.URI(m3u8Url)
+                                            "${uri.scheme}://${uri.host}"
+                                        } catch (e: Exception) {
+                                            embedHost ?: getBaseUrl(m3u8Url)
+                                        }
+                                        val proxiedUrl = getProxiedM3u8Url(m3u8Url, embedHost ?: m3u8Host)
+                                        callback.invoke(
+                                            newExtractorLink(
+                                                source = this@BinTVProvider.name,
+                                                name = if (idx == 0) stream.name else "${stream.name} (Alt ${idx + 1})",
+                                                url = proxiedUrl,
+                                                type = ExtractorLinkType.M3U8
+                                            ) {
+                                                this.headers = mapOf(
+                                                    "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+                                                    "Referer" to "$m3u8Host/",
+                                                    "Origin" to m3u8Host
+                                                )
+                                            }
+                                        )
+                                        foundM3u8 = true
+                                        streamFound = true
+                                    }
+
+                                    // Fallback to loadExtractor
+                                    if (!foundM3u8) {
+                                        try {
+                                            loadExtractor(embedUrl, "${embedHost ?: "https://bintv.net"}/", subtitleCallback, callback)
+                                            streamFound = true
+                                        } catch (e: Exception) {
+                                            println("BinTV: fallback loadExtractor failed for $embedUrl - ${e.message}")
+                                        }
+                                    }
+                                }
+                            }
                         } catch (e: Exception) {
-                            println("BinTV: fallback loadExtractor failed for $embedUrl - ${e.message}")
+                            println("BinTV: Failed to load stream link - ${e.message}")
                         }
+                        streamFound
                     }
                 }
-            } catch (e: Exception) {
-                println("BinTV: Failed to load stream link - ${e.message}")
-            }
+            }.awaitAll()
         }
 
-        return foundAny
+        return results.any { it }
     }
 
     companion object {
@@ -616,8 +687,9 @@ class BinTVProvider : MainAPI() {
 
         private fun getProxiedM3u8Url(m3u8Url: String, referer: String): String {
             startProxy()
+            val formattedReferer = if (referer.endsWith("/")) referer else "$referer/"
             val encodedUrl = java.net.URLEncoder.encode(m3u8Url, "UTF-8")
-            val encodedReferer = java.net.URLEncoder.encode(referer, "UTF-8")
+            val encodedReferer = java.net.URLEncoder.encode(formattedReferer, "UTF-8")
             return "http://127.0.0.1:$port/playlist.m3u8?referer=$encodedReferer&url=$encodedUrl"
         }
 
@@ -647,7 +719,7 @@ class BinTVProvider : MainAPI() {
                 socket.soTimeout = 5000
                 val reader = socket.getInputStream().bufferedReader()
                 val firstLine = reader.readLine() ?: return
-                // Consume all HTTP request headers to prevent TCP RST on socket close
+                // Consume headers
                 while (true) {
                     val line = reader.readLine()
                     if (line.isNullOrEmpty()) break

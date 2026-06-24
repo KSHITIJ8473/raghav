@@ -281,8 +281,8 @@ class DamiTVProvider : MainAPI() {
 
         val streamsList = mutableListOf<StreamInfo>()
 
-        // 1. If it's a DaddyLive match, parse its mapped TV channels directly
-        if (eventData.isDaddyLive == true && !eventData.tvChannels.isNullOrEmpty()) {
+        // 1. Parse mapped TV channels directly if present
+        if (!eventData.tvChannels.isNullOrEmpty()) {
             eventData.tvChannels.forEach { ch ->
                 val chName = if (isUpcoming) "${ch.name} (Upcoming)" else ch.name
                 // Stream URL points directly to DamiTV's DLHD proxy playlist

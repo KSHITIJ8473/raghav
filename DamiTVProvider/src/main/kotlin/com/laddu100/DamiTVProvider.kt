@@ -8,6 +8,11 @@ import com.fasterxml.jackson.annotation.JsonProperty
 import okhttp3.Interceptor
 import okhttp3.Response
 import android.util.Base64
+import java.net.ServerSocket
+import java.net.Socket
+import kotlin.concurrent.thread
+import kotlinx.coroutines.runBlocking
+import com.lagradost.cloudstream3.network.CloudflareKiller
 
 class DamiTVProvider : MainAPI() {
 
@@ -24,6 +29,215 @@ class DamiTVProvider : MainAPI() {
         var context: android.content.Context? = null
         // The embed domain that serves as the legitimate referer for BunnyCDN
         private const val EMBED_DOMAIN = "https://embedindia.st"
+        private val cfInterceptor = CloudflareKiller()
+        private var serverSocket: ServerSocket? = null
+        private var port: Int = 0
+
+        @Synchronized
+        fun startProxy() {
+            if (serverSocket != null && !serverSocket!!.isClosed) return
+            try {
+                serverSocket = ServerSocket(0)
+                port = serverSocket!!.localPort
+                thread(start = true, isDaemon = true) {
+                    try {
+                        while (true) {
+                            val socket = serverSocket?.accept() ?: break
+                            thread {
+                                handleSocket(socket)
+                            }
+                        }
+                    } catch (e: Exception) {
+                        println("DamiTV: Proxy accept loop error - ${e.message}")
+                    } finally {
+                        try {
+                            serverSocket?.close()
+                        } catch (e: Exception) {}
+                        serverSocket = null
+                    }
+                }
+                println("DamiTV: LocalProxy started on port $port")
+            } catch (e: Exception) {
+                println("DamiTV: LocalProxy start failed: ${e.message}")
+            }
+        }
+
+        fun getProxiedM3u8Url(m3u8Url: String, referer: String, userAgent: String? = null): String {
+            startProxy()
+            val formattedReferer = if (referer.endsWith("/")) referer else "$referer/"
+            val encodedUrl = java.net.URLEncoder.encode(m3u8Url, "UTF-8")
+            val encodedReferer = java.net.URLEncoder.encode(formattedReferer, "UTF-8")
+            val encodedUa = userAgent?.let { java.net.URLEncoder.encode(it, "UTF-8") }
+            val uaParam = if (encodedUa != null) "&ua=$encodedUa" else ""
+            return "http://127.0.0.1:$port/playlist.m3u8?referer=$encodedReferer&url=$encodedUrl$uaParam"
+        }
+
+        private fun getBaseUrl(url: String): String {
+            return try {
+                val uri = java.net.URI(url)
+                "${uri.scheme}://${uri.host}"
+            } catch (e: Exception) {
+                ""
+            }
+        }
+
+        private fun getQueryParam(path: String, name: String): String? {
+            val query = path.substringAfter("?", "")
+            if (query.isEmpty()) return null
+            return query.split("&").firstOrNull { it.startsWith("$name=") }?.substringAfter("=")?.let {
+                try {
+                    java.net.URLDecoder.decode(it, "UTF-8")
+                } catch (e: Exception) {
+                    null
+                }
+            }
+        }
+
+        private fun handleSocket(socket: Socket) {
+            try {
+                socket.soTimeout = 5000
+                val reader = socket.getInputStream().bufferedReader()
+                val firstLine = reader.readLine() ?: return
+                // Consume headers
+                while (true) {
+                    val line = reader.readLine()
+                    if (line.isNullOrEmpty()) break
+                }
+
+                val parts = firstLine.split(" ")
+                if (parts.size < 2) return
+                val path = parts[1]
+
+                if (path.startsWith("/playlist.m3u8")) {
+                    val targetUrl = getQueryParam(path, "url") ?: return
+                    val referer = getQueryParam(path, "referer") ?: getBaseUrl(targetUrl)
+                    val userAgent = getQueryParam(path, "ua") ?: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+
+                    val response = runBlocking {
+                        app.get(
+                            targetUrl,
+                            headers = mapOf(
+                                "User-Agent" to userAgent,
+                                "Referer" to referer
+                            ),
+                            timeout = 30L
+                        )
+                    }
+                    val playlistText = response.text
+                    val baseUrl = targetUrl.substringBeforeLast("/")
+
+                    var isStreamInf = false
+                    val rewritten = playlistText.lineSequence().map { line ->
+                        val trimmed = line.trim()
+                        if (trimmed.isEmpty() || (trimmed.startsWith("#") && !trimmed.contains("URI=\""))) {
+                            isStreamInf = trimmed.startsWith("#EXT-X-STREAM-INF")
+                            line
+                        } else if (trimmed.startsWith("#") && trimmed.contains("URI=\"")) {
+                            val preUri = line.substringBefore("URI=\"")
+                            val uriVal = line.substringAfter("URI=\"").substringBefore("\"")
+                            val postUri = line.substringAfter("URI=\"").substringAfter("\"")
+
+                            val absoluteUrl = if (uriVal.startsWith("http")) {
+                                uriVal
+                            } else if (uriVal.startsWith("/")) {
+                                val host = getBaseUrl(targetUrl)
+                                "$host$uriVal"
+                            } else {
+                                "$baseUrl/$uriVal"
+                            }
+                            val encodedUrl = java.net.URLEncoder.encode(absoluteUrl, "UTF-8")
+                            val encodedReferer = java.net.URLEncoder.encode(referer, "UTF-8")
+                            val encodedUa = java.net.URLEncoder.encode(userAgent, "UTF-8")
+                            val uaParam = "&ua=$encodedUa"
+
+                            val proxiedUri = if (absoluteUrl.substringBefore("?").endsWith(".m3u8", ignoreCase = true)) {
+                                "http://127.0.0.1:$port/playlist.m3u8?referer=$encodedReferer&url=$encodedUrl$uaParam"
+                            } else {
+                                "http://127.0.0.1:$port/proxy?referer=$encodedReferer&url=$encodedUrl$uaParam"
+                            }
+                            "${preUri}URI=\"$proxiedUri\"$postUri"
+                        } else {
+                            val absoluteUrl = if (trimmed.startsWith("http")) {
+                                trimmed
+                            } else if (trimmed.startsWith("/")) {
+                                val host = getBaseUrl(targetUrl)
+                                "$host$trimmed"
+                            } else {
+                                "$baseUrl/$trimmed"
+                            }
+                            val encodedUrl = java.net.URLEncoder.encode(absoluteUrl, "UTF-8")
+                            val encodedReferer = java.net.URLEncoder.encode(referer, "UTF-8")
+                            val encodedUa = java.net.URLEncoder.encode(userAgent, "UTF-8")
+                            val uaParam = "&ua=$encodedUa"
+
+                            val result = if (isStreamInf || absoluteUrl.substringBefore("?").endsWith(".m3u8", ignoreCase = true)) {
+                                "http://127.0.0.1:$port/playlist.m3u8?referer=$encodedReferer&url=$encodedUrl$uaParam"
+                            } else {
+                                "http://127.0.0.1:$port/proxy?referer=$encodedReferer&url=$encodedUrl$uaParam"
+                            }
+                            isStreamInf = false
+                            result
+                        }
+                    }.joinToString("\n")
+
+                    val out = socket.getOutputStream()
+                    val bytes = rewritten.toByteArray(Charsets.UTF_8)
+                    out.write("HTTP/1.1 200 OK\r\n".toByteArray())
+                    out.write("Content-Type: application/vnd.apple.mpegurl\r\n".toByteArray())
+                    out.write("Content-Length: ${bytes.size}\r\n".toByteArray())
+                    out.write("Connection: close\r\n".toByteArray())
+                    out.write("Access-Control-Allow-Origin: *\r\n".toByteArray())
+                    out.write("\r\n".toByteArray())
+                    out.write(bytes)
+                    out.flush()
+                } else if (path.startsWith("/proxy")) {
+                    val targetUrl = getQueryParam(path, "url") ?: return
+                    val referer = getQueryParam(path, "referer") ?: getBaseUrl(targetUrl)
+                    val userAgent = getQueryParam(path, "ua") ?: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+
+                    val response = runBlocking {
+                        app.get(
+                            targetUrl,
+                            headers = mapOf(
+                                "User-Agent" to userAgent,
+                                "Referer" to referer
+                            ),
+                            timeout = 30L
+                        )
+                    }
+                    val bytes = response.body.bytes()
+                    val hasPngHeader = bytes.size > 70 &&
+                            bytes[0] == 0x89.toByte() &&
+                            bytes[1] == 0x50.toByte() &&
+                            bytes[2] == 0x4E.toByte() &&
+                            bytes[3] == 0x47.toByte()
+                    val cleanBytes = if (hasPngHeader) {
+                        bytes.copyOfRange(70, bytes.size)
+                    } else {
+                        bytes
+                    }
+
+                    val out = socket.getOutputStream()
+                    out.write("HTTP/1.1 200 OK\r\n".toByteArray())
+                    out.write("Content-Type: video/mp2t\r\n".toByteArray())
+                    out.write("Content-Length: ${cleanBytes.size}\r\n".toByteArray())
+                    out.write("Connection: close\r\n".toByteArray())
+                    out.write("Access-Control-Allow-Origin: *\r\n".toByteArray())
+                    out.write("\r\n".toByteArray())
+                    out.write(cleanBytes)
+                    out.flush()
+                }
+            } catch (e: Exception) {
+                println("DamiTV: Proxy error - ${e.message}")
+            } finally {
+                try {
+                    socket.shutdownOutput()
+                } catch (e: Exception) {}
+                try {
+                    socket.close()
+                } catch (e: Exception) {}
+            }
+        }
     }
 
     data class FirebaseConfig(
@@ -436,11 +650,12 @@ class DamiTVProvider : MainAPI() {
                             val hlsUrl = "https://damitvsd.b-cdn.net/live-sd/streamed/$encodedSource/$encodedStreamId/$streamNo/playlist.m3u8?token=$token&token_path=$encodedTokenPath&expires=$expires"
 
                             // Direct HLS Link
+                            val proxiedUrl = getProxiedM3u8Url(hlsUrl, EMBED_DOMAIN, hlsPlayHeaders["User-Agent"])
                             callback.invoke(
                                 newExtractorLink(
                                     source = this.name,
                                     name = "${stream.name} (Direct)",
-                                    url = hlsUrl,
+                                    url = proxiedUrl,
                                     type = ExtractorLinkType.M3U8
                                 ) {
                                     this.headers = hlsPlayHeaders
@@ -462,6 +677,7 @@ class DamiTVProvider : MainAPI() {
                                         )
                                         foundAny = true
                                     } else {
+                                        val embedHost = getBaseUrl(fallbackUrl)
                                         val embedHtml = app.get(
                                             fallbackUrl,
                                             headers = mapOf(
@@ -477,11 +693,12 @@ class DamiTVProvider : MainAPI() {
                                             val m3u8Url = match.value
                                                 .replace("\\u0026", "&")
                                                 .replace("\\/", "/")
+                                            val proxiedUrl = getProxiedM3u8Url(m3u8Url, embedHost.ifBlank { EMBED_DOMAIN }, hlsPlayHeaders["User-Agent"])
                                             callback.invoke(
                                                 newExtractorLink(
                                                     source = this.name,
                                                     name = "${stream.name} (Embed ${idx + 1})",
-                                                    url = m3u8Url,
+                                                    url = proxiedUrl,
                                                     type = ExtractorLinkType.M3U8
                                                 ) {
                                                     this.headers = hlsPlayHeaders
@@ -511,11 +728,12 @@ class DamiTVProvider : MainAPI() {
                     if (response.success) {
                         // === PRIMARY: Direct HLS from BunnyCDN ===
                         if (!response.hlsUrl.isNullOrBlank()) {
+                            val proxiedUrl = getProxiedM3u8Url(response.hlsUrl!!, EMBED_DOMAIN, hlsPlayHeaders["User-Agent"])
                             callback.invoke(
                                 newExtractorLink(
                                     source = this.name,
                                     name = "${stream.name} (Direct)",
-                                    url = response.hlsUrl,
+                                    url = proxiedUrl,
                                     type = ExtractorLinkType.M3U8
                                 ) {
                                     this.headers = hlsPlayHeaders
@@ -539,6 +757,7 @@ class DamiTVProvider : MainAPI() {
                                     )
                                     foundAny = true
                                 } else {
+                                    val embedHost = getBaseUrl(embedUrl)
                                     val embedHtml = app.get(
                                         embedUrl,
                                         headers = mapOf(
@@ -554,11 +773,12 @@ class DamiTVProvider : MainAPI() {
                                         val m3u8Url = match.value
                                             .replace("\\u0026", "&")
                                             .replace("\\/", "/")
+                                        val proxiedUrl = getProxiedM3u8Url(m3u8Url, embedHost.ifBlank { EMBED_DOMAIN }, hlsPlayHeaders["User-Agent"])
                                         callback.invoke(
                                             newExtractorLink(
                                                 source = this.name,
                                                 name = "${stream.name} (Embed ${idx + 1})",
-                                                url = m3u8Url,
+                                                url = proxiedUrl,
                                                 type = ExtractorLinkType.M3U8
                                             ) {
                                                 this.headers = hlsPlayHeaders
@@ -582,11 +802,13 @@ class DamiTVProvider : MainAPI() {
                                             }
                                             if (url.contains(".m3u8") && !m3u8Matches.any { it.value == url }) {
                                                 val cleanUrl = if (!url.startsWith("http")) "https://$url" else url
+                                                val m3u8Url = cleanUrl.replace("\\u0026", "&").replace("\\/", "/")
+                                                val proxiedUrl = getProxiedM3u8Url(m3u8Url, embedHost.ifBlank { EMBED_DOMAIN }, hlsPlayHeaders["User-Agent"])
                                                 callback.invoke(
                                                     newExtractorLink(
                                                         source = this.name,
                                                         name = "${stream.name} (JS)",
-                                                        url = cleanUrl.replace("\\u0026", "&").replace("\\/", "/"),
+                                                        url = proxiedUrl,
                                                         type = ExtractorLinkType.M3U8
                                                     ) {
                                                         this.headers = hlsPlayHeaders

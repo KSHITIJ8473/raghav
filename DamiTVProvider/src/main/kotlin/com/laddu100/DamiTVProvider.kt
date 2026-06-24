@@ -292,12 +292,14 @@ class DamiTVProvider : MainAPI() {
         }
 
         // 2. Query standard PPV API endpoints (Main Stream & Substreams)
+        var addedPpvStreams = false
         try {
             val text = app.get("$mainUrl/papi/extract-url/$matchId", headers = apiHeaders).text
             val response = parseJson<ExtractUrlResponse>(text)
             if (response.success) {
                 val mainStreamName = if (isUpcoming) "Upcoming - Live soon (Starts: $dateStr)" else "Main Stream"
                 streamsList.add(StreamInfo(name = mainStreamName, url = matchId))
+                addedPpvStreams = true
 
                 // Add substreams
                 response.substreams?.forEach { sub ->
@@ -305,22 +307,14 @@ class DamiTVProvider : MainAPI() {
                     val subName = if (isUpcoming) "${sub.name}$localeSuffix (Upcoming)" else "${sub.name}$localeSuffix"
                     streamsList.add(StreamInfo(name = subName, url = sub.id))
                 }
-            } else {
-                if (eventData.isStreamed != true) {
-                    val mainStreamName = if (isUpcoming) "Upcoming - Live soon (Starts: $dateStr)" else "Main Stream"
-                    streamsList.add(StreamInfo(name = mainStreamName, url = matchId))
-                }
             }
         } catch (e: Exception) {
             println("DamiTV: Load failed to query extract-url - ${e.message}")
-            if (eventData.isStreamed != true) {
-                val mainStreamName = if (isUpcoming) "Upcoming - Live soon (Starts: $dateStr)" else "Main Stream"
-                streamsList.add(StreamInfo(name = mainStreamName, url = matchId))
-            }
         }
 
         // 3. Handle streamed.pk sources
-        if (eventData.isStreamed == true && !eventData.streamedSources.isNullOrEmpty()) {
+        var addedStreamedSources = false
+        if (!eventData.streamedSources.isNullOrEmpty()) {
             val sdMulti = eventData.streamedSources.size > 1
             eventData.streamedSources.forEach { src ->
                 try {
@@ -332,15 +326,23 @@ class DamiTVProvider : MainAPI() {
                         val namePrefix = if (sdMulti) "${src.source.replaceFirstChar { it.uppercase() }} " else "Server "
                         val stName = "$namePrefix$sn"
                         
-                        val encodedFallback = st.embedUrl?.let { java.net.URLEncoder.encode(it, "UTF-8") } ?: ""
-                        val customUrl = "streamed://${src.source}/${src.id}/$sn?fallback=$encodedFallback"
+                        val encodedId = java.net.URLEncoder.encode(src.id, "UTF-8").replace("+", "%20")
+                        val encodedFallback = st.embedUrl?.let { java.net.URLEncoder.encode(it, "UTF-8").replace("+", "%20") } ?: ""
+                        val customUrl = "streamed://${src.source}?id=$encodedId&num=$sn&fallback=$encodedFallback"
                         
                         streamsList.add(StreamInfo(name = stName, url = customUrl))
+                        addedStreamedSources = true
                     }
                 } catch (e: Exception) {
                     println("DamiTV: Failed to load streamed source - ${e.message}")
                 }
             }
+        }
+
+        // 4. Ensure we have at least one fallback stream if nothing else was loaded
+        if (!addedPpvStreams && !addedStreamedSources) {
+            val mainStreamName = if (isUpcoming) "Upcoming - Live soon (Starts: $dateStr)" else "Main Stream"
+            streamsList.add(StreamInfo(name = mainStreamName, url = matchId))
         }
 
         val streamData = StreamLoadData(title, streamsList)
@@ -396,27 +398,28 @@ class DamiTVProvider : MainAPI() {
                     try {
                         val stripped = stream.url.substring("streamed://".length)
                         val queryIndex = stripped.indexOf('?')
-                        val path = if (queryIndex != -1) stripped.substring(0, queryIndex) else stripped
+                        val source = if (queryIndex != -1) stripped.substring(0, queryIndex) else stripped
                         val queryString = if (queryIndex != -1) stripped.substring(queryIndex + 1) else ""
                         
-                        val pathParts = path.split('/')
-                        if (pathParts.size >= 3) {
-                            val source = pathParts[0]
-                            val streamId = pathParts[1]
-                            val streamNo = pathParts[2]
-                            
-                            var fallbackUrl = ""
-                            if (queryString.isNotEmpty()) {
-                                val params = queryString.split('&')
-                                for (param in params) {
-                                    val pair = param.split('=', limit = 2)
-                                    if (pair.size == 2 && pair[0] == "fallback") {
-                                        fallbackUrl = java.net.URLDecoder.decode(pair[1], "UTF-8")
-                                        break
+                        var streamId = ""
+                        var streamNo = ""
+                        var fallbackUrl = ""
+                        
+                        if (queryString.isNotEmpty()) {
+                            val params = queryString.split('&')
+                            for (param in params) {
+                                val pair = param.split('=', limit = 2)
+                                if (pair.size == 2) {
+                                    when (pair[0]) {
+                                        "id" -> streamId = java.net.URLDecoder.decode(pair[1], "UTF-8")
+                                        "num" -> streamNo = java.net.URLDecoder.decode(pair[1], "UTF-8")
+                                        "fallback" -> fallbackUrl = java.net.URLDecoder.decode(pair[1], "UTF-8")
                                     }
                                 }
                             }
+                        }
 
+                        if (source.isNotEmpty() && streamId.isNotEmpty() && streamNo.isNotEmpty()) {
                             // Fetch sd-token
                             val tokenResponse = app.get("$mainUrl/papi/sd-token", headers = apiHeaders).text
                             val tokenData = parseJson<Map<String, Any>>(tokenResponse)
@@ -424,8 +427,12 @@ class DamiTVProvider : MainAPI() {
                             val tokenPath = tokenData["token_path"] as? String ?: ""
                             val expires = (tokenData["expires"] as? Number)?.toLong() ?: 0L
 
-                            val encodedTokenPath = java.net.URLEncoder.encode(tokenPath, "UTF-8")
-                            val hlsUrl = "https://damitvsd.b-cdn.net/live-sd/streamed/$source/$streamId/$streamNo/playlist.m3u8?token=$token&token_path=$encodedTokenPath&expires=$expires"
+                            // URL encode all segments of the path
+                            val encodedSource = java.net.URLEncoder.encode(source, "UTF-8").replace("+", "%20")
+                            val encodedStreamId = java.net.URLEncoder.encode(streamId, "UTF-8").replace("+", "%20")
+                            val encodedTokenPath = java.net.URLEncoder.encode(tokenPath, "UTF-8").replace("+", "%20")
+                            
+                            val hlsUrl = "https://damitvsd.b-cdn.net/live-sd/streamed/$encodedSource/$encodedStreamId/$streamNo/playlist.m3u8?token=$token&token_path=$encodedTokenPath&expires=$expires"
 
                             // Direct HLS Link
                             callback.invoke(

@@ -9,8 +9,8 @@ android {
 
 cloudstream {
     language = "en"
-    description = "Streamed.pk Live Sports Streaming"
-    authors = listOf("KSHITIJ8473")
+    description = "ALL LIVE SPORTS WITH MULTIPLE SERVER"
+    authors = listOf("RAGHAV")
 
     /**
      * Status int as the following:

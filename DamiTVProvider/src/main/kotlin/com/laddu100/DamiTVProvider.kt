@@ -58,12 +58,12 @@ class DamiTVProvider : MainAPI() {
         )
 
     // Headers for playing HLS streams from BunnyCDN
-    // The CDN checks referer — embedindia.st is the whitelisted origin
+    // The CDN checks referer — mainUrl is the whitelisted origin
     private val hlsPlayHeaders: Map<String, String>
         get() = mapOf(
             "User-Agent" to "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36",
-            "Referer" to "$EMBED_DOMAIN/",
-            "Origin" to EMBED_DOMAIN,
+            "Referer" to "$mainUrl/",
+            "Origin" to mainUrl,
             "Accept" to "*/*"
         )
 
@@ -420,22 +420,7 @@ class DamiTVProvider : MainAPI() {
                         }
 
                         if (source.isNotEmpty() && streamId.isNotEmpty() && streamNo.isNotEmpty()) {
-                            val embedHost = if (fallbackUrl.isNotEmpty()) {
-                                try {
-                                    val uri = java.net.URI(fallbackUrl)
-                                    "${uri.scheme}://${uri.host}"
-                                } catch (e: Exception) {
-                                    EMBED_DOMAIN
-                                }
-                            } else {
-                                EMBED_DOMAIN
-                            }
-                            val playHeaders = mapOf(
-                                "User-Agent" to "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36",
-                                "Referer" to "$embedHost/",
-                                "Origin" to embedHost,
-                                "Accept" to "*/*"
-                            )
+                            val playHeaders = hlsPlayHeaders
 
                             // Fetch sd-token
                             val tokenResponse = app.get("$mainUrl/papi/sd-token", headers = apiHeaders).text
@@ -513,22 +498,7 @@ class DamiTVProvider : MainAPI() {
                     val text = app.get("$mainUrl/papi/extract-url/${stream.url}", headers = apiHeaders).text
                     val response = parseJson<ExtractUrlResponse>(text)
                     if (response.success) {
-                        val embedHost = if (!response.embedUrl.isNullOrBlank()) {
-                            try {
-                                val uri = java.net.URI(response.embedUrl)
-                                "${uri.scheme}://${uri.host}"
-                            } catch (e: Exception) {
-                                EMBED_DOMAIN
-                            }
-                        } else {
-                            EMBED_DOMAIN
-                        }
-                        val playHeaders = mapOf(
-                            "User-Agent" to "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36",
-                            "Referer" to "$embedHost/",
-                            "Origin" to embedHost,
-                            "Accept" to "*/*"
-                        )
+                        val playHeaders = hlsPlayHeaders
 
                         // === PRIMARY: Direct HLS from BunnyCDN ===
                         if (!response.hlsUrl.isNullOrBlank()) {

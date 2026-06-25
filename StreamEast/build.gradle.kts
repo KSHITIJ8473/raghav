@@ -10,7 +10,7 @@ android {
 cloudstream {
     language = "en"
     description = "StreamEast Sports(REQUIRES CLOUDFLARE DNS)"
-    authors = listOf("KSHITIJ8473")
+    authors = listOf("RAGHAV")
 
     /**
      * Status int as the following:

@@ -2,7 +2,7 @@ version = 7
 
 cloudstream {
     description = "4K SPORTS - USE THIS IF YOUR DEVICE SUPPORTS 4K"
-    authors = listOf("errorcodeQQ", "KSHITIJ8473")
+    authors = listOf("errorcodeQQ", "RAGHAV")
     status = 1
     tvTypes = listOf("Live")
     language = "en"

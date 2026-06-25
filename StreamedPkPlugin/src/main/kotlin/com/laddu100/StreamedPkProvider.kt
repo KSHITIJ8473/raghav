@@ -11,8 +11,27 @@ import okhttp3.Request
 import java.net.InetAddress
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
+import android.content.Context
+import android.webkit.WebView
+import android.webkit.WebViewClient
+import android.webkit.WebChromeClient
+import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
+import android.webkit.ConsoleMessage
+import android.os.Handler
+import android.os.Looper
+import java.util.concurrent.atomic.AtomicBoolean
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.Dispatchers
+import kotlin.coroutines.resume
+import android.util.Log
 
 class StreamedPkProvider : MainAPI() {
+
+    companion object {
+        var context: Context? = null
+    }
 
     override var mainUrl = "https://streamed.pk"
     override var name = "Streamed.pk"
@@ -21,43 +40,12 @@ class StreamedPkProvider : MainAPI() {
     override val hasChromecastSupport = true
     override val supportedTypes = setOf(TvType.Live)
 
-    private var damiUrl = "https://dami-tv.pro"
-    private var isUrlLoaded = false
-
-    data class FirebaseConfig(
-        @JsonProperty("damitv_url") val damitvUrl: String? = null
-    )
-
-    private suspend fun loadFirebaseUrl() {
-        if (isUrlLoaded) return
-        try {
-            val response = app.get("https://cloudstreampluginhelper-default-rtdb.firebaseio.com/.json").text
-            val json = parseJson<FirebaseConfig>(response)
-            json.damitvUrl?.let {
-                if (it.isNotEmpty()) {
-                    damiUrl = it.removeSuffix("/")
-                }
-            }
-            isUrlLoaded = true
-        } catch (e: Exception) {
-            println("StreamedPk: Failed to load Firebase URL - ${e.message}")
-        }
-    }
-
     private val apiHeaders: Map<String, String>
         get() = mapOf(
             "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
             "Accept" to "application/json, text/plain, */*",
             "Referer" to "$mainUrl/",
             "Origin" to mainUrl
-        )
-
-    private val hlsPlayHeaders: Map<String, String>
-        get() = mapOf(
-            "User-Agent" to "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36",
-            "Referer" to "$damiUrl/",
-            "Origin" to damiUrl,
-            "Accept" to "*/*"
         )
 
     // Thread-safe DNS cache to prevent redundant resolutions
@@ -268,7 +256,6 @@ class StreamedPkProvider : MainAPI() {
         page: Int,
         request: MainPageRequest
     ): HomePageResponse {
-        loadFirebaseUrl()
         val lists = mutableListOf<HomePageList>()
 
         try {
@@ -342,7 +329,6 @@ class StreamedPkProvider : MainAPI() {
     // ── Search ────────────────────────────────────────────────────────────────
 
     override suspend fun search(query: String): List<SearchResponse> {
-        loadFirebaseUrl()
         val results = mutableListOf<SearchResponse>()
         try {
             val text = customGet("/api/matches/all")
@@ -377,7 +363,6 @@ class StreamedPkProvider : MainAPI() {
     // ── Load ──────────────────────────────────────────────────────────────────
 
     override suspend fun load(url: String): LoadResponse {
-        loadFirebaseUrl()
         val eventData = parseJson<EventLoadData>(url)
         val title = eventData.title
         var posterUrl = eventData.posterUrl
@@ -453,13 +438,198 @@ class StreamedPkProvider : MainAPI() {
 
     // ── Load Links ────────────────────────────────────────────────────────────
 
+    private val ua = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
+
+    private fun getPlayHeaders(embedUrl: String): Map<String, String> {
+        val embedHost = try {
+            val uri = java.net.URI(embedUrl)
+            "${uri.scheme}://${uri.host}"
+        } catch (e: Exception) {
+            "https://embed.st"
+        }
+        return mapOf(
+            "User-Agent" to "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36",
+            "Referer" to "$embedHost/",
+            "Origin" to embedHost,
+            "Accept" to "*/*"
+        )
+    }
+
+    private suspend fun resolveStreamUrl(url: String, referer: String?): String? {
+        val ctx = context ?: return null
+        return withContext(Dispatchers.Main) {
+            suspendCancellableCoroutine { continuation ->
+                val captured = AtomicBoolean(false)
+                var webView: WebView? = null
+
+                val cleanUp = {
+                    if (captured.compareAndSet(false, true)) {
+                        try {
+                            webView?.destroy()
+                        } catch (e: Exception) {}
+                        continuation.resume(null)
+                    }
+                }
+
+                try {
+                    webView = WebView(ctx).apply {
+                        settings.javaScriptEnabled = true
+                        settings.domStorageEnabled = true
+                        settings.databaseEnabled = true
+                        settings.mediaPlaybackRequiresUserGesture = false
+                        settings.userAgentString = ua
+
+                        webChromeClient = object : WebChromeClient() {
+                            override fun onConsoleMessage(consoleMessage: ConsoleMessage?): Boolean {
+                                val msg = consoleMessage?.message() ?: ""
+                                Log.d("StreamedPkJS", "[Console] $msg")
+                                return true
+                            }
+                        }
+
+                        webViewClient = object : WebViewClient() {
+                            override fun onPageFinished(view: WebView?, pageUrl: String?) {
+                                super.onPageFinished(view, pageUrl)
+                                Log.d("StreamedPk", "Page finished loading: $pageUrl")
+
+                                Handler(Looper.getMainLooper()).postDelayed({
+                                    if (captured.get()) return@postDelayed
+                                    view?.evaluateJavascript(playScript) { result ->
+                                        Log.d("StreamedPkJS", "Hook injection result: $result")
+                                    }
+                                }, 1500)
+                            }
+
+                            override fun shouldInterceptRequest(
+                                view: WebView?,
+                                request: WebResourceRequest?
+                            ): WebResourceResponse? {
+                                val reqUrl = request?.url?.toString() ?: return null
+                                Log.d("StreamedPkNet", "Request: $reqUrl")
+                                
+                                if ((reqUrl.contains(".m3u8", ignoreCase = true) || reqUrl.contains("master.txt", ignoreCase = true)) && !captured.get()) {
+                                    Log.d("StreamedPk", "Captured stream URL: $reqUrl")
+                                    if (captured.compareAndSet(false, true)) {
+                                        Handler(Looper.getMainLooper()).post {
+                                            try {
+                                                webView?.destroy()
+                                            } catch (e: Exception) {}
+                                        }
+                                        continuation.resume(reqUrl)
+                                    }
+                                }
+                                return super.shouldInterceptRequest(view, request)
+                            }
+                        }
+                    }
+
+                    val headers = HashMap<String, String>()
+                    if (referer != null) {
+                        headers["Referer"] = referer
+                    }
+                    val embedHost = try {
+                        val uri = java.net.URI(url)
+                        "${uri.scheme}://${uri.host}"
+                    } catch (e: Exception) {
+                        "https://embed.st"
+                    }
+                    headers["Origin"] = embedHost
+
+                    Log.d("StreamedPk", "Loading URL in WebView: $url")
+                    webView.loadUrl(url, headers)
+
+                    // Timeout after 30 seconds
+                    Handler(Looper.getMainLooper()).postDelayed({
+                        if (captured.compareAndSet(false, true)) {
+                            Log.d("StreamedPk", "Timeout waiting for stream link")
+                            try {
+                                webView.destroy()
+                            } catch (e: Exception) {}
+                            continuation.resume(null)
+                        }
+                    }, 30000)
+
+                } catch (e: Exception) {
+                    Log.e("StreamedPk", "Error initializing WebView: ${e.message}")
+                    cleanUp()
+                }
+            }
+        }
+    }
+
+    private val playScript = """
+        (function() {
+            if (window.__interceptor_installed) return "already_installed";
+            Object.defineProperty(window, '__interceptor_installed', {
+                value: true,
+                writable: true,
+                configurable: true,
+                enumerable: false
+            });
+
+            function log(msg) {
+                console.log("[Hook] " + msg);
+            }
+
+            log("Installing stealth hooks...");
+
+            function triggerInterception(url) {
+                if (!url) return;
+                var urlStr = (url && typeof url.toString === 'function') ? url.toString() : url;
+                log("Triggering interception for URL: " + urlStr);
+                if (urlStr.indexOf('m3u8') !== -1 || urlStr.indexOf('master.txt') !== -1) {
+                    window.location.href = urlStr;
+                }
+            }
+
+            // 1. Hook HTMLMediaElement.prototype.src
+            try {
+                var originalSrcDescriptor = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'src');
+                if (originalSrcDescriptor && originalSrcDescriptor.set) {
+                    var originalSet = originalSrcDescriptor.set;
+                    Object.defineProperty(HTMLMediaElement.prototype, 'src', {
+                        set: function(val) {
+                            log("MediaElement src set: " + val);
+                            triggerInterception(val);
+                            return originalSet.apply(this, arguments);
+                        },
+                        configurable: true,
+                        enumerable: true
+                    });
+                    log("MediaElement.src hooked.");
+                }
+            } catch(e) {
+                log("Error hooking MediaElement.src: " + e.message);
+            }
+
+            // 2. Hook HTMLSourceElement.prototype.src
+            try {
+                var originalSourceSrcDescriptor = Object.getOwnPropertyDescriptor(HTMLSourceElement.prototype, 'src');
+                if (originalSourceSrcDescriptor && originalSourceSrcDescriptor.set) {
+                    var originalSourceSet = originalSourceSrcDescriptor.set;
+                    Object.defineProperty(HTMLSourceElement.prototype, 'src', {
+                        set: function(val) {
+                            log("SourceElement src set: " + val);
+                            triggerInterception(val);
+                            return originalSourceSet.apply(this, arguments);
+                        },
+                        configurable: true,
+                        enumerable: true
+                    });
+                    log("SourceElement.src hooked.");
+                }
+            } catch(e) {
+                log("Error hooking SourceElement.src: " + e.message);
+            }
+        })();
+    """.trimIndent()
+
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        loadFirebaseUrl()
         val streamData = try {
             parseJson<StreamLoadData>(data)
         } catch (e: Exception) {
@@ -480,11 +650,8 @@ class StreamedPkProvider : MainAPI() {
                 if (stream.url.startsWith("streamed://")) {
                     val stripped = stream.url.substring("streamed://".length)
                     val queryIndex = stripped.indexOf('?')
-                    val source = if (queryIndex != -1) stripped.substring(0, queryIndex) else stripped
                     val queryString = if (queryIndex != -1) stripped.substring(queryIndex + 1) else ""
                     
-                    var streamId = ""
-                    var streamNo = ""
                     var fallbackUrl = ""
                     
                     if (queryString.isNotEmpty()) {
@@ -493,113 +660,41 @@ class StreamedPkProvider : MainAPI() {
                             val pair = param.split('=', limit = 2)
                             if (pair.size == 2) {
                                 when (pair[0]) {
-                                    "id" -> streamId = java.net.URLDecoder.decode(pair[1], "UTF-8")
-                                    "num" -> streamNo = java.net.URLDecoder.decode(pair[1], "UTF-8")
                                     "fallback" -> fallbackUrl = java.net.URLDecoder.decode(pair[1], "UTF-8")
                                 }
                             }
                         }
                     }
 
-                    if (source.isNotEmpty() && streamId.isNotEmpty() && streamNo.isNotEmpty()) {
-                        // 1. Reconstruct DIRECT HLS URL with signed token from DamiTV
+                    if (fallbackUrl.isNotEmpty()) {
+                        Log.d("StreamedPk", "Resolving embed URL via WebView: $fallbackUrl")
                         try {
-                            val tokenResponse = app.get("$damiUrl/papi/sd-token", headers = apiHeaders).text
-                            val tokenData = parseJson<Map<String, Any>>(tokenResponse)
-                            val token = tokenData["token"] as? String ?: ""
-                            val tokenPath = tokenData["token_path"] as? String ?: ""
-                            val expires = (tokenData["expires"] as? Number)?.toLong() ?: 0L
-
-                            if (token.isNotEmpty() && tokenPath.isNotEmpty()) {
-                                val encodedSource = java.net.URLEncoder.encode(source, "UTF-8").replace("+", "%20")
-                                val encodedStreamId = java.net.URLEncoder.encode(streamId, "UTF-8").replace("+", "%20")
-                                val encodedTokenPath = java.net.URLEncoder.encode(tokenPath, "UTF-8").replace("+", "%20")
-                                
-                                val hlsUrl = "https://damitvsd.b-cdn.net/live-sd/streamed/$encodedSource/$encodedStreamId/$streamNo/playlist.m3u8?token=$token&token_path=$encodedTokenPath&expires=$expires"
-
+                            val resolvedUrl = resolveStreamUrl(fallbackUrl, "https://streamed.pk/")
+                            if (resolvedUrl != null) {
+                                Log.d("StreamedPk", "Successfully resolved URL: $resolvedUrl")
+                                val embedHost = try {
+                                    val uri = java.net.URI(fallbackUrl)
+                                    "${uri.scheme}://${uri.host}"
+                                } catch (e: Exception) {
+                                    "https://embed.st"
+                                }
                                 callback.invoke(
                                     newExtractorLink(
                                         source = this.name,
-                                        name = "${stream.name} (Direct)",
-                                        url = hlsUrl,
+                                        name = stream.name,
+                                        url = resolvedUrl,
                                         type = ExtractorLinkType.M3U8
                                     ) {
-                                        this.headers = hlsPlayHeaders
+                                        this.referer = "$embedHost/"
+                                        this.headers = getPlayHeaders(fallbackUrl)
                                     }
                                 )
                                 foundAny = true
+                            } else {
+                                Log.w("StreamedPk", "WebView resolver returned null for $fallbackUrl")
                             }
                         } catch (e: Exception) {
-                            println("StreamedPk: Direct HLS link resolution failed for ${stream.name} - ${e.message}")
-                        }
-
-                        // 2. Extract links from embedUrl as fallback
-                        if (fallbackUrl.isNotEmpty()) {
-                            try {
-                                val embedHtml = app.get(
-                                    fallbackUrl,
-                                    headers = mapOf(
-                                        "User-Agent" to "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36",
-                                        "Referer" to "$mainUrl/"
-                                    )
-                                ).text
-
-                                // Extract m3u8 URLs from page
-                                val m3u8Pattern = Regex("""(https?://[^\s"']+\.m3u8[^\s"']*)""")
-                                val m3u8Matches = m3u8Pattern.findAll(embedHtml)
-                                m3u8Matches.forEachIndexed { idx, match ->
-                                    val m3u8Url = match.value
-                                        .replace("\\u0026", "&")
-                                        .replace("\\/", "/")
-                                    callback.invoke(
-                                        newExtractorLink(
-                                            source = this.name,
-                                            name = "${stream.name} (Embed ${idx + 1})",
-                                            url = m3u8Url,
-                                            type = ExtractorLinkType.M3U8
-                                        ) {
-                                            this.headers = hlsPlayHeaders
-                                        }
-                                    )
-                                    foundAny = true
-                                }
-
-                                // Extract from Javascript stream config variables
-                                val jsPatterns = listOf(
-                                    Regex("""['"]?(hlsUrl|streamUrl|source|file|src)['"]?\s*[:=]\s*['"]([^'"]+\.m3u8[^'"]*)['"]"""),
-                                    Regex("""setStream\(['"]([^'"]+)['"]"""),
-                                    Regex("""b-cdn\.net[^\s"']*\.m3u8[^\s"']*""")
-                                )
-                                for (pattern in jsPatterns) {
-                                    pattern.findAll(embedHtml).forEach { jsMatch ->
-                                        val url = if (jsMatch.groups.size > 2) {
-                                            jsMatch.groups[2]?.value ?: jsMatch.value
-                                        } else {
-                                            jsMatch.value
-                                        }
-                                        if (url.contains(".m3u8") && !m3u8Matches.any { it.value == url }) {
-                                            val cleanUrl = if (!url.startsWith("http")) "https://$url" else url
-                                            callback.invoke(
-                                                newExtractorLink(
-                                                    source = this.name,
-                                                    name = "${stream.name} (JS)",
-                                                    url = cleanUrl.replace("\\u0026", "&").replace("\\/", "/"),
-                                                    type = ExtractorLinkType.M3U8
-                                                ) {
-                                                    this.headers = hlsPlayHeaders
-                                                }
-                                            )
-                                            foundAny = true
-                                        }
-                                    }
-                                }
-
-                                // Load via built-in extractors
-                                loadExtractor(fallbackUrl, "$mainUrl/", subtitleCallback, callback)
-                                foundAny = true
-                            } catch (e: Exception) {
-                                println("StreamedPk: Fallback embed extraction failed for ${stream.name} - ${e.message}")
-                            }
+                            Log.e("StreamedPk", "WebView resolution failed for $fallbackUrl: ${e.message}")
                         }
                     }
                 }

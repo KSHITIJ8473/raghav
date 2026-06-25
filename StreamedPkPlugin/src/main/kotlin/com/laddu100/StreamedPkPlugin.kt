@@ -11,6 +11,7 @@ import com.lagradost.cloudstream3.plugins.Plugin
 class StreamedPkPlugin : Plugin() {
 
     override fun load(context: Context) {
+        StreamedPkProvider.context = context
         registerMainAPI(StreamedPkProvider())
     }
 }

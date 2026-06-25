@@ -55,8 +55,8 @@ class StreamedPkProvider : MainAPI() {
     private val hlsPlayHeaders: Map<String, String>
         get() = mapOf(
             "User-Agent" to "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36",
-            "Referer" to "https://embed.st/",
-            "Origin" to "https://embed.st",
+            "Referer" to "$damiUrl/",
+            "Origin" to damiUrl,
             "Accept" to "*/*"
         )
 
@@ -230,6 +230,26 @@ class StreamedPkProvider : MainAPI() {
         }
     }
 
+    private fun getPosterForMatch(category: String?, poster: String?): String {
+        if (!poster.isNullOrBlank()) {
+            return if (poster.startsWith("/")) "$mainUrl$poster" else poster
+        }
+        val clean = category?.lowercase() ?: ""
+        return when (clean) {
+            "football" -> "https://images.unsplash.com/photo-1508098682722-e99c43a406b2?w=500"
+            "basketball" -> "https://images.unsplash.com/photo-1546519638-68e109498ffc?w=500"
+            "american-football" -> "https://images.unsplash.com/photo-1587280501635-68a0e82cd5ff?w=500"
+            "hockey" -> "https://images.unsplash.com/photo-1515703407324-5f753eed2411?w=500"
+            "baseball" -> "https://images.unsplash.com/photo-1530541930197-ff16ac917b0e?w=500"
+            "motor-sports" -> "https://images.unsplash.com/photo-1568605117036-5fe5e7bab0b7?w=500"
+            "fight" -> "https://images.unsplash.com/photo-1517838277536-f5f99be501cd?w=500"
+            "tennis" -> "https://images.unsplash.com/photo-1595435934249-5df7ed86e1c0?w=500"
+            "rugby" -> "https://images.unsplash.com/photo-1534353436294-0dbd4bdac845?w=500"
+            "cricket" -> "https://images.unsplash.com/photo-1531415074968-036ba1b575da?w=500"
+            else -> "https://images.unsplash.com/photo-1461896836934-ffe607ba8211?w=500"
+        }
+    }
+
     private fun formatMatchDate(timestamp: Long?): String {
         if (timestamp == null || timestamp <= 0) return "soon"
         return try {
@@ -259,7 +279,7 @@ class StreamedPkProvider : MainAPI() {
             val liveMatches = allMatches.filter { !it.sources.isNullOrEmpty() }
             if (liveMatches.isNotEmpty()) {
                 val liveItems = liveMatches.map { match ->
-                    val posterUrl = if (match.poster?.startsWith("/") == true) "$mainUrl${match.poster}" else match.poster ?: ""
+                    val posterUrl = getPosterForMatch(match.category, match.poster)
                     val loadData = EventLoadData(
                         title = match.title,
                         id = match.id,
@@ -272,31 +292,28 @@ class StreamedPkProvider : MainAPI() {
                         this.posterUrl = posterUrl
                     }
                 }
-                lists.add(HomePageList("🟢 Live Sports Matches", liveItems, isHorizontalImages = true))
+                lists.add(HomePageList("🟢 Live Matches", liveItems, isHorizontalImages = true))
             }
 
             // 2. Upcoming Matches (sources list is empty)
             val upcomingMatches = allMatches.filter { it.sources.isNullOrEmpty() }
             if (upcomingMatches.isNotEmpty()) {
-                val grouped = upcomingMatches.groupBy { it.category ?: "other" }
-                grouped.forEach { (catId, matchesList) ->
-                    val items = matchesList.map { match ->
-                        val posterUrl = if (match.poster?.startsWith("/") == true) "$mainUrl${match.poster}" else match.poster ?: ""
-                        val loadData = EventLoadData(
-                            title = match.title,
-                            id = match.id,
-                            posterUrl = posterUrl,
-                            date = match.date,
-                            category = match.category,
-                            sources = match.sources
-                        )
-                        val dateStr = formatMatchDate(match.date)
-                        newLiveSearchResponse("${match.title} [Starts: $dateStr]", loadData.toJson(), TvType.Live) {
-                            this.posterUrl = posterUrl
-                        }
+                val upcomingItems = upcomingMatches.map { match ->
+                    val posterUrl = getPosterForMatch(match.category, match.poster)
+                    val loadData = EventLoadData(
+                        title = match.title,
+                        id = match.id,
+                        posterUrl = posterUrl,
+                        date = match.date,
+                        category = match.category,
+                        sources = match.sources
+                    )
+                    val dateStr = formatMatchDate(match.date)
+                    newLiveSearchResponse("${match.title} [Starts: $dateStr]", loadData.toJson(), TvType.Live) {
+                        this.posterUrl = posterUrl
                     }
-                    lists.add(HomePageList(getCategoryTitle(catId), items, isHorizontalImages = true))
                 }
+                lists.add(HomePageList("📅 Upcoming Matches", upcomingItems, isHorizontalImages = true))
             }
         } catch (e: Exception) {
             println("StreamedPk: Failed to load main page - ${e.message}")
@@ -334,7 +351,7 @@ class StreamedPkProvider : MainAPI() {
                 match.title.contains(query, ignoreCase = true) ||
                 (match.category?.contains(query, ignoreCase = true) ?: false)
             }.forEach { match ->
-                val posterUrl = if (match.poster?.startsWith("/") == true) "$mainUrl${match.poster}" else match.poster ?: ""
+                val posterUrl = getPosterForMatch(match.category, match.poster)
                 val isLive = !match.sources.isNullOrEmpty()
                 val loadData = EventLoadData(
                     title = match.title,
@@ -363,9 +380,9 @@ class StreamedPkProvider : MainAPI() {
         loadFirebaseUrl()
         val eventData = parseJson<EventLoadData>(url)
         val title = eventData.title
-        val posterUrl = eventData.posterUrl
-        val isUpcoming = eventData.sources.isNullOrEmpty()
-        val dateStr = formatMatchDate(eventData.date)
+        var posterUrl = eventData.posterUrl
+        var sources = eventData.sources
+        var dateVal = eventData.date
 
         val streamsList = mutableListOf<StreamInfo>()
 
@@ -377,9 +394,26 @@ class StreamedPkProvider : MainAPI() {
             }
         }
 
+        // Fetch fresh match details to get active sources dynamically if match was scheduled
+        try {
+            val text = customGet("/api/matches/all")
+            val allMatches = parseJson<List<StreamedMatch>>(text)
+            val freshMatch = allMatches.find { it.id == eventData.id }
+            if (freshMatch != null) {
+                sources = freshMatch.sources
+                dateVal = freshMatch.date
+                posterUrl = getPosterForMatch(freshMatch.category, freshMatch.poster)
+            }
+        } catch (e: Exception) {
+            println("StreamedPk: Failed to fetch fresh match details in load - ${e.message}")
+        }
+
+        val isUpcoming = sources.isNullOrEmpty()
+        val dateStr = formatMatchDate(dateVal)
+
         // Fetch stream details for each source
-        if (!eventData.sources.isNullOrEmpty()) {
-            eventData.sources.forEach { src ->
+        if (!sources.isNullOrEmpty()) {
+            sources.forEach { src ->
                 try {
                     val streamUrl = "/api/stream/${src.source}/${src.id}"
                     val streamText = customGet(streamUrl)

@@ -1,7 +1,7 @@
 version = 7
 
 cloudstream {
-    description = "Live sports streams from BinTV."
+    description = "4K SPORTS - USE THIS IF YOUR DEVICE SUPPORTS 4K"
     authors = listOf("errorcodeQQ", "KSHITIJ8473")
     status = 1
     tvTypes = listOf("Live")

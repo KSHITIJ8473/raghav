@@ -420,6 +420,23 @@ class DamiTVProvider : MainAPI() {
                         }
 
                         if (source.isNotEmpty() && streamId.isNotEmpty() && streamNo.isNotEmpty()) {
+                            val embedHost = if (fallbackUrl.isNotEmpty()) {
+                                try {
+                                    val uri = java.net.URI(fallbackUrl)
+                                    "${uri.scheme}://${uri.host}"
+                                } catch (e: Exception) {
+                                    EMBED_DOMAIN
+                                }
+                            } else {
+                                EMBED_DOMAIN
+                            }
+                            val playHeaders = mapOf(
+                                "User-Agent" to "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36",
+                                "Referer" to "$embedHost/",
+                                "Origin" to embedHost,
+                                "Accept" to "*/*"
+                            )
+
                             // Fetch sd-token
                             val tokenResponse = app.get("$mainUrl/papi/sd-token", headers = apiHeaders).text
                             val tokenData = parseJson<Map<String, Any>>(tokenResponse)
@@ -442,7 +459,7 @@ class DamiTVProvider : MainAPI() {
                                     url = hlsUrl,
                                     type = ExtractorLinkType.M3U8
                                 ) {
-                                    this.headers = hlsPlayHeaders
+                                    this.headers = playHeaders
                                 }
                             )
                             foundAny = true
@@ -472,7 +489,7 @@ class DamiTVProvider : MainAPI() {
                                                 url = m3u8Url,
                                                 type = ExtractorLinkType.M3U8
                                             ) {
-                                                this.headers = hlsPlayHeaders
+                                                this.headers = playHeaders
                                             }
                                         )
                                         foundAny = true
@@ -496,6 +513,23 @@ class DamiTVProvider : MainAPI() {
                     val text = app.get("$mainUrl/papi/extract-url/${stream.url}", headers = apiHeaders).text
                     val response = parseJson<ExtractUrlResponse>(text)
                     if (response.success) {
+                        val embedHost = if (!response.embedUrl.isNullOrBlank()) {
+                            try {
+                                val uri = java.net.URI(response.embedUrl)
+                                "${uri.scheme}://${uri.host}"
+                            } catch (e: Exception) {
+                                EMBED_DOMAIN
+                            }
+                        } else {
+                            EMBED_DOMAIN
+                        }
+                        val playHeaders = mapOf(
+                            "User-Agent" to "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36",
+                            "Referer" to "$embedHost/",
+                            "Origin" to embedHost,
+                            "Accept" to "*/*"
+                        )
+
                         // === PRIMARY: Direct HLS from BunnyCDN ===
                         if (!response.hlsUrl.isNullOrBlank()) {
                             callback.invoke(
@@ -505,7 +539,7 @@ class DamiTVProvider : MainAPI() {
                                     url = response.hlsUrl,
                                     type = ExtractorLinkType.M3U8
                                 ) {
-                                    this.headers = hlsPlayHeaders
+                                    this.headers = playHeaders
                                 }
                             )
                             foundAny = true
@@ -536,7 +570,7 @@ class DamiTVProvider : MainAPI() {
                                             url = m3u8Url,
                                             type = ExtractorLinkType.M3U8
                                         ) {
-                                            this.headers = hlsPlayHeaders
+                                            this.headers = playHeaders
                                         }
                                     )
                                     foundAny = true
@@ -564,7 +598,7 @@ class DamiTVProvider : MainAPI() {
                                                     url = cleanUrl.replace("\\u0026", "&").replace("\\/", "/"),
                                                     type = ExtractorLinkType.M3U8
                                                 ) {
-                                                    this.headers = hlsPlayHeaders
+                                                    this.headers = playHeaders
                                                 }
                                             )
                                             foundAny = true

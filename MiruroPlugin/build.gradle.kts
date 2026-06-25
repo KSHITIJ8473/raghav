@@ -2,7 +2,7 @@ version = 1
 
 cloudstream {
     language = "en"
-    description = "Anime from Miruro with Sub and Dub support"
+    description = "ONE STOP SOLUTION FOR ANIME(SUB,DUB)-MULTI SOURCE"
     authors = listOf("raghav")
 
     status = 1

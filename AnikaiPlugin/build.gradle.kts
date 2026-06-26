@@ -2,7 +2,7 @@ version = 1
 
 cloudstream {
     language = "en"
-    description = "Watch anime online for free with Sub and Dub - Anikai Provider"
+    description = "ANIME subbed - scrapper, clone , aggregator :( "
     authors = listOf("raghav")
 
     status = 1

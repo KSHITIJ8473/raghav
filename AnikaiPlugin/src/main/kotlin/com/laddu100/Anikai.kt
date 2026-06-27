@@ -24,7 +24,6 @@ import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.newExtractorLink
 import com.lagradost.cloudstream3.utils.loadExtractor
-import org.jsoup.Jsoup
 import java.net.URL
 import java.net.URLDecoder
 
@@ -40,20 +39,6 @@ class Anikai : MainAPI() {
         TvType.OVA
     )
 
-    /**
-     * Standard browser headers sent with every request.
-     * anikai.cc returns 403 to bare Java/OkHttp UAs, so a real Android Chrome UA is required.
-     * The Referer is set per-request by callers using `headersWith(referer)`.
-     */
-    private val baseHeaders = mapOf(
-        "User-Agent" to "Mozilla/5.0 (Linux; Android 11; Pixel 5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
-        "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-        "Accept-Language" to "en-US,en;q=0.9"
-    )
-
-    private fun headersWith(referer: String = mainUrl): Map<String, String> =
-        baseHeaders + ("Referer" to referer)
-
     override val mainPage = mainPageOf(
         "latest-updates" to "Latest Updates",
         "New Releases" to "New Releases",
@@ -65,7 +50,7 @@ class Anikai : MainAPI() {
     //  A. HOMEPAGE
     // ============================================================
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val doc = app.get("$mainUrl/home", headers = baseHeaders).document
+        val doc = app.get("$mainUrl/home").document
         val home = mutableListOf<SearchResponse>()
         val category = request.data
 
@@ -79,7 +64,6 @@ class Anikai : MainAPI() {
                 val title = item.selectFirst(".title")?.text()?.trim() ?: continue
                 val img = item.selectFirst("img")?.let { it.attr("data-src").ifEmpty { it.attr("src") } } ?: ""
 
-                // Detect real dub availability from the card badges
                 val hasDub = item.select(".dub").isNotEmpty()
                 val hasSub = item.select(".sub").isNotEmpty()
 
@@ -120,7 +104,7 @@ class Anikai : MainAPI() {
     // ============================================================
     override suspend fun search(query: String): List<SearchResponse> {
         val url = "$mainUrl/browser?keyword=${java.net.URLEncoder.encode(query, "utf-8")}"
-        val doc = app.get(url, headers = baseHeaders).document
+        val doc = app.get(url).document
         val results = mutableListOf<SearchResponse>()
 
         val items = doc.select(".aitem")
@@ -148,7 +132,7 @@ class Anikai : MainAPI() {
     //  C. LOAD (details + episode list with sub/dub separation)
     // ============================================================
     override suspend fun load(url: String): LoadResponse? {
-        val doc = app.get(url, headers = baseHeaders).document
+        val doc = app.get(url).document
 
         val title = doc.selectFirst("h1.title")?.text()?.trim() ?: return null
         val jpTitle = doc.selectFirst("h1.title")?.attr("data-jp")
@@ -178,12 +162,11 @@ class Anikai : MainAPI() {
             else -> TvType.Anime
         }
 
-        // ---- Episode parsing with per-episode sub/dub awareness ----
-        // Each <a> in the eplist carries data-sub / data-dub / data-hsub / data-raw flags.
-        // Sub episodes use the "sub" prefix, Dub episodes use the "dub" prefix.
-        // The same episode URL can appear under both DubStatus.Subbed and DubStatus.Dubbed
-        // because the WATCH URL is identical — the audio type is selected later in loadLinks
-        // by picking the correct <div class="server-items" data-id="sub|dub|hsub|raw"> group.
+        // ---- Episode parsing ----
+        // Each <a> in the eplist has data-sub / data-dub / data-hsub / data-raw flags.
+        // We add the SAME episode URL under both Subbed and Dubbed lists when both
+        // audio tracks exist. The audio type is encoded in the data string as a prefix
+        // ("sub|" or "dub|") so loadLinks knows which server-items group to read.
         val subEpisodes = mutableListOf<Episode>()
         val dubEpisodes = mutableListOf<Episode>()
 
@@ -192,27 +175,22 @@ class Anikai : MainAPI() {
             val epHref = ep.attr("href")
             if (epHref.isEmpty()) continue
             val epNum = ep.attr("data-num").toIntOrNull() ?: continue
-
-            // Cleaner episode name: prefer the <span data-jp="..."> text, fallback to "Episode N"
-            val name = ep.selectFirst("span[data-jp]")?.attr("data-jp")?.trim()?.ifEmpty { null }
-                ?: ep.selectFirst("span[data-jp]")?.text()?.trim()?.ifEmpty { null }
+            val name = ep.selectFirst("span[data-jp]")?.text()?.trim()?.ifEmpty { null }
                 ?: "Episode $epNum"
 
             val hasHsub = ep.attr("data-hsub") == "1"
             val hasSub  = ep.attr("data-sub") == "1"
             val hasDub  = ep.attr("data-dub") == "1"
 
-            // "Subbed" in CloudStream = soft-sub OR hard-sub (both are Japanese audio).
-            // We prefer soft-sub (data-sub) when available because it ships a real VTT subtitle
-            // track; if only hard-sub exists, we still add it under Subbed.
+            // Subbed tab: Japanese audio with subtitles (soft-sub preferred, hard-sub fallback).
+            // We always use the "sub" prefix; loadLinks will try "sub" group first, then "hsub".
             if (hasSub || hasHsub) {
-                // Pick the best audio type to request in loadLinks: prefer "sub" (soft) over "hsub" (hard)
-                val subTag = if (hasSub) "sub" else "hsub"
-                subEpisodes.add(newEpisode("$subTag|${fixUrl(epHref)}") {
+                subEpisodes.add(newEpisode("sub|${fixUrl(epHref)}") {
                     this.name = name
                     this.episode = epNum
                 })
             }
+            // Dubbed tab: English audio.
             if (hasDub) {
                 dubEpisodes.add(newEpisode("dub|${fixUrl(epHref)}") {
                     this.name = name
@@ -235,21 +213,21 @@ class Anikai : MainAPI() {
     }
 
     // ============================================================
-    //  D. LOAD LINKS (the Sub/Dub fix lives here)
+    //  D. LOAD LINKS
     // ============================================================
     //
     //  Episode data string format:  "<audioType>|<watchUrl>"
-    //    audioType ∈ { "sub", "dub", "hsub", "raw" }
+    //    audioType = "sub" or "dub"
     //
     //  On the watch page, anikai renders one <div class="server-items lang-group"
-    //  data-id="<audioType>"> PER audio type, each containing the SAME server names
-    //  (HD-1, HD-2, StreamHG, Earnvids, Doodstream) but with DIFFERENT data-video
-    //  embed URLs. The dub embed URL points to a completely separate stream on the
-    //  host (e.g. vivibebe.site/e20b6702cacec394 vs the sub's /60cbbc019415ceb3).
+    //  data-id="hsub|sub|dub|raw"> PER audio type. Each group contains the same
+    //  server names (HD-1, HD-2, StreamHG, Earnvids, Doodstream) but with DIFFERENT
+    //  data-video embed URLs. The dub embed URLs point to completely separate
+    //  streams on the host.
     //
-    //  FIX: We select ONLY the server-items group whose data-id matches the
-    //  requested audioType. This guarantees that when the user picks "Dub" in
-    //  CloudStream, only the dub embed URLs are extracted — never the sub ones.
+    //  We select ONLY the server-items group(s) matching the requested audio type:
+    //    - "sub" → collect from "sub" group, fall back to "hsub" if "sub" is missing
+    //    - "dub" → collect from "dub" group only
     //
     override suspend fun loadLinks(
         data: String,
@@ -257,203 +235,132 @@ class Anikai : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        // Use limit=2 so a URL containing '|' (defensive) doesn't break the split.
-        val parts = data.split("|", limit = 2)
+        val parts = data.split("|")
         if (parts.size < 2) return false
 
-        val audioType = parts[0]   // "sub" | "dub" | "hsub" | "raw"
-        val watchUrl  = parts[1]
+        val dubOrSub = parts[0]
+        val watchUrl = parts[1]
 
-        val doc = app.get(watchUrl, headers = headersWith(mainUrl)).document
+        val doc = app.get(watchUrl).document
 
-        // === BULLETPROOF SELECTOR ===
-        // Pick ONLY the server-items group matching the requested audio type.
-        // No filter / no flatMap — a single explicit CSS attribute selector.
-        // If the group doesn't exist (e.g. user picked Dub but this episode has no dub),
-        // we return false so CloudStream shows "No sources found" instead of falling
-        // back to the sub sources.
-        val serverGroup = doc.selectFirst("div.server-items[data-id=$audioType]")
-            ?: return false
+        // === SERVER GROUP SELECTION (the Sub/Dub fix) ===
+        // Use the proven filter pattern from the original working code.
+        // For "sub": collect from BOTH "sub" and "hsub" groups (soft-sub + hard-sub).
+        // For "dub": collect from "dub" group ONLY — never mix in sub sources.
+        val targetGroups = when (dubOrSub) {
+            "dub" -> listOf("dub")
+            else -> listOf("sub", "hsub")
+        }
 
-        val servers = serverGroup.select("span.server-video")
+        val allServerItems = doc.select(".server-items")
+        val serverItems = allServerItems.filter { it.attr("data-id") in targetGroups }
+        if (serverItems.isEmpty()) return false
+
+        val servers = serverItems.flatMap { it.select("span.server-video") }
         if (servers.isEmpty()) return false
 
-        var foundAny = false
+        var foundAnySources = false
 
         for (server in servers) {
-            val embedUrl = server.attr("data-video").trim()
+            val embedUrl = server.attr("data-video")
             if (embedUrl.isEmpty()) continue
             val serverName = server.text().trim()
-            val label = "$serverName (${audioType.uppercase()})"
+            val parentGroup = server.parents().firstOrNull { it.hasClass("server-items") }
+            val isDub = parentGroup?.attr("data-id") == "dub"
+            val label = "$serverName (${if (isDub) "Dub" else "Sub"})"
 
-            // Step 1: extract any subtitle track baked into the embed URL query string
-            extractSubtitleFromUrl(embedUrl, subtitleCallback)
+            // Step 1: extract subtitle URL from embed query string
+            try {
+                val urlObj = URL(embedUrl)
+                val query = urlObj.query ?: ""
+                val subParam = Regex("""(?:sub|caption_1|c1_file)=([^&]+)""").find(query)?.groupValues?.get(1)
+                if (subParam != null) {
+                    val decodedSub = URLDecoder.decode(subParam, "UTF-8")
+                    val subLabel = Regex("""(?:sub_1|c1_label)=([^&]+)""").find(query)?.groupValues?.get(1)
+                        ?.let { URLDecoder.decode(it, "UTF-8") } ?: "English"
+                    subtitleCallback.invoke(newSubtitleFile(subLabel, decodedSub))
+                }
+            } catch (_: Exception) {}
 
             // Step 2: resolve the embed URL to a playable m3u8/mp4
             try {
                 when {
-                    "vivibebe.site" in embedUrl || "bibiemb.xyz" in embedUrl -> {
-                        foundAny = extractDirectM3u8(embedUrl, label, audioType, callback) || foundAny
+                    embedUrl.contains("vivibebe.site") || embedUrl.contains("bibiemb.xyz") -> {
+                        val embedHtml = app.get(embedUrl, headers = mapOf("Referer" to "$mainUrl/")).text
+                        val m3u8Url = Regex("""(https?://[^\s"']+\.m3u8[^\s"']*)""").find(embedHtml)?.groupValues?.get(1)
+                        if (m3u8Url != null) {
+                            callback.invoke(
+                                newExtractorLink(
+                                    source = name,
+                                    name = label,
+                                    url = m3u8Url,
+                                    type = ExtractorLinkType.M3U8
+                                ) {
+                                    this.headers = mapOf("Referer" to embedUrl)
+                                }
+                            )
+                            foundAnySources = true
+                        }
                     }
-                    "otakuhg.site" in embedUrl || "otakuvid.online" in embedUrl -> {
-                        foundAny = extractPackedM3u8(embedUrl, label, audioType, callback) || foundAny
+                    embedUrl.contains("otakuhg.site") || embedUrl.contains("otakuvid.online") || embedUrl.contains("earnvids.com") -> {
+                        val embedHtml = app.get(embedUrl, headers = mapOf("Referer" to "$mainUrl/")).text
+                        // Try bare m3u8 first, then packed JS
+                        var m3u8Url = Regex("""(https?://[^\s"']+\.m3u8[^\s"']*)""").find(embedHtml)?.groupValues?.get(1)
+                        if (m3u8Url == null) {
+                            val unpacked = JsPacker.parseAndUnpack(embedHtml)
+                            if (unpacked != null) {
+                                m3u8Url = Regex("""(https?://[^\s"']+\.m3u8[^\s"']*)""").find(unpacked)?.groupValues?.get(1)
+                            }
+                        }
+                        if (m3u8Url != null) {
+                            callback.invoke(
+                                newExtractorLink(
+                                    source = name,
+                                    name = label,
+                                    url = m3u8Url,
+                                    type = ExtractorLinkType.M3U8
+                                ) {
+                                    this.headers = mapOf("Referer" to embedUrl)
+                                }
+                            )
+                            foundAnySources = true
+                        }
                     }
-                    "playmogo.com" in embedUrl -> {
-                        // playmogo.com is a Doodstream mirror — CloudStream's built-in
-                        // Doodstream extractor isn't registered for this domain, so try
-                        // the built-in one first (in case the user's CS build supports it),
-                        // then fall back to our custom extractor.
+                    embedUrl.contains("playmogo.com") -> {
+                        // playmogo.com is a Doodstream mirror — try CloudStream's built-in extractor
                         val loaded = loadExtractor(embedUrl, watchUrl, subtitleCallback, callback)
-                        if (!loaded) {
-                            foundAny = extractDoodstream(embedUrl, label, audioType, callback) || foundAny
-                        } else {
-                            foundAny = true
+                        if (loaded) {
+                            foundAnySources = true
                         }
                     }
                     else -> {
                         val loaded = loadExtractor(embedUrl, watchUrl, subtitleCallback, callback)
-                        if (loaded) foundAny = true
-                        else foundAny = extractDirectM3u8(embedUrl, label, audioType, callback) || foundAny
+                        if (loaded) {
+                            foundAnySources = true
+                        } else {
+                            // Fallback: direct m3u8 scan
+                            val embedHtml = app.get(embedUrl, headers = mapOf("Referer" to "$mainUrl/")).text
+                            val m3u8Url = Regex("""(https?://[^\s"']+\.m3u8[^\s"']*)""").find(embedHtml)?.groupValues?.get(1)
+                            if (m3u8Url != null) {
+                                callback.invoke(
+                                    newExtractorLink(
+                                        source = name,
+                                        name = label,
+                                        url = m3u8Url,
+                                        type = ExtractorLinkType.M3U8
+                                    ) {
+                                        this.headers = mapOf("Referer" to embedUrl)
+                                    }
+                                )
+                                foundAnySources = true
+                            }
+                        }
                     }
                 }
-            } catch (_: Exception) { }
+            } catch (_: Exception) {}
         }
 
-        return foundAny
-    }
-
-    // ============================================================
-    //  Helper: extract subtitle URL from embed query string
-    // ============================================================
-    //  Anikai bakes the VTT subtitle URL into the embed URL using different
-    //  query param names depending on the host:
-    //    vivibebe / bibiemb   →  ?sub=<vtt-url>
-    //    otakuhg / otakuvid   →  ?caption_1=<vtt-url>&sub_1=English
-    //    playmogo (Doodstream) →  ?c1_file=<vtt-url>&c1_label=English
-    private suspend fun extractSubtitleFromUrl(embedUrl: String, callback: (SubtitleFile) -> Unit) {
-        try {
-            val urlObj = URL(embedUrl)
-            val query = urlObj.query ?: return
-            val subParam = Regex("""(?:sub|caption_1|c1_file)=([^&]+)""").find(query)?.groupValues?.get(1)
-                ?: return
-            val decodedSub = URLDecoder.decode(subParam, "UTF-8")
-            val label = Regex("""(?:sub_1|c1_label)=([^&]+)""").find(query)?.groupValues?.get(1)
-                ?.let { URLDecoder.decode(it, "UTF-8") } ?: "English"
-            callback.invoke(newSubtitleFile(label, decodedSub))
-        } catch (_: Exception) { }
-    }
-
-    // ============================================================
-    //  Helper: extract m3u8 from a plain embed page (vivibebe / bibiemb)
-    // ============================================================
-    private suspend fun extractDirectM3u8(
-        embedUrl: String,
-        label: String,
-        audioType: String,
-        callback: (ExtractorLink) -> Unit
-    ): Boolean {
-        val embedHtml = app.get(embedUrl, headers = headersWith(mainUrl)).text
-        // Try double-quoted, single-quoted, and bare URLs
-        val m3u8Url = Regex("""(https?://[^\s"'<>]+\.m3u8[^\s"'<>]*)""").find(embedHtml)?.groupValues?.get(1)
-            ?: return false
-
-        callback.invoke(
-            newExtractorLink(
-                source = name,
-                name = label,
-                url = m3u8Url,
-                type = ExtractorLinkType.M3U8
-            ) {
-                this.headers = mapOf(
-                    "Referer" to embedUrl,
-                    "Origin" to URL(embedUrl).protocol + "://" + URL(embedUrl).host
-                )
-            }
-        )
-        return true
-    }
-
-    // ============================================================
-    //  Helper: extract m3u8 from a JS-packed embed (otakuhg / otakuvid)
-    // ============================================================
-    private suspend fun extractPackedM3u8(
-        embedUrl: String,
-        label: String,
-        audioType: String,
-        callback: (ExtractorLink) -> Unit
-    ): Boolean {
-        val embedHtml = app.get(embedUrl, headers = headersWith(mainUrl)).text
-        // First try without unpacking — some pages have a bare m3u8 in a <source> tag
-        var m3u8Url = Regex("""(https?://[^\s"'<>]+\.m3u8[^\s"'<>]*)""").find(embedHtml)?.groupValues?.get(1)
-
-        // Otherwise unpack the eval(function(p,a,c,k,e,d){...}) block and scan again
-        if (m3u8Url == null) {
-            val unpacked = JsPacker.parseAndUnpack(embedHtml)
-            if (unpacked != null) {
-                m3u8Url = Regex("""(https?://[^\s"'<>]+\.m3u8[^\s"'<>]*)""").find(unpacked)?.groupValues?.get(1)
-            }
-        }
-
-        if (m3u8Url == null) return false
-
-        callback.invoke(
-            newExtractorLink(
-                source = name,
-                name = label,
-                url = m3u8Url,
-                type = ExtractorLinkType.M3U8
-            ) {
-                this.headers = mapOf(
-                    "Referer" to embedUrl,
-                    "Origin" to URL(embedUrl).protocol + "://" + URL(embedUrl).host
-                )
-            }
-        )
-        return true
-    }
-
-    // ============================================================
-    //  Helper: custom Doodstream extractor for playmogo.com
-    // ============================================================
-    //  Flow:
-    //    1. GET embed page → extract /pass_md5/... path
-    //    2. GET https://<host>/pass_md5/... with Referer = embed URL → returns a short token string
-    //    3. Build final URL: https://<host>/d/<token> and return as MP4
-    private suspend fun extractDoodstream(
-        embedUrl: String,
-        label: String,
-        audioType: String,
-        callback: (ExtractorLink) -> Unit
-    ): Boolean {
-        val embedHtml = app.get(embedUrl, headers = headersWith(mainUrl)).text
-        val passMd5Path = Regex("""(/pass_md5/[^"'\s]+)""").find(embedHtml)?.groupValues?.get(1)
-            ?: return false
-
-        val host = URL(embedUrl).let { "${it.protocol}://${it.host}" }
-        val tokenResp = app.get(
-            "$host$passMd5Path",
-            headers = headersWith(embedUrl)
-        ).text.trim()
-
-        if (tokenResp.isEmpty() || tokenResp.equals("RELOAD", ignoreCase = true)) return false
-
-        // Doodstream final URL: https://<host>/d/<token>
-        val finalUrl = "$host/d/$tokenResp"
-
-        callback.invoke(
-            newExtractorLink(
-                source = name,
-                name = label,
-                url = finalUrl,
-                type = ExtractorLinkType.VIDEO
-            ) {
-                this.headers = mapOf(
-                    "Referer" to embedUrl,
-                    "User-Agent" to baseHeaders["User-Agent"]!!
-                )
-            }
-        )
-        return true
+        return foundAnySources
     }
 }
 

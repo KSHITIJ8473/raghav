@@ -1,14 +1,92 @@
-version = 1
+import com.android.build.api.dsl.LibraryExtension
+import com.lagradost.cloudstream3.gradle.CloudstreamExtension
+import org.gradle.api.plugins.JavaPluginExtension
+import org.gradle.kotlin.dsl.register
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import org.jetbrains.kotlin.gradle.tasks.KotlinJvmCompile
 
-cloudstream {
-    language = "en"
-    description = "Stream movies & TV shows with multi-server support - OneTube Provider"
-    authors = listOf("raghav")
+buildscript {
+    repositories {
+        google()
+        mavenCentral()
+        maven("https://jitpack.io")
+    }
+    dependencies {
+        classpath("com.android.tools.build:gradle:8.7.3")
+        classpath("com.github.recloudstream.gradle:gradle:81b1d424d")
+        classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:2.3.20")
+    }
+}
 
-    status = 1
-    tvTypes = listOf(
-        "Movie",
-        "TvSeries"
-    )
-    iconUrl = "https://www.1tube.org/logo.png"
+allprojects {
+    repositories {
+        google()
+        mavenCentral()
+        maven("https://jitpack.io")
+    }
+}
+
+fun Project.cloudstream(configuration: CloudstreamExtension.() -> Unit) =
+    extensions.getByName<CloudstreamExtension>("cloudstream").configuration()
+
+fun Project.android(configuration: LibraryExtension.() -> Unit) {
+    extensions.getByName<LibraryExtension>("android").apply {
+        project.extensions.findByType(JavaPluginExtension::class.java)?.apply {
+            toolchain { languageVersion.set(JavaLanguageVersion.of(17)) }
+        }
+        configuration()
+    }
+}
+
+subprojects {
+    apply(plugin = "com.android.library")
+    apply(plugin = "kotlin-android")
+    apply(plugin = "com.lagradost.cloudstream3.gradle")
+
+    cloudstream {
+        setRepo(System.getenv("GITHUB_REPOSITORY") ?: "https://github.com/KSHITIJ8473/raghav")
+        authors = listOf("KSHITIJ8473")
+    }
+
+    android {
+        namespace = "com.laddu100"
+        compileSdk = 35
+        defaultConfig { minSdk = 21 }
+        lint { targetSdk = 35 }
+        compileOptions {
+            sourceCompatibility = JavaVersion.VERSION_1_8
+            targetCompatibility = JavaVersion.VERSION_1_8
+        }
+        tasks.withType<KotlinJvmCompile> {
+            compilerOptions {
+                jvmTarget.set(JvmTarget.JVM_1_8)
+                freeCompilerArgs.addAll(
+                    "-Xno-call-assertions",
+                    "-Xno-param-assertions",
+                    "-Xno-receiver-assertions",
+                    "-Xskip-metadata-version-check"
+                )
+            }
+        }
+    }
+
+    dependencies {
+        val implementation by configurations
+        val cloudstream by configurations
+        val testImplementation by configurations
+        cloudstream("com.lagradost:cloudstream3:pre-release")
+        testImplementation("com.lagradost:cloudstream3:pre-release")
+        testImplementation("junit:junit:4.13.2")
+        implementation(kotlin("stdlib"))
+        implementation("com.github.Blatzar:NiceHttp:0.4.18")
+        implementation("org.jsoup:jsoup:1.22.2")
+        implementation("com.fasterxml.jackson.module:jackson-module-kotlin:2.17.1")
+        implementation("com.fasterxml.jackson.core:jackson-databind:2.17.1")
+        implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
+        implementation("com.google.code.gson:gson:2.14.0")
+    }
+}
+
+tasks.register<Delete>("clean") {
+    delete(rootProject.layout.buildDirectory)
 }

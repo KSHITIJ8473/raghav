@@ -119,8 +119,9 @@ class OneTube : MainAPI() {
             ?.results?.map { it.toSearchResponse() } ?: emptyList()
 
         if (mediaType == "movie") {
-            // Movie — data string: movie|<tmdbId>|0|0
-            return newMovieLoadResponse(title, url, TvType.Movie, "movie|$tmdbId|0|0") {
+            // Movie — data string: movie|<tmdbId>|0|0|<title>|<year>|<imdbId>
+            val dataStr = "movie|$tmdbId|0|0|${title.replace("|", " ")}|${year ?: 0}|${details.imdb_id ?: ""}"
+            return newMovieLoadResponse(title, url, TvType.Movie, dataStr) {
                 this.posterUrl = poster
                 this.backgroundPosterUrl = bg
                 this.year = year
@@ -144,7 +145,9 @@ class OneTube : MainAPI() {
             if (seasonData?.episodes == null) continue
 
             val episodes = seasonData.episodes.map { ep ->
-                newEpisode("tv|$tmdbId|$seasonNum|${ep.episode_number ?: 1}") {
+                // TV episode data string: tv|<tmdbId>|<season>|<episode>|<title>|<year>|<imdbId>
+                val dataStr = "tv|$tmdbId|$seasonNum|${ep.episode_number ?: 1}|${title.replace("|", " ")}|${year ?: 0}|${details.imdb_id ?: ""}"
+                newEpisode(dataStr) {
                     this.name = ep.name ?: "Episode ${ep.episode_number}"
                     this.episode = ep.episode_number ?: 1
                     this.season = seasonNum
@@ -177,17 +180,18 @@ class OneTube : MainAPI() {
     //
     //  WORKING (custom extractors implemented):
     //    MAIN_4 (vidlink.pro)  — enc-dec.app + /api/b/movie|tv/{enc}  → m3u8 + subtitles
+    //    MAIN_1 (videasy.to)   — api.videasy.to + enc-dec.app decryption → multiple m3u8 + subtitles
+    //    MAIN_4 (vidlink.pro)  — enc-dec.app + /api/b/movie|tv/{enc}  → m3u8 + subtitles
     //    MAIN_5 (vidrock.ru)   — AES-encrypted ID + /api/{type}/{enc} → multiple m3u8/mp4
     //    MAIN_6 (vidzee.wtf)   — /api/server?id={tmdb}&sr=1..8         → encrypted (skip if decrypt fails)
     //
-    //  SKIPPED (pure JS SPAs with no extractable API — would need WebView):
-    //    MAIN_1 (videasy.to)   — needs external enc-dec.app + videasy.net API (complex)
-    //    MAIN_2 (vidsrc.wtf/api/1)  — Next.js SPA, no JSON API
-    //    MAIN_3 (vidup.to)     — Next.js SPA, no JSON API
-    //    MULTILANGUAGE (vidsrc.wtf/api/2) — Next.js SPA, no JSON API
-    //    PREMIUM_EMBEDS (vidsrc.wtf/api/4) — Next.js SPA, no JSON API
+    //  SKIPPED (require Altcha proof-of-work + WASM decryption — not feasible in a plugin):
+    //    MAIN_2 (vidsrc.wtf/api/1)  — uses api.vidsrc.wtf with Altcha + WASM
+    //    MAIN_3 (vidup.to)     — pure JS SPA, no JSON API
+    //    MULTILANGUAGE (vidsrc.wtf/api/2) — uses multilang-api.vidsrc.wtf with Altcha + WASM
+    //    PREMIUM_EMBEDS (vidsrc.wtf/api/4) — uses api.vidsrc.wtf with Altcha + WASM
     //
-    //  The 3 working servers provide plenty of sources for every movie/TV show.
+    //  The 4 working servers provide plenty of sources for every movie/TV show.
     //
     override suspend fun loadLinks(
         data: String,
@@ -202,24 +206,35 @@ class OneTube : MainAPI() {
         val tmdbId = parts[1].toIntOrNull() ?: return false
         val season = parts[2].toIntOrNull() ?: 0
         val episode = parts[3].toIntOrNull() ?: 0
+        // Extended data string: <type>|<tmdbId>|<season>|<episode>|<title>|<year>|<imdbId>
+        val title = parts.getOrNull(4) ?: ""
+        val year = parts.getOrNull(5)?.toIntOrNull() ?: 0
+        val imdbId = parts.getOrNull(6) ?: ""
 
         var foundAny = false
 
-        // === Server 1: VidLink (Main 4) ===
+        // === Server 1: Videasy (Main 1) ===
+        try {
+            invokeVideasy(title, tmdbId, imdbId, year, season.takeIf { mediaType == "tv" }, episode.takeIf { mediaType == "tv" },
+                subtitleCallback, callback)
+            foundAny = true
+        } catch (_: Exception) { }
+
+        // === Server 2: VidLink (Main 4) ===
         try {
             invokeVidlink(tmdbId, season.takeIf { mediaType == "tv" }, episode.takeIf { mediaType == "tv" },
                 subtitleCallback, callback)
             foundAny = true
         } catch (_: Exception) { }
 
-        // === Server 2: VidRock (Main 5) ===
+        // === Server 3: VidRock (Main 5) ===
         try {
             invokeVidrock(tmdbId, season.takeIf { mediaType == "tv" }, episode.takeIf { mediaType == "tv" },
                 callback)
             foundAny = true
         } catch (_: Exception) { }
 
-        // === Server 3: VidZee (Main 6) — tries all 8 servers ===
+        // === Server 4: VidZee (Main 6) — tries all 8 servers ===
         try {
             invokeVidzee(tmdbId, season.takeIf { mediaType == "tv" }, episode.takeIf { mediaType == "tv" },
                 subtitleCallback, callback)
@@ -227,6 +242,109 @@ class OneTube : MainAPI() {
         } catch (_: Exception) { }
 
         return foundAny
+    }
+
+    // ============================================================
+    //  Extractor: Videasy (player.videasy.to / api.videasy.to)
+    // ============================================================
+    //  Flow:
+    //    1. GET https://api.videasy.to/{server}/sources-with-title?title=...&mediaType=...&tmdbId=...&imdbId=...
+    //       → returns hex-encoded encrypted data
+    //    2. POST https://enc-dec.app/api/dec-videasy with {"text": encData, "id": tmdbId}
+    //       → returns JSON with sources[] (url, quality) and subtitles[] (url, language)
+    //    3. Each source URL is an m3u8 playlist at a specific quality (360p/720p/1080p)
+    //
+    private suspend fun invokeVideasy(
+        title: String,
+        tmdbId: Int,
+        imdbId: String,
+        year: Int,
+        season: Int?,
+        episode: Int?,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        if (title.isBlank()) return
+
+        val videasyHeaders = mapOf(
+            "User-Agent" to "Mozilla/5.0 (Linux; Android 11; Pixel 5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
+            "Accept" to "*/*",
+            "Origin" to "https://player.videasy.to",
+            "Referer" to "https://player.videasy.to/"
+        )
+
+        val encTitle = URLEncoder.encode(title, "UTF-8").replace("+", "%20")
+        // Try multiple videasy servers — different servers may have different content
+        val servers = listOf("cdn", "mb-flix", "cuevana", "lamovie")
+
+        for (server in servers) {
+            try {
+                val apiUrl = if (season == null) {
+                    "https://api.videasy.to/$server/sources-with-title?title=$encTitle&mediaType=movie&year=$year&tmdbId=$tmdbId&imdbId=$imdbId"
+                } else {
+                    "https://api.videasy.to/$server/sources-with-title?title=$encTitle&mediaType=tv&year=$year&tmdbId=$tmdbId&imdbId=$imdbId&seasonId=$season&episodeId=${episode ?: 1}"
+                }
+
+                val encData = app.get(apiUrl, headers = videasyHeaders).text
+                if (encData.isBlank() || encData.length < 50) continue
+
+                // Decrypt via enc-dec.app
+                val decResponse = app.post(
+                    "https://enc-dec.app/api/dec-videasy",
+                    json = mapOf("text" to encData, "id" to tmdbId),
+                    headers = mapOf("User-Agent" to "Mozilla/5.0")
+                ).text
+
+                val json = JSONObject(decResponse)
+                val result = json.optJSONObject("result") ?: continue
+
+                // Process sources
+                val sourcesArray = result.optJSONArray("sources") ?: continue
+                for (i in 0 until sourcesArray.length()) {
+                    try {
+                        val obj = sourcesArray.optJSONObject(i) ?: continue
+                        val url = obj.optString("url").takeIf { it.isNotBlank() } ?: continue
+                        val quality = obj.optString("quality", "")
+
+                        val qualityInt = when {
+                            quality.contains("1080") -> Qualities.P1080.value
+                            quality.contains("720") -> Qualities.P720.value
+                            quality.contains("480") -> Qualities.P480.value
+                            quality.contains("360") -> Qualities.P360.value
+                            else -> Qualities.Unknown.value
+                        }
+
+                        callback.invoke(
+                            newExtractorLink(
+                                source = "Videasy[${server.uppercase()}]",
+                                name = "Videasy[${server.uppercase()}] $quality",
+                                url = url,
+                                type = if (url.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                            ) {
+                                this.headers = videasyHeaders
+                                this.quality = qualityInt
+                            }
+                        )
+                    } catch (_: Exception) { }
+                }
+
+                // Process subtitles
+                val subsArray = result.optJSONArray("subtitles")
+                if (subsArray != null) {
+                    for (i in 0 until subsArray.length()) {
+                        try {
+                            val obj = subsArray.optJSONObject(i) ?: continue
+                            val lang = obj.optString("language").takeIf { it.isNotBlank() }
+                                ?: obj.optString("lang", "Unknown")
+                            val url = obj.optString("url").takeIf { it.isNotBlank() } ?: continue
+                            subtitleCallback.invoke(newSubtitleFile(lang, url))
+                        } catch (_: Exception) { }
+                    }
+                }
+            } catch (_: Exception) {
+                // One failing server shouldn't kill the rest
+            }
+        }
     }
 
     // ============================================================

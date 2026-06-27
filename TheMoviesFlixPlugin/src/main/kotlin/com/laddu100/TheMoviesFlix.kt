@@ -272,7 +272,7 @@ class TheMoviesFlix : MainAPI() {
                 for (link in links) {
                     try {
                         // Try fastdl.zip first (most reliable - direct Google Drive)
-                        if (link.contains("fastdl.zip") || link.contains("fastdl.")) {
+                        if (link.contains("fastdl")) {
                             val directUrl = resolveFastDl(link)
                             if (directUrl != null) {
                                 callback.invoke(
@@ -305,14 +305,10 @@ class TheMoviesFlix : MainAPI() {
                                 foundAny = true
                             }
                         }
-                        // Try vcloud.zip / mcloud.best
-                        else if (link.contains("vcloud.zip") || link.contains("mcloud.best")) {
-                            loadExtractor(link, mainUrl, subtitleCallback, callback)
-                            foundAny = true
-                        }
-                        // Fallback: try CloudStream's built-in extractors
+                        // For all other hosts, try CloudStream's built-in extractors
+                        // (handles vcloud.zip, gofile, 1fichier, megaup, pixeldrain, etc.)
                         else {
-                            val loaded = loadExtractor(link, mainUrl, subtitleCallback, callback)
+                            val loaded = loadExtractor(link, "https://nexdrive.fit/", subtitleCallback, callback)
                             if (loaded) foundAny = true
                         }
                     } catch (_: Exception) { }
@@ -327,22 +323,34 @@ class TheMoviesFlix : MainAPI() {
     //  Helper: Fetch the redirect page (mobilejsr.rest / nexdrive.fit)
     //  and extract the actual download links
     // ============================================================
+    //
+    //  IMPORTANT: The site uses TWO redirect domains:
+    //    - nexdrive.fit   → returns 200, works fine
+    //    - mobilejsr.rest → returns 403 Cloudflare challenge, BLOCKED
+    //  Both serve the SAME content for the same /genxfm.../ path.
+    //  Fix: rewrite mobilejsr.rest URLs to nexdrive.fit before fetching.
+    //
     private suspend fun resolveRedirectPage(url: String): List<String> {
         return try {
-            val doc = app.get(url, headers = baseHeaders + ("Referer" to "$mainUrl/")).document
+            // Rewrite mobilejsr.rest → nexdrive.fit (same backend, nexdrive isn't CF-blocked)
+            val fixedUrl = url.replace("mobilejsr.rest", "nexdrive.fit")
+            val doc = app.get(fixedUrl, headers = baseHeaders + ("Referer" to "$mainUrl/")).document
             val article = doc.selectFirst("article") ?: doc.selectFirst("div.entry-content") ?: return emptyList()
             val links = mutableSetOf<String>()
 
-            // Find all anchor links with buttons
+            // Find all anchor links
             for (a in article.select("a[href]")) {
                 val href = a.attr("href").trim()
                 if (href.isBlank() || href.startsWith("#")) continue
                 if (href.contains("nexdrive") || href.contains("mobilejsr") || href.contains("moviesflix")) continue
-                // Collect download host links
+                // Collect download host links — match ALL known file hosts
                 if (href.contains("fastdl") || href.contains("filebee") || href.contains("filepress") ||
                     href.contains("vcloud") || href.contains("mcloud") || href.contains("gdtot") ||
                     href.contains("gdflix") || href.contains("gofile") || href.contains("hubcloud") ||
-                    href.contains("hubdrive") || href.contains("drive.google") || href.contains("gdrive")) {
+                    href.contains("hubdrive") || href.contains("drive.google") || href.contains("gdrive") ||
+                    href.contains("1fichier") || href.contains("megaup") || href.contains("mega.nz") ||
+                    href.contains("katfile") || href.contains("uploadhaven") || href.contains("pixeldrain") ||
+                    href.contains("filesdm") || href.contains("filedm") || href.contains("dropbox")) {
                     links.add(href)
                 }
             }
@@ -355,9 +363,17 @@ class TheMoviesFlix : MainAPI() {
     // ============================================================
     //  Helper: Resolve fastdl.zip embed page to direct Google Drive URL
     // ============================================================
+    //
+    //  The nexdrive page links to either:
+    //    - fastdl.zip/embed.php?download=...  (works, returns reurl)
+    //    - fastdl.zip/embed?download=...      (returns "File Deleted" error)
+    //  Fix: normalize /embed? → /embed.php? before fetching.
+    //
     private suspend fun resolveFastDl(url: String): String? {
         return try {
-            val html = app.get(url, headers = baseHeaders + ("Referer" to "$mainUrl/")).text
+            // Normalize: ensure URL uses /embed.php? not /embed?
+            val fixedUrl = url.replace("/embed?", "/embed.php?")
+            val html = app.get(fixedUrl, headers = baseHeaders + ("Referer" to "https://nexdrive.fit/")).text
             // Pattern: var reurl = "https://fastdl.zip/dl.php?link=<GOOGLE_URL>"
             val reurl = Regex("""var\s+reurl\s*=\s*"([^"]+)"""").find(html)?.groupValues?.get(1)
                 ?: return null
@@ -391,5 +407,3 @@ class TheMoviesFlix : MainAPI() {
         }
     }
 }
-
-

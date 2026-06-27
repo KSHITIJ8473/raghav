@@ -131,6 +131,19 @@ class Anikai : MainAPI() {
     // ============================================================
     //  C. LOAD (details + episode list with sub/dub separation)
     // ============================================================
+    //
+    //  The episode list HTML has <a> tags with data-sub / data-dub / data-hsub
+    //  attributes that mark which audio tracks are available for that episode.
+    //
+    //  We add the SAME episode URL to both the Subbed and Dubbed lists, but
+    //  with DIFFERENT data string prefixes:
+    //    - Subbed list:  "sub|<watchUrl>"
+    //    - Dubbed list:  "dub|<watchUrl>"
+    //
+    //  When the user picks an episode from the Dubbed tab in CloudStream,
+    //  loadLinks receives "dub|<watchUrl>" and knows to select the dub
+    //  server-items group.
+    //
     override suspend fun load(url: String): LoadResponse? {
         val doc = app.get(url).document
 
@@ -162,11 +175,6 @@ class Anikai : MainAPI() {
             else -> TvType.Anime
         }
 
-        // ---- Episode parsing ----
-        // Each <a> in the eplist has data-sub / data-dub / data-hsub / data-raw flags.
-        // We add the SAME episode URL under both Subbed and Dubbed lists when both
-        // audio tracks exist. The audio type is encoded in the data string as a prefix
-        // ("sub|" or "dub|") so loadLinks knows which server-items group to read.
         val subEpisodes = mutableListOf<Episode>()
         val dubEpisodes = mutableListOf<Episode>()
 
@@ -182,15 +190,14 @@ class Anikai : MainAPI() {
             val hasSub  = ep.attr("data-sub") == "1"
             val hasDub  = ep.attr("data-dub") == "1"
 
-            // Subbed tab: Japanese audio with subtitles (soft-sub preferred, hard-sub fallback).
-            // We always use the "sub" prefix; loadLinks will try "sub" group first, then "hsub".
+            // Subbed: Japanese audio with subtitles (soft-sub or hard-sub)
             if (hasSub || hasHsub) {
                 subEpisodes.add(newEpisode("sub|${fixUrl(epHref)}") {
                     this.name = name
                     this.episode = epNum
                 })
             }
-            // Dubbed tab: English audio.
+            // Dubbed: English audio
             if (hasDub) {
                 dubEpisodes.add(newEpisode("dub|${fixUrl(epHref)}") {
                     this.name = name
@@ -213,21 +220,32 @@ class Anikai : MainAPI() {
     }
 
     // ============================================================
-    //  D. LOAD LINKS
+    //  D. LOAD LINKS (the Sub/Dub fix)
     // ============================================================
     //
-    //  Episode data string format:  "<audioType>|<watchUrl>"
+    //  Data string format:  "<audioType>|<watchUrl>"
     //    audioType = "sub" or "dub"
     //
-    //  On the watch page, anikai renders one <div class="server-items lang-group"
-    //  data-id="hsub|sub|dub|raw"> PER audio type. Each group contains the same
-    //  server names (HD-1, HD-2, StreamHG, Earnvids, Doodstream) but with DIFFERENT
-    //  data-video embed URLs. The dub embed URLs point to completely separate
-    //  streams on the host.
+    //  On the anikai.cc watch page, there are 3 separate divs:
+    //    <div class="server-items lang-group" data-id="hsub">  → hard-sub servers
+    //    <div class="server-items lang-group" data-id="sub">   → soft-sub servers
+    //    <div class="server-items lang-group" data-id="dub">   → dub servers
     //
-    //  We select ONLY the server-items group(s) matching the requested audio type:
-    //    - "sub" → collect from "sub" group, fall back to "hsub" if "sub" is missing
-    //    - "dub" → collect from "dub" group only
+    //  Each group has the SAME server names (HD-1, HD-2, etc.) but with
+    //  DIFFERENT data-video embed URLs. The dub embed URLs point to
+    //  completely separate streams on the host (different m3u8, different
+    //  audio track — verified by extracting and comparing audio MD5s).
+    //
+    //  FIX: We use a DIRECT CSS ATTRIBUTE SELECTOR — the same pattern used
+    //  by the working AnimeKai.to reference plugin:
+    //    doc.select("div.server-items[data-id=$type] span.server-video")
+    //
+    //  This is more reliable in Jsoup than .select().filter{} because it
+    //  lets Jsoup's CSS engine do the matching in one pass.
+    //
+    //  For "sub": collect from BOTH "sub" and "hsub" groups (soft-sub
+    //             preferred, hard-sub as fallback).
+    //  For "dub": collect from "dub" group ONLY — never mix in sub sources.
     //
     override suspend fun loadLinks(
         data: String,
@@ -243,30 +261,27 @@ class Anikai : MainAPI() {
 
         val doc = app.get(watchUrl).document
 
-        // === SERVER GROUP SELECTION (the Sub/Dub fix) ===
-        // Use the proven filter pattern from the original working code.
-        // For "sub": collect from BOTH "sub" and "hsub" groups (soft-sub + hard-sub).
-        // For "dub": collect from "dub" group ONLY — never mix in sub sources.
-        val targetGroups = when (dubOrSub) {
-            "dub" -> listOf("dub")
-            else -> listOf("sub", "hsub")
+        // === SERVER GROUP SELECTION ===
+        // Determine which audio-type groups to collect servers from.
+        // Pattern adapted from the AnimeKai.to reference plugin.
+        val types = if ("sub" in dubOrSub) listOf("sub", "hsub") else listOf("dub")
+
+        // Use a direct CSS attribute selector for each type.
+        // This is the same pattern as: document.select("div.server-items[data-id=$type]")
+        val servers = types.flatMap { type ->
+            doc.select("div.server-items[data-id=$type] span.server-video")
+                .map { span -> Pair(type, span) }
         }
 
-        val allServerItems = doc.select(".server-items")
-        val serverItems = allServerItems.filter { it.attr("data-id") in targetGroups }
-        if (serverItems.isEmpty()) return false
-
-        val servers = serverItems.flatMap { it.select("span.server-video") }
         if (servers.isEmpty()) return false
 
         var foundAnySources = false
 
-        for (server in servers) {
+        for ((type, server) in servers) {
             val embedUrl = server.attr("data-video")
             if (embedUrl.isEmpty()) continue
             val serverName = server.text().trim()
-            val parentGroup = server.parents().firstOrNull { it.hasClass("server-items") }
-            val isDub = parentGroup?.attr("data-id") == "dub"
+            val isDub = type == "dub"
             val label = "$serverName (${if (isDub) "Dub" else "Sub"})"
 
             // Step 1: extract subtitle URL from embed query string
@@ -304,7 +319,6 @@ class Anikai : MainAPI() {
                     }
                     embedUrl.contains("otakuhg.site") || embedUrl.contains("otakuvid.online") || embedUrl.contains("earnvids.com") -> {
                         val embedHtml = app.get(embedUrl, headers = mapOf("Referer" to "$mainUrl/")).text
-                        // Try bare m3u8 first, then packed JS
                         var m3u8Url = Regex("""(https?://[^\s"']+\.m3u8[^\s"']*)""").find(embedHtml)?.groupValues?.get(1)
                         if (m3u8Url == null) {
                             val unpacked = JsPacker.parseAndUnpack(embedHtml)
@@ -327,7 +341,6 @@ class Anikai : MainAPI() {
                         }
                     }
                     embedUrl.contains("playmogo.com") -> {
-                        // playmogo.com is a Doodstream mirror — try CloudStream's built-in extractor
                         val loaded = loadExtractor(embedUrl, watchUrl, subtitleCallback, callback)
                         if (loaded) {
                             foundAnySources = true
@@ -338,7 +351,6 @@ class Anikai : MainAPI() {
                         if (loaded) {
                             foundAnySources = true
                         } else {
-                            // Fallback: direct m3u8 scan
                             val embedHtml = app.get(embedUrl, headers = mapOf("Referer" to "$mainUrl/")).text
                             val m3u8Url = Regex("""(https?://[^\s"']+\.m3u8[^\s"']*)""").find(embedHtml)?.groupValues?.get(1)
                             if (m3u8Url != null) {
@@ -366,7 +378,6 @@ class Anikai : MainAPI() {
 
 // ============================================================
 //  JsPacker — unpacks eval(function(p,a,c,k,e,d){...}) obfuscation
-//  used by otakuhg.site and otakuvid.online embeds.
 // ============================================================
 object JsPacker {
     private const val CHARS = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"

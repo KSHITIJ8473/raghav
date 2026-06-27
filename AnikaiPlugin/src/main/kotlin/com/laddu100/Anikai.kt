@@ -330,7 +330,7 @@ class Anikai : MainAPI() {
     //    vivibebe / bibiemb   →  ?sub=<vtt-url>
     //    otakuhg / otakuvid   →  ?caption_1=<vtt-url>&sub_1=English
     //    playmogo (Doodstream) →  ?c1_file=<vtt-url>&c1_label=English
-    private fun extractSubtitleFromUrl(embedUrl: String, callback: (SubtitleFile) -> Unit) {
+    private suspend fun extractSubtitleFromUrl(embedUrl: String, callback: (SubtitleFile) -> Unit) {
         try {
             val urlObj = URL(embedUrl)
             val query = urlObj.query ?: return

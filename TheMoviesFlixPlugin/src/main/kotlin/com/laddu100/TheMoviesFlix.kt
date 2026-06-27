@@ -276,9 +276,9 @@ class TheMoviesFlix : MainAPI() {
             // Rewrite mobilejsr.rest → nexdrive.fit (Cloudflare blocks mobilejsr)
             val fixedUrl = url.replace("mobilejsr.rest", "nexdrive.fit")
             val doc = app.get(fixedUrl, headers = baseHeaders + ("Referer" to "$mainUrl/")).document
-            val article = doc.selectFirst("article") ?: return emptyList()
+            val article = doc.selectFirst("article") ?: return emptyList<Pair<Int, List<String>>>()
 
-            val episodes = mutableListOf<Pair<Int, List<String>>()
+            val episodes: MutableList<Pair<Int, List<String>>> = ArrayList()
 
             // Find all h4 headings that contain "Episodes"
             for (h4 in article.select("h4")) {
@@ -309,13 +309,13 @@ class TheMoviesFlix : MainAPI() {
                 }
 
                 if (links.isNotEmpty()) {
-                    episodes.add(epNum to links)
+                    episodes.add(Pair(epNum, links))
                 }
             }
 
-            episodes
+            episodes.toList()
         } catch (_: Exception) {
-            emptyList()
+            emptyList<Pair<Int, List<String>>>()
         }
     }
 

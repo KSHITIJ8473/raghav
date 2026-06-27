@@ -72,7 +72,7 @@ class OneTube : MainAPI() {
         val allResults = mutableListOf<SearchResult>()
         for (p in 1..3) {
             val url = "$mainUrl/api/search?query=${java.net.URLEncoder.encode(query, "utf-8")}&page=$p"
-            val response = app.get(url, headers = baseHeaders).parsedSafe<SearchResponse>() ?: break
+            val response = app.get(url, headers = baseHeaders).parsedSafe<SearchApiResponse>() ?: break
             allResults += response.results
             // Stop early if we've reached the last page
             val totalPages = response.total_pages ?: 1
@@ -314,7 +314,7 @@ class OneTube : MainAPI() {
     )
 
     @JsonIgnoreProperties(ignoreUnknown = true)
-    data class SearchResponse(
+    data class SearchApiResponse(
         @JsonProperty("page") val page: Int?,
         @JsonProperty("results") val results: List<SearchResult>,
         @JsonProperty("total_pages") val total_pages: Int?

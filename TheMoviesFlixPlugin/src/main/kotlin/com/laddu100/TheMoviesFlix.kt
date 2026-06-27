@@ -65,9 +65,12 @@ class TheMoviesFlix : MainAPI() {
         } ?: ""
         val quality = getSearchQuality(titleRaw)
 
-        // Detect TV series vs movie from title
-        val isSeries = titleRaw.contains("Season", true) || titleRaw.contains("Series", true) ||
-                titleRaw.contains("S01", true) || titleRaw.contains("S1", true)
+        // Detect TV series vs movie from title — check for Season/Series/Web Series/TV Show/S\d+
+        val isSeries = titleRaw.contains("Season", true) ||
+                titleRaw.contains("Series", true) ||
+                titleRaw.contains("Web Series", true) ||
+                titleRaw.contains("TV Show", true) ||
+                Regex("""\bS\d{1,2}\b""", RegexOption.IGNORE_CASE).containsMatchIn(titleRaw)
 
         return if (isSeries) {
             newTvSeriesSearchResponse(title, href, TvType.TvSeries) {
@@ -130,6 +133,9 @@ class TheMoviesFlix : MainAPI() {
             ?: return null
         val title = cleanTitle(titleRaw)
 
+        // Also get the full page title (contains more season/series info)
+        val pageTitle = doc.selectFirst("title")?.text() ?: ""
+
         // Extract metadata
         val poster = doc.selectFirst("meta[property=og:image]")?.attr("content") ?: ""
         val plot = entry.selectFirst("div.mfx-plot-box")?.text()?.trim()
@@ -150,15 +156,19 @@ class TheMoviesFlix : MainAPI() {
         val trailerId = entry.selectFirst("div.mfx-yt-lazy")?.attr("data-yt-id")
         val trailer = trailerId?.let { "https://www.youtube.com/watch?v=$it" }
 
-        // Determine if it's a movie or TV series
-        val isSeries = titleRaw.contains("Season", true) || titleRaw.contains("Series", true) ||
-                titleRaw.contains("S01", true) || titleRaw.contains("S02", true) ||
-                titleRaw.contains("S03", true) || titleRaw.contains("S1 ", true) ||
-                titleRaw.contains("S2 ", true) || titleRaw.contains("Web Series", true) ||
-                titleRaw.contains("TV Show", true) || titleRaw.contains("Episode", true)
-
         // Extract all download links grouped by quality
         val downloadGroups = extractDownloadGroups(entry)
+
+        // Determine if it's a movie or TV series
+        // Check multiple sources: titleRaw, pageTitle, URL, and download group labels
+        val allTextToCheck = titleRaw + " " + pageTitle + " " + url + " " +
+            downloadGroups.joinToString(" ") { it.label }
+        val isSeries = allTextToCheck.contains("Season", true) ||
+                allTextToCheck.contains("Series", true) ||
+                allTextToCheck.contains("Web Series", true) ||
+                allTextToCheck.contains("TV Show", true) ||
+                allTextToCheck.contains("Episode", true) ||
+                Regex("""\bS\d{1,2}\b""", RegexOption.IGNORE_CASE).containsMatchIn(allTextToCheck)
 
         if (isSeries) {
             // For TV series, we need to fetch each nexdrive redirect page to find
@@ -285,21 +295,18 @@ class TheMoviesFlix : MainAPI() {
                 val text = h4.text().trim()
                 if (!text.contains("Episode", ignoreCase = true)) continue
 
-                // Extract episode number from "-:Episodes: N:-"
-                val epNum = Regex("""Episode[s]?\s*:\s*(\d+)""", RegexOption.IGNORE_CASE)
+                // Extract episode number from "-:Episodes: N:-" or "-:Episodes: 02:-"
+                val epNum = Regex("""Episode[s]?\s*:\s*0*(\d+)""", RegexOption.IGNORE_CASE)
                     .find(text)?.groupValues?.get(1)?.toIntOrNull() ?: continue
 
-                // Find the next sibling <p> that contains download links
+                // Find the next sibling element that contains download links
                 var sibling = h4.nextElementSibling()
                 val links = mutableListOf<String>()
                 var attempts = 0
                 while (sibling != null && attempts < 3) {
                     for (a in sibling.select("a[href]")) {
                         val href = a.attr("href").trim()
-                        if (href.isNotBlank() && !href.startsWith("#") &&
-                            (href.contains("fastdl") || href.contains("filebee") ||
-                             href.contains("filepress") || href.contains("vcloud") ||
-                             href.contains("gofile") || href.contains("gdrive"))) {
+                        if (href.isNotBlank() && !href.startsWith("#")) {
                             links.add(href)
                         }
                     }
@@ -512,12 +519,13 @@ class TheMoviesFlix : MainAPI() {
                 val text = h4.text().trim()
                 if (!text.contains("Episode", ignoreCase = true)) continue
 
-                val epNum = Regex("""Episode[s]?\s*:\s*(\d+)""", RegexOption.IGNORE_CASE)
+                // Use the same regex with leading-zero stripping as resolveNexdriveEpisodes
+                val epNum = Regex("""Episode[s]?\s*:\s*0*(\d+)""", RegexOption.IGNORE_CASE)
                     .find(text)?.groupValues?.get(1)?.toIntOrNull() ?: continue
 
                 if (epNum != episodeNum) continue
 
-                // Found the right episode — extract links from the next sibling <p>
+                // Found the right episode — extract links from the next sibling element
                 var sibling = h4.nextElementSibling()
                 val links = mutableListOf<String>()
                 var attempts = 0
@@ -540,10 +548,7 @@ class TheMoviesFlix : MainAPI() {
             val allLinks = mutableListOf<String>()
             for (a in article.select("a[href]")) {
                 val href = a.attr("href").trim()
-                if (href.isNotBlank() && !href.startsWith("#") &&
-                    (href.contains("fastdl") || href.contains("filebee") ||
-                     href.contains("filepress") || href.contains("vcloud") ||
-                     href.contains("gofile") || href.contains("gdrive"))) {
+                if (href.isNotBlank() && !href.startsWith("#")) {
                     allLinks.add(href)
                 }
             }

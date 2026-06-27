@@ -139,7 +139,6 @@ class TheMoviesFlix : MainAPI() {
         val genres = extractListFromInfo(entry, "Genres")
         val cast = extractListFromInfo(entry, "Cast").map { ActorData(Actor(it)) }
         val runtime = extractFieldFromInfo(entry, "Runtime")?.replace(Regex("[^0-9]"), "")?.toIntOrNull()
-        val languages = extractListFromInfo(entry, "Language")
 
         // Extract IMDb rating and ID
         val imdbLink = entry.selectFirst("div.mfx-imdb a[href*=imdb]")?.attr("href") ?: ""
@@ -153,22 +152,72 @@ class TheMoviesFlix : MainAPI() {
 
         // Determine if it's a movie or TV series
         val isSeries = titleRaw.contains("Season", true) || titleRaw.contains("Series", true) ||
-                titleRaw.contains("S01", true) || titleRaw.contains("S1 ", true) ||
-                doc.select("div.mfx-download-group h3:contains(Episode)").isNotEmpty()
+                titleRaw.contains("S01", true) || titleRaw.contains("S02", true) ||
+                titleRaw.contains("S03", true) || titleRaw.contains("S1 ", true) ||
+                titleRaw.contains("S2 ", true) || titleRaw.contains("Web Series", true) ||
+                titleRaw.contains("TV Show", true) || titleRaw.contains("Episode", true)
 
         // Extract all download links grouped by quality
-        val downloadGroups = extractDownloadGroups(entry, isSeries)
+        val downloadGroups = extractDownloadGroups(entry)
 
         if (isSeries) {
-            // For TV series, each download group is an episode quality option
-            // We create one "episode" per quality, labeled with the quality info
-            val episodes = downloadGroups.mapIndexed { index, group ->
-                newEpisode(group.redirectUrl) {
-                    this.name = group.label
-                    this.episode = index + 1
-                    this.season = extractSeasonNumber(group.label) ?: 1
+            // For TV series, we need to fetch each nexdrive redirect page to find
+            // individual episodes. Each download group is a quality for a season.
+            // The nexdrive page has h4 headings "-:Episodes: N:-" followed by <p>
+            // with download links for that episode.
+            //
+            // Strategy: fetch the FIRST quality group's nexdrive page to discover
+            // all episodes, then create one Episode per episode found. Store the
+            // nexdrive URL for each quality so loadLinks can fetch the right
+            // episode from the right quality page.
+            //
+            // Data string format for TV episodes:
+            //   "nexdrive_url_1|nexdrive_url_2|...|nexdrive_url_N|season_num|episode_num"
+            // where each nexdrive_url corresponds to a quality (480p, 720p, 1080p).
+            // loadLinks will fetch each nexdrive page, find the episode by number,
+            // and extract the fastdl link.
+
+            val episodes = mutableListOf<com.lagradost.cloudstream3.Episode>()
+            val seasonGroups = mutableMapOf<Int, MutableList<DownloadGroup>>()
+
+            // Group download groups by season
+            for (group in downloadGroups) {
+                val seasonNum = extractSeasonNumber(group.label) ?: 1
+                seasonGroups.getOrPut(seasonNum) { mutableListOf() }.add(group)
+            }
+
+            // For each season, fetch the first quality's nexdrive page to discover episodes
+            for ((seasonNum, groups) in seasonGroups) {
+                if (groups.isEmpty()) continue
+
+                // Use the first quality group to discover episodes
+                val firstGroup = groups.first()
+                val allNexdriveUrls = groups.joinToString("|") { it.redirectUrl }
+
+                // Fetch the nexdrive page to find episode count
+                val episodeLinks = resolveNexdriveEpisodes(firstGroup.redirectUrl)
+
+                if (episodeLinks.isEmpty()) {
+                    // No episodes found — treat as single "complete season" download
+                    val dataStr = "$allNexdriveUrls|$seasonNum|1"
+                    episodes.add(newEpisode(dataStr) {
+                        this.name = firstGroup.label
+                        this.episode = 1
+                        this.season = seasonNum
+                    })
+                } else {
+                    // Create one episode per discovered episode
+                    for ((epNum, _) in episodeLinks) {
+                        val dataStr = "$allNexdriveUrls|$seasonNum|$epNum"
+                        episodes.add(newEpisode(dataStr) {
+                            this.name = "Episode $epNum"
+                            this.episode = epNum
+                            this.season = seasonNum
+                        })
+                    }
                 }
             }
+
             return newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
                 this.posterUrl = poster
                 this.plot = plot
@@ -202,7 +251,7 @@ class TheMoviesFlix : MainAPI() {
         val redirectUrl: String
     )
 
-    private fun extractDownloadGroups(entry: Element, isSeries: Boolean): List<DownloadGroup> {
+    private fun extractDownloadGroups(entry: Element): List<DownloadGroup> {
         val groups = mutableListOf<DownloadGroup>()
         val divs = entry.select("div.mfx-download-group")
         for (div in divs) {
@@ -213,6 +262,61 @@ class TheMoviesFlix : MainAPI() {
             }
         }
         return groups
+    }
+
+    // ============================================================
+    //  Helper: Fetch nexdrive page and extract episode list
+    // ============================================================
+    //  Returns a list of (episodeNumber, listOfDownloadLinks) pairs.
+    //  The nexdrive page has h4 headings like "-:Episodes: 1:-" followed
+    //  by a <p> tag with download links (fastdl, filebee, etc.) for that episode.
+    //
+    private suspend fun resolveNexdriveEpisodes(url: String): List<Pair<Int, List<String>>> {
+        return try {
+            // Rewrite mobilejsr.rest → nexdrive.fit (Cloudflare blocks mobilejsr)
+            val fixedUrl = url.replace("mobilejsr.rest", "nexdrive.fit")
+            val doc = app.get(fixedUrl, headers = baseHeaders + ("Referer" to "$mainUrl/")).document
+            val article = doc.selectFirst("article") ?: return emptyList()
+
+            val episodes = mutableListOf<Pair<Int, List<String>>()
+
+            // Find all h4 headings that contain "Episodes"
+            for (h4 in article.select("h4")) {
+                val text = h4.text().trim()
+                if (!text.contains("Episode", ignoreCase = true)) continue
+
+                // Extract episode number from "-:Episodes: N:-"
+                val epNum = Regex("""Episode[s]?\s*:\s*(\d+)""", RegexOption.IGNORE_CASE)
+                    .find(text)?.groupValues?.get(1)?.toIntOrNull() ?: continue
+
+                // Find the next sibling <p> that contains download links
+                var sibling = h4.nextElementSibling()
+                val links = mutableListOf<String>()
+                var attempts = 0
+                while (sibling != null && attempts < 3) {
+                    for (a in sibling.select("a[href]")) {
+                        val href = a.attr("href").trim()
+                        if (href.isNotBlank() && !href.startsWith("#") &&
+                            (href.contains("fastdl") || href.contains("filebee") ||
+                             href.contains("filepress") || href.contains("vcloud") ||
+                             href.contains("gofile") || href.contains("gdrive"))) {
+                            links.add(href)
+                        }
+                    }
+                    if (links.isNotEmpty()) break
+                    sibling = sibling.nextElementSibling()
+                    attempts++
+                }
+
+                if (links.isNotEmpty()) {
+                    episodes.add(epNum to links)
+                }
+            }
+
+            episodes
+        } catch (_: Exception) {
+            emptyList()
+        }
     }
 
     private fun extractYear(entry: Element): Int? {
@@ -226,7 +330,9 @@ class TheMoviesFlix : MainAPI() {
     }
 
     private fun extractSeasonNumber(text: String): Int? {
+        // Match "Season 1", "S01", "S1", "Season.01"
         return Regex("""Season\s*(\d+)""", RegexOption.IGNORE_CASE).find(text)?.groupValues?.get(1)?.toIntOrNull()
+            ?: Regex("""\bS(\d+)\b""", RegexOption.IGNORE_CASE).find(text)?.groupValues?.get(1)?.toIntOrNull()
     }
 
     private fun extractFieldFromInfo(entry: Element, fieldName: String): String? {
@@ -244,14 +350,18 @@ class TheMoviesFlix : MainAPI() {
     //  Load Links — resolve redirect chain to direct video URLs
     // ============================================================
     //
-    //  Flow:
-    //    1. Movie: data string contains newline-separated redirect URLs
-    //       TV: data string is a single redirect URL (one per episode)
-    //    2. Each redirect URL (mobilejsr.rest or nexdrive.fit) is a WordPress
-    //       page that contains the actual download links
-    //    3. Fetch the redirect page, find links to fastdl.zip/embed.php?download=...
-    //    4. Fetch the fastdl.zip page, extract `var reurl = "...link=<GOOGLE_URL>"`
-    //    5. The Google URL is a direct playable MP4/MKV — emit as ExtractorLink
+    //  Data string formats:
+    //
+    //  MOVIE: newline-separated nexdrive redirect URLs
+    //    "https://nexdrive.fit/genxfm...//\nhttps://nexdrive.fit/genxfm...//"
+    //    Each URL is a different quality (480p/720p/1080p).
+    //    loadLinks fetches each, finds fastdl links, resolves to Google Drive.
+    //
+    //  TV EPISODE: pipe-separated nexdrive URLs + season + episode number
+    //    "https://nexdrive.fit/genxfm...//|https://nexdrive.fit/genxfm...//|season|episode"
+    //    The nexdrive URLs are different qualities for the same season.
+    //    loadLinks fetches each nexdrive page, finds the specific episode by
+    //    number (from h4 headings), and resolves its fastdl link.
     //
     override suspend fun loadLinks(
         data: String,
@@ -261,62 +371,186 @@ class TheMoviesFlix : MainAPI() {
     ): Boolean {
         if (data.isBlank()) return false
 
-        val redirectUrls = data.split("\n").map { it.trim() }.filter { it.isNotBlank() }
-        if (redirectUrls.isEmpty()) return false
+        // Check if this is a TV episode (pipe-separated with season/episode at the end)
+        // vs a movie (newline-separated URLs)
+        val parts = data.split("|")
+        val isTvEpisode = parts.size >= 3 &&
+            parts[parts.size - 2].toIntOrNull() != null &&
+            parts[parts.size - 1].toIntOrNull() != null
 
-        var foundAny = false
+        if (isTvEpisode) {
+            // TV episode: last 2 parts are season and episode number
+            val seasonNum = parts[parts.size - 2].toInt()
+            val episodeNum = parts[parts.size - 1].toInt()
+            val nexdriveUrls = parts.dropLast(2).filter { it.isNotBlank() }
 
-        for (redirectUrl in redirectUrls) {
-            try {
-                val links = resolveRedirectPage(redirectUrl)
-                for (link in links) {
-                    try {
-                        // Try fastdl.zip first (most reliable - direct Google Drive)
-                        if (link.contains("fastdl")) {
-                            val directUrl = resolveFastDl(link)
-                            if (directUrl != null) {
-                                callback.invoke(
-                                    newExtractorLink(
-                                        source = "TheMoviesFlix",
-                                        name = "G-Direct [FastDL]",
-                                        url = directUrl,
-                                        type = ExtractorLinkType.VIDEO
-                                    ) {
-                                        this.quality = Qualities.Unknown.value
-                                    }
-                                )
-                                foundAny = true
+            var foundAny = false
+            for (nexdriveUrl in nexdriveUrls) {
+                try {
+                    // Fetch the nexdrive page and find the specific episode
+                    val episodeLinks = resolveNexdriveEpisodeLinks(nexdriveUrl, episodeNum)
+                    for (link in episodeLinks) {
+                        try {
+                            if (link.contains("fastdl")) {
+                                val directUrl = resolveFastDl(link)
+                                if (directUrl != null) {
+                                    val qualityLabel = getQualityFromUrl(nexdriveUrl)
+                                    callback.invoke(
+                                        newExtractorLink(
+                                            source = "TheMoviesFlix",
+                                            name = "G-Direct [FastDL] $qualityLabel",
+                                            url = directUrl,
+                                            type = ExtractorLinkType.VIDEO
+                                        ) {
+                                            this.quality = Qualities.Unknown.value
+                                        }
+                                    )
+                                    foundAny = true
+                                }
+                            } else if (link.contains("filebee") || link.contains("filepress")) {
+                                val directUrl = resolveFilePress(link)
+                                if (directUrl != null) {
+                                    val qualityLabel = getQualityFromUrl(nexdriveUrl)
+                                    callback.invoke(
+                                        newExtractorLink(
+                                            source = "TheMoviesFlix",
+                                            name = "G-Direct [FilePress] $qualityLabel",
+                                            url = directUrl,
+                                            type = ExtractorLinkType.VIDEO
+                                        ) {
+                                            this.quality = Qualities.Unknown.value
+                                        }
+                                    )
+                                    foundAny = true
+                                }
+                            } else {
+                                val loaded = loadExtractor(link, "https://nexdrive.fit/", subtitleCallback, callback)
+                                if (loaded) foundAny = true
                             }
-                        }
-                        // Try filebee/filepress (redirects to filepress.baby)
-                        else if (link.contains("filebee") || link.contains("filepress")) {
-                            val directUrl = resolveFilePress(link)
-                            if (directUrl != null) {
-                                callback.invoke(
-                                    newExtractorLink(
-                                        source = "TheMoviesFlix",
-                                        name = "G-Direct [FilePress]",
-                                        url = directUrl,
-                                        type = ExtractorLinkType.VIDEO
-                                    ) {
-                                        this.quality = Qualities.Unknown.value
-                                    }
-                                )
-                                foundAny = true
+                        } catch (_: Exception) { }
+                    }
+                } catch (_: Exception) { }
+            }
+            return foundAny
+        } else {
+            // Movie: newline-separated nexdrive URLs
+            val redirectUrls = data.split("\n").map { it.trim() }.filter { it.isNotBlank() }
+            if (redirectUrls.isEmpty()) return false
+
+            var foundAny = false
+            for (redirectUrl in redirectUrls) {
+                try {
+                    val links = resolveRedirectPage(redirectUrl)
+                    for (link in links) {
+                        try {
+                            if (link.contains("fastdl")) {
+                                val directUrl = resolveFastDl(link)
+                                if (directUrl != null) {
+                                    callback.invoke(
+                                        newExtractorLink(
+                                            source = "TheMoviesFlix",
+                                            name = "G-Direct [FastDL]",
+                                            url = directUrl,
+                                            type = ExtractorLinkType.VIDEO
+                                        ) {
+                                            this.quality = Qualities.Unknown.value
+                                        }
+                                    )
+                                    foundAny = true
+                                }
+                            } else if (link.contains("filebee") || link.contains("filepress")) {
+                                val directUrl = resolveFilePress(link)
+                                if (directUrl != null) {
+                                    callback.invoke(
+                                        newExtractorLink(
+                                            source = "TheMoviesFlix",
+                                            name = "G-Direct [FilePress]",
+                                            url = directUrl,
+                                            type = ExtractorLinkType.VIDEO
+                                        ) {
+                                            this.quality = Qualities.Unknown.value
+                                        }
+                                    )
+                                    foundAny = true
+                                }
+                            } else {
+                                val loaded = loadExtractor(link, "https://nexdrive.fit/", subtitleCallback, callback)
+                                if (loaded) foundAny = true
                             }
-                        }
-                        // For all other hosts, try CloudStream's built-in extractors
-                        // (handles vcloud.zip, gofile, 1fichier, megaup, pixeldrain, etc.)
-                        else {
-                            val loaded = loadExtractor(link, "https://nexdrive.fit/", subtitleCallback, callback)
-                            if (loaded) foundAny = true
-                        }
-                    } catch (_: Exception) { }
-                }
-            } catch (_: Exception) { }
+                        } catch (_: Exception) { }
+                    }
+                } catch (_: Exception) { }
+            }
+            return foundAny
         }
+    }
 
-        return foundAny
+    // ============================================================
+    //  Helper: Extract quality label from nexdrive URL context
+    // ============================================================
+    private fun getQualityFromUrl(url: String): String {
+        // We can't know the quality from the URL alone, but we can return empty
+        // and let the user pick. The quality info is in the nexdrive page title.
+        return ""
+    }
+
+    // ============================================================
+    //  Helper: Fetch nexdrive page and extract download links for a SPECIFIC episode
+    // ============================================================
+    //  The nexdrive page has h4 headings like "-:Episodes: N:-" followed by
+    //  a <p> tag with download links. This function finds the links for the
+    //  requested episode number.
+    //
+    private suspend fun resolveNexdriveEpisodeLinks(url: String, episodeNum: Int): List<String> {
+        return try {
+            val fixedUrl = url.replace("mobilejsr.rest", "nexdrive.fit")
+            val doc = app.get(fixedUrl, headers = baseHeaders + ("Referer" to "$mainUrl/")).document
+            val article = doc.selectFirst("article") ?: return emptyList()
+
+            // Find the h4 heading for the requested episode
+            for (h4 in article.select("h4")) {
+                val text = h4.text().trim()
+                if (!text.contains("Episode", ignoreCase = true)) continue
+
+                val epNum = Regex("""Episode[s]?\s*:\s*(\d+)""", RegexOption.IGNORE_CASE)
+                    .find(text)?.groupValues?.get(1)?.toIntOrNull() ?: continue
+
+                if (epNum != episodeNum) continue
+
+                // Found the right episode — extract links from the next sibling <p>
+                var sibling = h4.nextElementSibling()
+                val links = mutableListOf<String>()
+                var attempts = 0
+                while (sibling != null && attempts < 3) {
+                    for (a in sibling.select("a[href]")) {
+                        val href = a.attr("href").trim()
+                        if (href.isNotBlank() && !href.startsWith("#")) {
+                            links.add(href)
+                        }
+                    }
+                    if (links.isNotEmpty()) break
+                    sibling = sibling.nextElementSibling()
+                    attempts++
+                }
+                return links
+            }
+
+            // If no episode headings found, return ALL download links on the page
+            // (handles the case where the nexdrive page is for a single episode/complete season)
+            val allLinks = mutableListOf<String>()
+            for (a in article.select("a[href]")) {
+                val href = a.attr("href").trim()
+                if (href.isNotBlank() && !href.startsWith("#") &&
+                    (href.contains("fastdl") || href.contains("filebee") ||
+                     href.contains("filepress") || href.contains("vcloud") ||
+                     href.contains("gofile") || href.contains("gdrive"))) {
+                    allLinks.add(href)
+                }
+            }
+            allLinks
+        } catch (_: Exception) {
+            emptyList()
+        }
     }
 
     // ============================================================

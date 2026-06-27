@@ -2,7 +2,7 @@ version = 4
 
 cloudstream {
     language = "en"
-    description = "Download movies & TV series in multiple qualities - TheMoviesFlix Provider"
+    description = "Download and stream movies & TV series HINDI,ENGLISH - TheMoviesFlix Provider"
     authors = listOf("raghav")
 
     status = 1

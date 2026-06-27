@@ -176,7 +176,7 @@ class TheMoviesFlix : MainAPI() {
                 this.tags = genres
                 this.score = rating?.let { Score.from10(it) }
                 this.actors = cast
-                this.runTime = runtime
+                this.duration = runtime
                 if (imdbId != null) addImdbId(imdbId)
                 if (trailer != null) addTrailer(trailer)
             }
@@ -190,7 +190,7 @@ class TheMoviesFlix : MainAPI() {
                 this.tags = genres
                 this.score = rating?.let { Score.from10(it) }
                 this.actors = cast
-                this.runTime = runtime
+                this.duration = runtime
                 if (imdbId != null) addImdbId(imdbId)
                 if (trailer != null) addTrailer(trailer)
             }
@@ -391,3 +391,5 @@ class TheMoviesFlix : MainAPI() {
         }
     }
 }
+
+

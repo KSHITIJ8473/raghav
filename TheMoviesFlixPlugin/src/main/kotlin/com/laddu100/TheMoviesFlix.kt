@@ -99,10 +99,10 @@ class TheMoviesFlix : MainAPI() {
 
     private fun getSearchQuality(text: String): SearchQuality? {
         return when {
-            text.contains("2160p", true) || text.contains("4K", true) -> SearchQuality.P2160
-            text.contains("1080p", true) -> SearchQuality.P1080
-            text.contains("720p", true) -> SearchQuality.P720
-            text.contains("480p", true) -> SearchQuality.P480
+            text.contains("2160p", true) || text.contains("4K", true) || text.contains("UHD", true) -> SearchQuality.FourK
+            text.contains("1080p", true) || text.contains("FullHD", true) -> SearchQuality.HD
+            text.contains("720p", true) -> SearchQuality.SD
+            text.contains("480p", true) -> SearchQuality.SD
             else -> null
         }
     }
@@ -176,7 +176,7 @@ class TheMoviesFlix : MainAPI() {
                 this.tags = genres
                 this.score = rating?.let { Score.from10(it) }
                 this.actors = cast
-                this.runtime = runtime
+                this.runTime = runtime
                 if (imdbId != null) addImdbId(imdbId)
                 if (trailer != null) addTrailer(trailer)
             }
@@ -190,7 +190,7 @@ class TheMoviesFlix : MainAPI() {
                 this.tags = genres
                 this.score = rating?.let { Score.from10(it) }
                 this.actors = cast
-                this.runtime = runtime
+                this.runTime = runtime
                 if (imdbId != null) addImdbId(imdbId)
                 if (trailer != null) addTrailer(trailer)
             }

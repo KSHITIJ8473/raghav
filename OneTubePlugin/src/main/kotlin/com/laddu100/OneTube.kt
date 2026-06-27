@@ -8,6 +8,7 @@ import com.lagradost.cloudstream3.MainAPI
 import com.lagradost.cloudstream3.MainPageRequest
 import com.lagradost.cloudstream3.SearchResponse
 import com.lagradost.cloudstream3.ShowStatus
+import com.lagradost.cloudstream3.Score
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.TvType
 import com.lagradost.cloudstream3.app
@@ -98,8 +99,6 @@ class OneTube : MainAPI() {
         val plot = details.overview
         val year = (details.release_date ?: details.first_air_date)?.substring(0, 4)?.toIntOrNull()
         val tags = details.genres?.map { it.name } ?: emptyList()
-        val rating = details.vote_average?.let { (it * 10).toInt() }
-        val runtime = details.runtime?.takeIf { it > 0 } ?: details.episode_run_time?.firstOrNull()
 
         val showStatus = when (details.status?.lowercase()) {
             "released", "ended", "canceled" -> ShowStatus.Completed
@@ -120,15 +119,14 @@ class OneTube : MainAPI() {
                 this.year = year
                 this.plot = plot
                 this.tags = tags
-                this.rating = rating
-                this.runtime = runtime
+                this.score = details.vote_average?.let { Score.from10(it.toFloat()) }
                 this.recommendations = recs
             }
         }
 
         // TV series — fetch every season's episodes
         val seasons = details.seasons?.filter { it.season_number != null } ?: emptyList()
-        val episodeMap = mutableMapOf<Int, List<com.lagradost.cloudstream3.Episode>>()
+        val allEpisodes = mutableListOf<com.lagradost.cloudstream3.Episode>()
 
         for (season in seasons) {
             val seasonNum = season.season_number!!
@@ -147,22 +145,20 @@ class OneTube : MainAPI() {
                     this.season = seasonNum
                     this.posterUrl = ep.still_path?.let { imgBase + it }
                     this.description = ep.overview
-                    this.rating = ep.vote_average?.let { (it * 10).toInt() }
-                    this.runtime = ep.runtime
+                    this.score = ep.vote_average?.let { Score.from10(it.toFloat()) }
+                    this.runTime = ep.runtime
                 }
             }
-            if (episodes.isNotEmpty()) {
-                episodeMap[seasonNum] = episodes
-            }
+            allEpisodes += episodes
         }
 
-        return newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodeMap) {
+        return newTvSeriesLoadResponse(title, url, TvType.TvSeries, allEpisodes) {
             this.posterUrl = poster
             this.backgroundPosterUrl = bg
             this.year = year
             this.plot = plot
             this.tags = tags
-            this.rating = rating
+            this.score = details.vote_average?.let { Score.from10(it.toFloat()) }
             this.showStatus = showStatus
             this.recommendations = recs
         }

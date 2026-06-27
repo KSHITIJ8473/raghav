@@ -42,7 +42,8 @@ class OneTube : MainAPI() {
     override val hasDownloadSupport = true
     override val supportedTypes = setOf(
         TvType.Movie,
-        TvType.TvSeries
+        TvType.TvSeries,
+        TvType.Anime
     )
 
     /**
@@ -62,18 +63,24 @@ class OneTube : MainAPI() {
     //  Homepage — uses the /api/shawts endpoint
     // ============================================================
     override val mainPage = mainPageOf(
-        "movie" to "Latest Movies",
-        "tv" to "Latest Series",
-        "all" to "Trending Now"
+        "shawts?type=movie&" to "Latest Movies",
+        "shawts?type=tv&" to "Latest Series",
+        "shawts?type=all&" to "Trending Now",
+        "discover/trending?" to "Trending Shows",
+        "discover/tv?" to "Popular Series"
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val type = request.data
-        val url = "$mainUrl/api/shawts?type=$type&page=$page"
+        // type ends with "&" for shawts endpoints (e.g. "shawts?type=movie&")
+        // and "?" for discover endpoints (e.g. "discover/trending?")
+        val url = "$mainUrl/api/$type$page=$page"
         val response = app.get(url, headers = baseHeaders).parsedSafe<ShawtsResponse>()
             ?: return newHomePageResponse(request.name, emptyList())
-        val items = response.results.map { it.toSearchResponse() }
-        return newHomePageResponse(request.name, items, hasNext = response.has_more)
+        val items = response.results.mapNotNull { it.toSearchResponse() }
+        // has_more may be null for discover endpoints — infer from total_pages
+        val hasNext = response.has_more ?: (response.total_pages != null && page < (response.total_pages ?: 1))
+        return newHomePageResponse(request.name, items, hasNext = hasNext)
     }
 
     // ============================================================
@@ -88,7 +95,7 @@ class OneTube : MainAPI() {
             val totalPages = response.total_pages ?: 1
             if (p >= totalPages) break
         }
-        return allResults.map { it.toSearchResponse() }
+        return allResults.mapNotNull { it.toSearchResponse() }
     }
 
     // ============================================================
@@ -116,7 +123,7 @@ class OneTube : MainAPI() {
 
         val recUrl = "$mainUrl/api/recommendations/$tmdbId?type=$mediaType"
         val recs = app.get(recUrl, headers = baseHeaders).parsedSafe<RecommendationsResponse>()
-            ?.results?.map { it.toSearchResponse() } ?: emptyList()
+            ?.results?.mapNotNull { it.toSearchResponse() } ?: emptyList()
 
         if (mediaType == "movie") {
             // Movie — data string: movie|<tmdbId>|0|0|<title>|<year>|<imdbId>
@@ -683,16 +690,24 @@ class OneTube : MainAPI() {
     // ============================================================
     //  Helpers: convert JSON results to SearchResponse
     // ============================================================
-    private fun SearchResult.toSearchResponse(): SearchResponse {
-        val id = this.id ?: return newMovieSearchResponse("", "", TvType.Movie) {}
-        val mediaType = this.media_type ?: if (first_air_date != null) "tv" else "movie"
-        val title = this.title ?: this.name ?: ""
+    private fun SearchResult.toSearchResponse(): SearchResponse? {
+        val id = this.id ?: return null
+        // Skip "person" results (TMDB sometimes returns cast/crew in search)
+        val mediaType = when (this.media_type) {
+            "tv" -> "tv"
+            "movie" -> "movie"
+            else -> if (first_air_date != null) "tv" else "movie"
+        }
+        val title = (this.title ?: this.name)?.takeIf { it.isNotBlank() } ?: return null
         val poster = poster_path?.let { imgBase + it }
         val year = (release_date ?: first_air_date)?.substring(0, 4)?.toIntOrNull()
         val url = "$mainUrl/watch/$id?type=$mediaType"
+        // Detect anime: TMDB genre 16 = Animation, original_language = ja
+        val isAnime = (genre_ids?.contains(16) == true && original_language == "ja")
+        val tvType = if (isAnime) TvType.Anime else if (mediaType == "tv") TvType.TvSeries else TvType.Movie
 
-        return if (mediaType == "tv") {
-            newTvSeriesSearchResponse(title, url, TvType.TvSeries) {
+        return if (mediaType == "tv" || isAnime) {
+            newTvSeriesSearchResponse(title, url, tvType) {
                 this.posterUrl = poster
                 this.year = year
             }
@@ -704,10 +719,14 @@ class OneTube : MainAPI() {
         }
     }
 
-    private fun RecResult.toSearchResponse(): SearchResponse {
-        val id = this.id ?: return newMovieSearchResponse("", "", TvType.Movie) {}
-        val mediaType = this.media_type ?: if (first_air_date != null) "tv" else "movie"
-        val title = this.title ?: this.name ?: ""
+    private fun RecResult.toSearchResponse(): SearchResponse? {
+        val id = this.id ?: return null
+        val mediaType = when (this.media_type) {
+            "tv" -> "tv"
+            "movie" -> "movie"
+            else -> if (first_air_date != null) "tv" else "movie"
+        }
+        val title = (this.title ?: this.name)?.takeIf { it.isNotBlank() } ?: return null
         val poster = poster_path?.let { imgBase + it }
         val year = (release_date ?: first_air_date)?.substring(0, 4)?.toIntOrNull()
         val url = "$mainUrl/watch/$id?type=$mediaType"
@@ -731,8 +750,9 @@ class OneTube : MainAPI() {
     @JsonIgnoreProperties(ignoreUnknown = true)
     data class ShawtsResponse(
         @JsonProperty("results") val results: List<SearchResult>,
-        @JsonProperty("page") val page: Int,
-        @JsonProperty("has_more") val has_more: Boolean
+        @JsonProperty("page") val page: Int?,
+        @JsonProperty("has_more") val has_more: Boolean?,
+        @JsonProperty("total_pages") val total_pages: Int?
     )
 
     @JsonIgnoreProperties(ignoreUnknown = true)
@@ -753,7 +773,8 @@ class OneTube : MainAPI() {
         @JsonProperty("release_date") val release_date: String?,
         @JsonProperty("first_air_date") val first_air_date: String?,
         @JsonProperty("overview") val overview: String?,
-        @JsonProperty("vote_average") val vote_average: Double?
+        @JsonProperty("genre_ids") val genre_ids: List<Int>?,
+        @JsonProperty("original_language") val original_language: String?
     )
 
     @JsonIgnoreProperties(ignoreUnknown = true)

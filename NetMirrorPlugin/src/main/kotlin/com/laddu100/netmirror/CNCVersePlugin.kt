@@ -1,16 +1,18 @@
-package com.laddu100
+package com.laddu100.netmirror
 
 import com.lagradost.cloudstream3.plugins.CloudstreamPlugin
 import com.lagradost.cloudstream3.plugins.Plugin
 import android.content.Context
 
 @CloudstreamPlugin
-open class NetMirrorPlugin : Plugin() {
+open class CNCVersePlugin: Plugin() {
     override fun load(context: Context) {
-        NetMirrorStorage.init(context.applicationContext)
+        // All providers should be added in this manner. Please don't edit the providers list directly.
+        NetflixMirrorStorage.init(context.applicationContext)
         registerMainAPI(NetflixMirrorProvider())
         registerMainAPI(PrimeVideoMirrorProvider())
         registerMainAPI(HotStarMirrorProvider())
         registerMainAPI(DisneyPlusProvider())
     }
+
 }

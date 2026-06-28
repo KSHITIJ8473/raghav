@@ -1,4 +1,4 @@
-package com.laddu100
+package com.laddu100.netmirror
 
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
@@ -17,9 +17,9 @@ import com.lagradost.api.Log
 import org.json.JSONObject
 import java.util.UUID
 import okhttp3.Request
-import java.util.Base64
+import android.util.Base64
 
-val netMirrorJsonParser = object : ResponseParser {
+val JSONParser = object : ResponseParser {
     val mapper: ObjectMapper = jacksonObjectMapper().configure(
         DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false
     ).configure(
@@ -43,17 +43,17 @@ val netMirrorJsonParser = object : ResponseParser {
     }
 }
 
-val netMirrorClient = Requests(responseParser = netMirrorJsonParser).apply {
+val app = Requests(responseParser = JSONParser).apply {
     defaultHeaders = mapOf("User-Agent" to USER_AGENT)
 }
 
 inline fun <reified T : Any> parseJson(text: String): T {
-    return netMirrorJsonParser.parse(text, T::class)
+    return JSONParser.parse(text, T::class)
 }
 
 inline fun <reified T : Any> tryParseJson(text: String): T? {
     return try {
-        return netMirrorJsonParser.parseSafe(text, T::class)
+        return JSONParser.parseSafe(text, T::class)
     } catch (e: Exception) {
         e.printStackTrace()
         null
@@ -61,26 +61,29 @@ inline fun <reified T : Any> tryParseJson(text: String): T? {
 }
 
 fun convertRuntimeToMinutes(runtime: String): Int {
-    var minutesCount = 0
+    var totalMinutes = 0
+
     val parts = runtime.split(" ")
+
     for (part in parts) {
         when {
             part.endsWith("h") -> {
                 val hours = part.removeSuffix("h").trim().toIntOrNull() ?: 0
-                minutesCount += hours * 60
+                totalMinutes += hours * 60
             }
             part.endsWith("m") -> {
                 val minutes = part.removeSuffix("m").trim().toIntOrNull() ?: 0
-                minutesCount += minutes
+                totalMinutes += minutes
             }
         }
     }
-    return minutesCount
+
+    return totalMinutes
 }
 
 suspend fun bypass(newUrl: String): String {
     // Check persistent storage first
-    val (savedCookie, savedTimestamp) = NetMirrorStorage.getCookie()
+    val (savedCookie, savedTimestamp) = NetflixMirrorStorage.getCookie()
 
     // Return cached cookie if valid (≤15 hours old)
     if (!savedCookie.isNullOrEmpty() && System.currentTimeMillis() - savedTimestamp < 54_000_000) {
@@ -88,14 +91,14 @@ suspend fun bypass(newUrl: String): String {
     }
 
     val newCookie = try {
-        val requestHeaders = mapOf(
+        val headers = mapOf(
             "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
             "Accept-Encoding" to "gzip, deflate, br, zstd",
             "Accept-Language" to "en-US,en;q=0.9",
             "Cache-Control" to "max-age=0",
             "Connection" to "keep-alive",
             "Content-Type" to "application/x-www-form-urlencoded",
-            "Origin" to newUrl,
+            "Origin" to "$newUrl",
             "Referer" to "$newUrl/verify2",
             "sec-ch-ua" to "\"Google Chrome\";v=\"147\", \"Not.A/Brand\";v=\"8\", \"Chromium\";v=\"147\"",
             "sec-ch-ua-mobile" to "?0",
@@ -110,7 +113,7 @@ suspend fun bypass(newUrl: String): String {
         val formBody = FormBody.Builder()
             .add("g-recaptcha-response", UUID.randomUUID().toString())
             .build()
-        val client = netMirrorClient.baseClient.newBuilder()
+        val client = app.baseClient.newBuilder()
             .followRedirects(false)
             .followSslRedirects(false)
             .build()
@@ -118,7 +121,7 @@ suspend fun bypass(newUrl: String): String {
             .url("https://net52.cc/verify.php")
             .post(formBody)
             .apply {
-                requestHeaders.forEach { (key, value) ->
+                headers.forEach { (key, value) ->
                     addHeader(key, value)
                 }
             }
@@ -132,13 +135,13 @@ suspend fun bypass(newUrl: String): String {
         }
     } catch (e: Exception) {
         // Clear invalid cookie on failure
-        NetMirrorStorage.clearCookie()
+        NetflixMirrorStorage.clearCookie()
         throw e
     }
 
     // Persist the new cookie
     if (newCookie.isNotEmpty()) {
-        NetMirrorStorage.saveCookie(newCookie)
+        NetflixMirrorStorage.saveCookie(newCookie)
     }
     return newCookie
 }
@@ -180,7 +183,7 @@ val newTvDomains = listOf(
 )
 
 fun decodeBase64(value: String): String {
-    return String(Base64.getDecoder().decode(value))
+    return String(Base64.decode(value, Base64.DEFAULT))
 }
 
 private var resolvedApiUrl: String = ""
@@ -190,7 +193,7 @@ suspend fun resolveApiUrl(): String {
     for (encoded in newTvDomains) {
         val base = decodeBase64(encoded).trimEnd('/')
         try {
-            val response = netMirrorClient.get("$base/checknewtv.php", headers = newTvBaseHeaders)
+            val response = app.get("$base/checknewtv.php", headers = newTvBaseHeaders)
                 .parsed<NewTvTokenResponse>()
             val tokenHash = response.token_hash
             if (!tokenHash.isNullOrBlank()) {
@@ -198,7 +201,7 @@ suspend fun resolveApiUrl(): String {
                 return resolvedApiUrl
             }
         } catch (_: Exception) {
-            // Try next domain
+            // Try next domain.
         }
     }
     throw Exception("Failed to resolve NewTV API base URL")

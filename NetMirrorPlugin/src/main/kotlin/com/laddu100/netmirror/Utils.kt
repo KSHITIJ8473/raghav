@@ -2,10 +2,6 @@ package com.laddu100.netmirror
 
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
-import com.fasterxml.jackson.core.json.JsonReadFeature
-import com.fasterxml.jackson.databind.DeserializationFeature
-import com.fasterxml.jackson.databind.ObjectMapper
-import com.fasterxml.jackson.module.kotlin.registerKotlinModule
 import com.lagradost.cloudstream3.USER_AGENT
 import com.lagradost.nicehttp.Requests
 import com.lagradost.nicehttp.ResponseParser
@@ -18,28 +14,28 @@ import org.json.JSONObject
 import java.util.UUID
 import okhttp3.Request
 import android.util.Base64
+import com.google.gson.Gson
+import com.google.gson.GsonBuilder
+
+val gson: Gson = GsonBuilder()
+    .setLenient()
+    .create()
 
 val JSONParser = object : ResponseParser {
-    val mapper: ObjectMapper = ObjectMapper().registerKotlinModule().configure(
-        DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false
-    ).configure(
-        JsonReadFeature.ALLOW_UNESCAPED_CONTROL_CHARS.mappedFeature(), true
-    )
-
     override fun <T : Any> parse(text: String, kClass: KClass<T>): T {
-        return mapper.readValue(text, kClass.java)
+        return gson.fromJson(text, kClass.java)
     }
 
     override fun <T : Any> parseSafe(text: String, kClass: KClass<T>): T? {
         return try {
-            mapper.readValue(text, kClass.java)
+            gson.fromJson(text, kClass.java)
         } catch (e: Exception) {
             null
         }
     }
 
     override fun writeValueAsString(obj: Any): String {
-        return mapper.writeValueAsString(obj)
+        return gson.toJson(obj)
     }
 }
 

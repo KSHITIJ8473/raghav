@@ -2,7 +2,7 @@ version = 1
 
 cloudstream {
     language = "en"
-    description = "ONE STOP SOLUTION FOR ANIME(SUB,DUB)-MULTI SOURCE"
+    description = "ANIME(SUB,DUB)-MULTI SOURCE"
     authors = listOf("raghav")
 
     status = 1

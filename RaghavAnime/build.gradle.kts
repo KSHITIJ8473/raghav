@@ -2,7 +2,7 @@ version = 1
 
 cloudstream {
     language = "en"
-    description = "Raghav Aggregated Anime Plugin (Loads Miruro, AniSuge, AniWaves, Anikai, AniDb, Anikage, AniNeko in one)"
+    description = "ONE STOP SOLUTION FOR ANIME(SUB,DUB) - Raghav Aggregated Anime Pluginn )"
     authors = listOf("raghav")
 
     status = 1

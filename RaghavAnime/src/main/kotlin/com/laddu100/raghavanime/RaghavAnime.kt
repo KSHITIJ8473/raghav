@@ -25,16 +25,63 @@ class RaghavAnime : MainAPI() {
         "TRENDING" to "Trending Now",
         "POPULAR" to "Popular This Season",
         "RECENT" to "Recently Updated",
+        "ACTION" to "Action & Adventure",
+        "FANTASY" to "Fantasy & Magic",
+        "SCIFI" to "Sci-Fi & Mecha",
+        "ROMANCE" to "Romance & Drama",
+        "COMEDY" to "Comedy & Slice of Life",
+        "MOVIES" to "Top Rated Movies",
+        "TOP_RATED" to "Top Rated Series"
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val query = when (request.data) {
-            "TRENDING" -> TRENDING_QUERY
-            "POPULAR" -> POPULAR_QUERY
-            "RECENT" -> RECENT_QUERY
-            else -> TRENDING_QUERY
+        val query = HOMEPAGE_QUERY
+        val variables = mutableMapOf<String, Any?>("page" to page, "perPage" to 20)
+
+        when (request.data) {
+            "TRENDING" -> {
+                variables["sort"] = listOf("TRENDING_DESC", "POPULARITY_DESC")
+            }
+            "POPULAR" -> {
+                variables["sort"] = listOf("POPULARITY_DESC")
+            }
+            "RECENT" -> {
+                variables["sort"] = listOf("START_DATE_DESC")
+                variables["status"] = "RELEASING"
+            }
+            "ACTION" -> {
+                variables["sort"] = listOf("TRENDING_DESC", "POPULARITY_DESC")
+                variables["genreIn"] = listOf("Action", "Adventure")
+            }
+            "FANTASY" -> {
+                variables["sort"] = listOf("TRENDING_DESC", "POPULARITY_DESC")
+                variables["genreIn"] = listOf("Fantasy")
+            }
+            "SCIFI" -> {
+                variables["sort"] = listOf("TRENDING_DESC", "POPULARITY_DESC")
+                variables["genreIn"] = listOf("Sci-Fi")
+            }
+            "ROMANCE" -> {
+                variables["sort"] = listOf("TRENDING_DESC", "POPULARITY_DESC")
+                variables["genreIn"] = listOf("Romance", "Drama")
+            }
+            "COMEDY" -> {
+                variables["sort"] = listOf("TRENDING_DESC", "POPULARITY_DESC")
+                variables["genreIn"] = listOf("Comedy")
+            }
+            "MOVIES" -> {
+                variables["sort"] = listOf("SCORE_DESC")
+                variables["format"] = "MOVIE"
+            }
+            "TOP_RATED" -> {
+                variables["sort"] = listOf("SCORE_DESC")
+                variables["format"] = "TV"
+            }
+            else -> {
+                variables["sort"] = listOf("TRENDING_DESC", "POPULARITY_DESC")
+            }
         }
-        val variables = mapOf("page" to page, "perPage" to 20)
+
         val responseText = anilistQuery(query, variables)
         val response = parseJson<AniListResponse>(responseText)
         val mediaList = response.data?.Page?.media ?: emptyList()
@@ -381,3 +428,21 @@ class RaghavAnime : MainAPI() {
         val year: Int?
     )
 }
+
+val HOMEPAGE_QUERY = """
+    query (${'$'}page: Int, ${'$'}perPage: Int, ${'$'}sort: [MediaSort], ${'$'}genreIn: [String], ${'$'}format: MediaFormat, ${'$'}status: MediaStatus) {
+        Page(page: ${'$'}page, perPage: ${'$'}perPage) {
+            media(type: ANIME, sort: ${'$'}sort, genre_in: ${'$'}genreIn, format: ${'$'}format, status: ${'$'}status) {
+                id
+                title { romaji english native }
+                coverImage { large extraLarge }
+                format
+                episodes
+                status
+                seasonYear
+                averageScore
+                genres
+            }
+        }
+    }
+""".trimIndent()

@@ -1,0 +1,489 @@
+package com.laddu100.raghavanime
+
+import com.lagradost.cloudstream3.DubStatus
+import com.lagradost.cloudstream3.Episode
+import com.lagradost.cloudstream3.HomePageResponse
+import com.lagradost.cloudstream3.LoadResponse
+import com.lagradost.cloudstream3.MainAPI
+import com.lagradost.cloudstream3.MainPageRequest
+import com.lagradost.cloudstream3.SearchResponse
+import com.lagradost.cloudstream3.ShowStatus
+import com.lagradost.cloudstream3.SubtitleFile
+import com.lagradost.cloudstream3.newSubtitleFile
+import com.lagradost.cloudstream3.TvType
+import com.lagradost.cloudstream3.addDubStatus
+import com.lagradost.cloudstream3.addEpisodes
+import com.lagradost.cloudstream3.app
+import com.lagradost.cloudstream3.fixUrl
+import com.lagradost.cloudstream3.mainPageOf
+import com.lagradost.cloudstream3.newAnimeLoadResponse
+import com.lagradost.cloudstream3.newAnimeSearchResponse
+import com.lagradost.cloudstream3.newEpisode
+import com.lagradost.cloudstream3.newHomePageResponse
+import com.lagradost.cloudstream3.utils.ExtractorLink
+import com.lagradost.cloudstream3.utils.ExtractorLinkType
+import com.lagradost.cloudstream3.utils.newExtractorLink
+import com.lagradost.cloudstream3.utils.loadExtractor
+import java.net.URL
+import java.net.URLDecoder
+
+class Anikai : MainAPI() {
+    override var mainUrl = "https://www3.anikai.cc"
+    override var name = "Anikai"
+    override val hasMainPage = true
+    override var lang = "en"
+    override val hasDownloadSupport = true
+    override val supportedTypes = setOf(
+        TvType.Anime,
+        TvType.AnimeMovie,
+        TvType.OVA
+    )
+
+    override val mainPage = mainPageOf(
+        "latest-updates" to "Latest Updates",
+        "New Releases" to "New Releases",
+        "Top Airing" to "Top Airing",
+        "Completed" to "Completed"
+    )
+
+    // ============================================================
+    //  A. HOMEPAGE
+    // ============================================================
+    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+        val doc = app.get("$mainUrl/home").document
+        val home = mutableListOf<SearchResponse>()
+        val category = request.data
+
+        if (category == "latest-updates") {
+            val items = doc.select(".r-update .aitem, .load-widget .aitem")
+            for (item in items) {
+                val aTag = item.selectFirst("a.poster") ?: continue
+                var href = aTag.attr("href")
+                href = href.replace(Regex("/ep-\\d+$"), "")
+                val fixHref = fixUrl(href)
+                val title = item.selectFirst(".title")?.text()?.trim() ?: continue
+                val img = item.selectFirst("img")?.let { it.attr("data-src").ifEmpty { it.attr("src") } } ?: ""
+
+                val hasDub = item.select(".dub").isNotEmpty()
+                val hasSub = item.select(".sub").isNotEmpty()
+
+                home.add(newAnimeSearchResponse(title, fixHref, TvType.Anime) {
+                    this.posterUrl = img
+                    addDubStatus(dubExist = hasDub, subExist = hasSub || !hasDub)
+                })
+            }
+        } else {
+            val section = doc.select("div.inner, section.swiper-slide").firstOrNull { sec ->
+                sec.select("span.stitle").text().contains(category, ignoreCase = true)
+            }
+            if (section != null) {
+                val items = section.select(".aitem")
+                for (item in items) {
+                    var href = item.attr("href").ifEmpty { item.selectFirst("a")?.attr("href") } ?: continue
+                    href = href.replace(Regex("/ep-\\d+$"), "")
+                    val fixHref = fixUrl(href)
+                    val title = item.selectFirst(".title")?.text()?.trim() ?: continue
+                    val img = item.selectFirst("img")?.let { it.attr("data-src").ifEmpty { it.attr("src") } } ?: ""
+
+                    val hasDub = item.select(".dub").isNotEmpty()
+                    val hasSub = item.select(".sub").isNotEmpty()
+
+                    home.add(newAnimeSearchResponse(title, fixHref, TvType.Anime) {
+                        this.posterUrl = img
+                        addDubStatus(dubExist = hasDub, subExist = hasSub || !hasDub)
+                    })
+                }
+            }
+        }
+
+        return newHomePageResponse(request.name, home)
+    }
+
+    // ============================================================
+    //  B. SEARCH
+    // ============================================================
+    override suspend fun search(query: String): List<SearchResponse> {
+        val url = "$mainUrl/browser?keyword=${java.net.URLEncoder.encode(query, "utf-8")}"
+        val doc = app.get(url).document
+        val results = mutableListOf<SearchResponse>()
+
+        val items = doc.select(".aitem")
+        for (item in items) {
+            val aTag = item.selectFirst("a.poster") ?: continue
+            var href = aTag.attr("href")
+            href = href.replace(Regex("/ep-\\d+$"), "")
+            val fixHref = fixUrl(href)
+            val title = item.selectFirst(".title")?.text()?.trim() ?: continue
+            val img = item.selectFirst("img")?.let { it.attr("data-src").ifEmpty { it.attr("src") } } ?: ""
+
+            val hasDub = item.select(".dub").isNotEmpty()
+            val hasSub = item.select(".sub").isNotEmpty()
+
+            results.add(newAnimeSearchResponse(title, fixHref, TvType.Anime) {
+                this.posterUrl = img
+                addDubStatus(dubExist = hasDub, subExist = hasSub || !hasDub)
+            })
+        }
+
+        return results
+    }
+
+    // ============================================================
+    //  C. LOAD (details + episode list with sub/dub separation)
+    // ============================================================
+    //
+    //  The episode list HTML has <a> tags with data-sub / data-dub / data-hsub
+    //  attributes that mark which audio tracks are available for that episode.
+    //
+    //  We add the SAME episode URL to both the Subbed and Dubbed lists, but
+    //  with DIFFERENT data string prefixes:
+    //    - Subbed list:  "sub|<watchUrl>"
+    //    - Dubbed list:  "dub|<watchUrl>"
+    //
+    //  When the user picks an episode from the Dubbed tab in CloudStream,
+    //  loadLinks receives "dub|<watchUrl>" and knows to select the dub
+    //  server-items group.
+    //
+    override suspend fun load(url: String): LoadResponse? {
+        val doc = app.get(url).document
+
+        val title = doc.selectFirst("h1.title")?.text()?.trim() ?: return null
+        val jpTitle = doc.selectFirst("h1.title")?.attr("data-jp")
+        val posterUrl = doc.selectFirst(".poster img")?.attr("src")
+            ?: doc.selectFirst("img[itemprop=image]")?.attr("src")
+        val backgroundUrl = doc.selectFirst(".watch-section-bg")?.attr("style")?.let { style ->
+            Regex("""url\(['"]?([^'")]+)['"]?\)""").find(style)?.groupValues?.get(1)
+        }
+        val plot = doc.selectFirst(".desc.text-expand")?.text()?.trim()
+            ?: doc.selectFirst(".desc")?.text()?.trim()
+        val year = doc.selectFirst("a[href*=year]")?.text()?.trim()?.toIntOrNull()
+        val tags = doc.select("a[href*=/genres/]").map { it.text().replace(Regex("^,\\s*"), "").trim() }
+
+        val statusStr = doc.select("div").firstOrNull { it.text().contains("Status:") }
+            ?.selectFirst("span")?.text()?.trim()
+        val showStatus = when (statusStr?.lowercase()) {
+            "currently airing" -> ShowStatus.Ongoing
+            "finished airing", "completed" -> ShowStatus.Completed
+            else -> null
+        }
+
+        val typeStr = doc.select("div").firstOrNull { it.text().contains("Type:") }
+            ?.selectFirst("span")?.text()?.trim() ?: ""
+        val tvType = when (typeStr.lowercase()) {
+            "movie" -> TvType.AnimeMovie
+            "ova", "ona", "special" -> TvType.OVA
+            else -> TvType.Anime
+        }
+
+        val subEpisodes = mutableListOf<Episode>()
+        val dubEpisodes = mutableListOf<Episode>()
+
+        val epLinks = doc.select(".eplist ul.range li a")
+        for (ep in epLinks) {
+            val epHref = ep.attr("href")
+            if (epHref.isEmpty()) continue
+            val epNum = ep.attr("data-num").toIntOrNull() ?: continue
+            val name = ep.selectFirst("span[data-jp]")?.text()?.trim()?.ifEmpty { null }
+                ?: "Episode $epNum"
+
+            val hasHsub = ep.attr("data-hsub") == "1"
+            val hasSub  = ep.attr("data-sub") == "1"
+            val hasDub  = ep.attr("data-dub") == "1"
+
+            // Subbed: Japanese audio with subtitles (soft-sub or hard-sub)
+            if (hasSub || hasHsub) {
+                subEpisodes.add(newEpisode("sub|${fixUrl(epHref)}") {
+                    this.name = name
+                    this.episode = epNum
+                })
+            }
+            // Dubbed: English audio
+            if (hasDub) {
+                dubEpisodes.add(newEpisode("dub|${fixUrl(epHref)}") {
+                    this.name = name
+                    this.episode = epNum
+                })
+            }
+        }
+
+        return newAnimeLoadResponse(title, url, tvType) {
+            this.posterUrl = posterUrl
+            this.backgroundPosterUrl = backgroundUrl
+            this.year = year
+            this.plot = plot
+            this.tags = tags
+            this.showStatus = showStatus
+            if (jpTitle != null) this.japName = jpTitle
+            if (subEpisodes.isNotEmpty()) addEpisodes(DubStatus.Subbed, subEpisodes)
+            if (dubEpisodes.isNotEmpty()) addEpisodes(DubStatus.Dubbed, dubEpisodes)
+        }
+    }
+
+    // ============================================================
+    //  D. LOAD LINKS (the Sub/Dub fix)
+    // ============================================================
+    //
+    //  Data string format:  "<audioType>|<watchUrl>"
+    //    audioType = "sub" or "dub"
+    //
+    //  On the anikai.cc watch page, there are 3 separate divs:
+    //    <div class="server-items lang-group" data-id="hsub">  → hard-sub servers
+    //    <div class="server-items lang-group" data-id="sub">   → soft-sub servers
+    //    <div class="server-items lang-group" data-id="dub">   → dub servers
+    //
+    //  Each group has the SAME server names (HD-1, HD-2, etc.) but with
+    //  DIFFERENT data-video embed URLs. The dub embed URLs point to
+    //  completely separate streams on the host (different m3u8, different
+    //  audio track — verified by extracting and comparing audio MD5s).
+    //
+    //  FIX: We use a DIRECT CSS ATTRIBUTE SELECTOR — the same pattern used
+    //  by the working AnimeKai.to reference plugin:
+    //    doc.select("div.server-items[data-id=$type] span.server-video")
+    //
+    //  This is more reliable in Jsoup than .select().filter{} because it
+    //  lets Jsoup's CSS engine do the matching in one pass.
+    //
+    //  For "sub": collect from BOTH "sub" and "hsub" groups (soft-sub
+    //             preferred, hard-sub as fallback).
+    //  For "dub": collect from "dub" group ONLY — never mix in sub sources.
+    //
+    override suspend fun loadLinks(
+        data: String,
+        isCasting: Boolean,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
+        val parts = data.split("|")
+        if (parts.size < 2) return false
+
+        val dubOrSub = parts[0]
+        val watchUrl = parts[1]
+
+        val doc = app.get(watchUrl).document
+
+        // === SERVER GROUP SELECTION ===
+        // Determine which audio-type groups to collect servers from.
+        // Pattern adapted from the AnimeKai.to reference plugin.
+        val types = if ("sub" in dubOrSub) listOf("sub", "hsub") else listOf("dub")
+
+        // Use a direct CSS attribute selector for each type.
+        // This is the same pattern as: document.select("div.server-items[data-id=$type]")
+        val servers = types.flatMap { type ->
+            doc.select("div.server-items[data-id=$type] span.server-video")
+                .map { span -> Pair(type, span) }
+        }
+
+        if (servers.isEmpty()) return false
+
+        var foundAnySources = false
+
+        for ((type, server) in servers) {
+            val embedUrl = server.attr("data-video")
+            if (embedUrl.isEmpty()) continue
+            val serverName = server.text().trim()
+            val isDub = type == "dub"
+            val label = "$serverName (${if (isDub) "Dub" else "Sub"})"
+
+            // Step 1: extract subtitle URL from embed query string
+            try {
+                val urlObj = URL(embedUrl)
+                val query = urlObj.query ?: ""
+                val subParam = Regex("""(?:sub|caption_1|c1_file)=([^&]+)""").find(query)?.groupValues?.get(1)
+                if (subParam != null) {
+                    val decodedSub = URLDecoder.decode(subParam, "UTF-8")
+                    val subLabel = Regex("""(?:sub_1|c1_label)=([^&]+)""").find(query)?.groupValues?.get(1)
+                        ?.let { URLDecoder.decode(it, "UTF-8") } ?: "English"
+                    subtitleCallback.invoke(newSubtitleFile(subLabel, decodedSub))
+                }
+            } catch (_: Exception) {}
+
+            // Step 2: resolve the embed URL to a playable m3u8/mp4
+            try {
+                when {
+                    embedUrl.contains("vivibebe.site") || embedUrl.contains("bibiemb.xyz") -> {
+                        val embedHtml = app.get(embedUrl, headers = mapOf("Referer" to "$mainUrl/")).text
+                        val m3u8Url = Regex("""(https?://[^\s"']+\.m3u8[^\s"']*)""").find(embedHtml)?.groupValues?.get(1)
+                        if (m3u8Url != null) {
+                            callback.invoke(
+                                newExtractorLink(
+                                    source = name,
+                                    name = label,
+                                    url = m3u8Url,
+                                    type = ExtractorLinkType.M3U8
+                                ) {
+                                    this.headers = mapOf("Referer" to embedUrl)
+                                }
+                            )
+                            foundAnySources = true
+                        }
+                    }
+                    embedUrl.contains("otakuhg.site") || embedUrl.contains("otakuvid.online") || embedUrl.contains("earnvids.com") -> {
+                        val embedHtml = app.get(embedUrl, headers = mapOf("Referer" to "$mainUrl/")).text
+                        var m3u8Url = Regex("""(https?://[^\s"']+\.m3u8[^\s"']*)""").find(embedHtml)?.groupValues?.get(1)
+                        if (m3u8Url == null) {
+                            val unpacked = JsPacker.parseAndUnpack(embedHtml)
+                            if (unpacked != null) {
+                                m3u8Url = Regex("""(https?://[^\s"']+\.m3u8[^\s"']*)""").find(unpacked)?.groupValues?.get(1)
+                            }
+                        }
+                        if (m3u8Url != null) {
+                            callback.invoke(
+                                newExtractorLink(
+                                    source = name,
+                                    name = label,
+                                    url = m3u8Url,
+                                    type = ExtractorLinkType.M3U8
+                                ) {
+                                    this.headers = mapOf("Referer" to embedUrl)
+                                }
+                            )
+                            foundAnySources = true
+                        }
+                    }
+                    embedUrl.contains("playmogo.com") -> {
+                        val loaded = loadExtractor(embedUrl, watchUrl, subtitleCallback, callback)
+                        if (loaded) {
+                            foundAnySources = true
+                        }
+                    }
+                    else -> {
+                        val loaded = loadExtractor(embedUrl, watchUrl, subtitleCallback, callback)
+                        if (loaded) {
+                            foundAnySources = true
+                        } else {
+                            val embedHtml = app.get(embedUrl, headers = mapOf("Referer" to "$mainUrl/")).text
+                            val m3u8Url = Regex("""(https?://[^\s"']+\.m3u8[^\s"']*)""").find(embedHtml)?.groupValues?.get(1)
+                            if (m3u8Url != null) {
+                                callback.invoke(
+                                    newExtractorLink(
+                                        source = name,
+                                        name = label,
+                                        url = m3u8Url,
+                                        type = ExtractorLinkType.M3U8
+                                    ) {
+                                        this.headers = mapOf("Referer" to embedUrl)
+                                    }
+                                )
+                                foundAnySources = true
+                            }
+                        }
+                    }
+                }
+            } catch (_: Exception) {}
+        }
+
+        return foundAnySources
+    }
+}
+
+// ============================================================
+//  JsPacker — unpacks eval(function(p,a,c,k,e,d){...}) obfuscation
+// ============================================================
+object JsPacker {
+    private const val CHARS = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
+    private fun baseN(num: Int, base: Int): String {
+        if (num == 0) return CHARS[0].toString()
+        var temp = num
+        val sb = StringBuilder()
+        while (temp > 0) {
+            sb.append(CHARS[temp % base])
+            temp /= base
+        }
+        return sb.reverse().toString()
+    }
+
+    fun unpack(p: String, a: Int, c: Int, k: List<String>): String {
+        var payload = p
+        for (i in c - 1 downTo 0) {
+            if (i < k.size && k[i].isNotEmpty()) {
+                val key = k[i]
+                val baseStr = baseN(i, a)
+                val regex = Regex("\\b$baseStr\\b")
+                payload = payload.replace(regex, key)
+            }
+        }
+        return payload
+    }
+
+    fun parseAndUnpack(html: String): String? {
+        val startIdx = html.indexOf("eval(function(p,a,c,k,e,d)")
+        val actualStart = if (startIdx != -1) startIdx else html.indexOf("function(p,a,c,k,e,d)")
+        if (actualStart == -1) return null
+
+        val openBraceIdx = html.indexOf("{", actualStart)
+        if (openBraceIdx == -1) return null
+
+        var braceCount = 1
+        var j = openBraceIdx + 1
+        while (j < html.length && braceCount > 0) {
+            if (html[j] == '{') braceCount++
+            else if (html[j] == '}') braceCount--
+            j++
+        }
+
+        val argsStartIdx = html.indexOf("(", j - 1)
+        if (argsStartIdx == -1) return null
+
+        var argsParenCount = 1
+        var kIdx = argsStartIdx + 1
+        while (kIdx < html.length && argsParenCount > 0) {
+            if (html[kIdx] == '(') argsParenCount++
+            else if (html[kIdx] == ')') argsParenCount--
+            kIdx++
+        }
+
+        val argsStr = html.substring(argsStartIdx + 1, kIdx - 1).trim()
+        if (argsStr.isEmpty()) return null
+
+        val startChar = argsStr.first()
+        var payload = ""
+        var i = 1
+        while (i < argsStr.length) {
+            if (argsStr[i] == startChar) {
+                var backslashCount = 0
+                var m = i - 1
+                while (m >= 0 && argsStr[m] == '\\') {
+                    backslashCount++
+                    m--
+                }
+                if (backslashCount % 2 == 0) break
+            }
+            payload += argsStr[i]
+            i++
+        }
+
+        payload = payload.replace("\\$startChar", startChar.toString()).replace("\\\\", "\\")
+
+        val rest = argsStr.substring(i + 1)
+        val restQuoteMatch = Regex("[\"']").find(rest) ?: return null
+        val quotePos = restQuoteMatch.range.first
+        val restQuoteChar = restQuoteMatch.value
+
+        val ints = Regex("\\b\\d+\\b").findAll(rest.substring(0, quotePos)).map { it.value.toInt() }.toList()
+        if (ints.size < 2) return null
+        val a = ints[0]
+        val c = ints[1]
+
+        var keysStr = ""
+        var jj = quotePos + 1
+        while (jj < rest.length) {
+            if (rest[jj].toString() == restQuoteChar) {
+                var backslashCount = 0
+                var m = jj - 1
+                while (m >= 0 && rest[m] == '\\') {
+                    backslashCount++
+                    m--
+                }
+                if (backslashCount % 2 == 0) break
+            }
+            keysStr += rest[jj]
+            jj++
+        }
+
+        keysStr = keysStr.replace("\\$restQuoteChar", restQuoteChar).replace("\\\\", "\\")
+        val keys = keysStr.split("|")
+
+        return unpack(payload, a, c, keys)
+    }
+}

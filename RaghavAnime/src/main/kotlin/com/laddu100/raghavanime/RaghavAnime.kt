@@ -184,7 +184,7 @@ class RaghavAnime : MainAPI() {
         val animeScore = media.averageScore
 
         val tvType = when (media.format) {
-            "MOVIE" -> TvType.AnimeMovie
+            "MOVIE" -> TvType.Anime
             "OVA", "ONA" -> TvType.OVA
             else -> TvType.Anime
         }
@@ -203,7 +203,10 @@ class RaghavAnime : MainAPI() {
         val animeMetaData = syncMetaData?.let { parseAnimeData(it) }
 
         // Determine total episodes
-        val totalEps = media.episodes ?: animeMetaData?.episodes?.size ?: 0
+        var totalEps = media.episodes ?: animeMetaData?.episodes?.size ?: 0
+        if (media.format == "MOVIE" && totalEps == 0) {
+            totalEps = 1
+        }
         
         val subEpisodes = mutableListOf<Episode>()
         val dubEpisodes = mutableListOf<Episode>()

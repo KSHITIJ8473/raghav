@@ -44,21 +44,70 @@ class AnimeShrineDownloader : MainAPI() {
     //  Homepage — uses search API with single-letter queries
     // ============================================================
     override val mainPage = mainPageOf(
-        "a" to "Anime A-B",
-        "c" to "Anime C-D",
-        "e" to "Anime E-F",
-        "g" to "Anime G-H",
-        "n" to "Anime N-O",
-        "s" to "Anime S-T"
+        "trending" to "Trending of All Time",
+        "latest" to "Latest Releases"
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val query = request.data
-        val url = "$mainUrl/api/search?q=${URLEncoder.encode(query, "UTF-8")}"
-        val response = app.get(url, headers = baseHeaders).parsedSafe<SearchApiResponse>()
-            ?: return newHomePageResponse(request.name, emptyList())
-        val items = response.results.mapNotNull { it.toSearchResponse() }
+        val html = app.get(mainUrl, headers = baseHeaders).text
+        val items = parseHomeList(html, request.data)
         return newHomePageResponse(request.name, items)
+    }
+
+    private fun parseHomeList(html: String, section: String): List<SearchResponse> {
+        val nextData = extractNextData(html)
+        val jsonArray = if (section == "trending") {
+            extractJsonArray(nextData, "\"Trending of All Time\"")
+        } else {
+            extractJsonArray(nextData, "\"animeList\"")
+        } ?: return emptyList()
+
+        // Regex to match each individual object in the array
+        val objectPattern = Regex("""\{"id":"([^"]+)","slug":"[^"]*","title":"((?:[^"\\]|\\.)*)"(.*?)\}""")
+        return objectPattern.findAll(jsonArray).mapNotNull { match ->
+            val id = match.groupValues[1]
+            val title = match.groupValues[2]
+                .replace("\\\"", "\"")
+                .replace("\\n", "\n")
+                .replace("\\\\", "\\")
+            val rest = match.groupValues[3]
+            
+            val poster = Regex("""\bposter":"([^"]*)""").find(rest)?.groupValues?.get(1) ?: ""
+            val type = Regex("""\btype":"([^"]*)""").find(rest)?.groupValues?.get(1) ?: "series"
+            
+            val isMovie = type == "movie"
+            val url = "$mainUrl/info/$id"
+            if (isMovie) {
+                newMovieSearchResponse(title, url, TvType.AnimeMovie) {
+                    this.posterUrl = poster
+                }
+            } else {
+                newTvSeriesSearchResponse(title, url, TvType.Anime) {
+                    this.posterUrl = poster
+                }
+            }
+        }.toList()
+    }
+
+    private fun extractJsonArray(data: String, key: String): String? {
+        val startIdx = data.indexOf(key)
+        if (startIdx < 0) return null
+        val arrayStart = data.indexOf('[', startIdx)
+        if (arrayStart < 0) return null
+        
+        var depth = 1
+        var idx = arrayStart + 1
+        while (idx < data.length && depth > 0) {
+            when (data[idx]) {
+                '[' -> depth++
+                ']' -> depth--
+            }
+            idx++
+        }
+        if (depth == 0) {
+            return data.substring(arrayStart, idx)
+        }
+        return null
     }
 
     // ============================================================
@@ -84,10 +133,21 @@ class AnimeShrineDownloader : MainAPI() {
         val id = url.substringAfter("/info/").substringBefore("?")
         if (id.isBlank()) return null
 
-        // Fetch the download page for episode 1 (contains ALL episodes + metadata)
-        val downloadUrl = "$mainUrl/download/$id:1:1.0"
-        val html = app.get(downloadUrl, headers = baseHeaders).text
-        val data = extractNextData(html)
+        // Determine if it is a movie or series
+        // Try fetching the download page for episode 1 (without .0 suffix)
+        var downloadUrl = "$mainUrl/download/$id:1:1"
+        var html = app.get(downloadUrl, headers = baseHeaders).text
+        
+        // If the page does not contain "animeData", it is a 404 page (meaning it's a movie)
+        var tempNextData = extractNextData(html)
+        val isMoviePage = !tempNextData.contains("\"animeData\":")
+        if (isMoviePage) {
+            downloadUrl = "$mainUrl/download/$id"
+            html = app.get(downloadUrl, headers = baseHeaders).text
+            tempNextData = extractNextData(html)
+        }
+
+        val data = tempNextData
 
         // Extract metadata from animeData
         val name = extractAnimeField(data, "name") ?: return null
@@ -96,7 +156,7 @@ class AnimeShrineDownloader : MainAPI() {
         val plot = extractAnimeField(data, "description")
         val year = extractAnimeField(data, "year")?.toIntOrNull()
         val rating = extractAnimeField(data, "imdbRating")?.toFloatOrNull()
-        val type = extractAnimeField(data, "type") ?: "series"
+        val type = extractAnimeField(data, "type") ?: (if (isMoviePage) "movie" else "series")
         val genres = extractListField(data, "genres")
         val cast = extractListField(data, "cast").map { ActorData(Actor(it)) }
         val languages = extractListField(data, "languages")
@@ -109,7 +169,7 @@ class AnimeShrineDownloader : MainAPI() {
 
         if (isMovie || episodes.isEmpty()) {
             // Movie — data string is the episode ID
-            return newMovieLoadResponse(name, url, TvType.AnimeMovie, "$id:1:1.0") {
+            return newMovieLoadResponse(name, url, TvType.AnimeMovie, id) {
                 this.posterUrl = poster
                 this.backgroundPosterUrl = background
                 this.plot = plot
@@ -298,8 +358,8 @@ class AnimeShrineDownloader : MainAPI() {
             val parts = epId.split(":")
             val season = parts.getOrNull(1)?.substringBefore(".")?.toIntOrNull() ?: 1
             val episodePart = parts.getOrNull(2)?.substringBefore(".")?.toIntOrNull() ?: 1
-            // Normalize ID: ensure it has .0 suffix for the download URL
-            val normalizedId = if ("." in epId) epId else "$epId.0"
+            // Use exact ID as provided by site
+            val normalizedId = epId
 
             // Unescape title
             val title = match.groupValues[2]

@@ -49,9 +49,13 @@ class AnimeShrineDownloader : MainAPI() {
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val html = app.get(mainUrl, headers = baseHeaders).text
-        val items = parseHomeList(html, request.data)
-        return newHomePageResponse(request.name, items)
+        return try {
+            val html = app.get(mainUrl, headers = baseHeaders).text
+            val items = parseHomeList(html, request.data)
+            newHomePageResponse(request.name, items)
+        } catch (e: Exception) {
+            newHomePageResponse(request.name, emptyList())
+        }
     }
 
     private fun parseHomeList(html: String, section: String): List<SearchResponse> {
@@ -114,9 +118,13 @@ class AnimeShrineDownloader : MainAPI() {
     //  Search — uses /api/search?q=<query>
     // ============================================================
     override suspend fun search(query: String): List<SearchResponse> {
-        val url = "$mainUrl/api/search?q=${URLEncoder.encode(query, "UTF-8")}"
-        val response = app.get(url, headers = baseHeaders).parsedSafe<SearchApiResponse>() ?: return emptyList()
-        return response.results.mapNotNull { it.toSearchResponse() }
+        return try {
+            val url = "$mainUrl/api/search?q=${URLEncoder.encode(query, "UTF-8")}"
+            val response = app.get(url, headers = baseHeaders).parsedSafe<SearchApiResponse>()
+            response?.results?.mapNotNull { it.toSearchResponse() } ?: emptyList()
+        } catch (e: Exception) {
+            emptyList()
+        }
     }
 
     // ============================================================
@@ -129,31 +137,62 @@ class AnimeShrineDownloader : MainAPI() {
     //    - animeData (name, description, poster, year, genres, episodes)
     //    - streams[] (name, url for each quality)
     //
+    private fun cleanTitle(title: String): String {
+        return title
+            .replace(Regex("^Download\\s+", RegexOption.IGNORE_CASE), "")
+            .substringBefore(" Movie in")
+            .substringBefore(" Season")
+            .substringBefore(" Episode")
+            .substringBefore(" |")
+            .trim()
+    }
+
     override suspend fun load(url: String): LoadResponse? {
         val id = url.substringAfter("/info/").substringBefore("?")
         if (id.isBlank()) return null
 
-        // Determine if it is a movie or series
-        // Try fetching the download page for episode 1 (without .0 suffix)
-        var downloadUrl = "$mainUrl/download/$id:1:1"
-        var html = app.get(downloadUrl, headers = baseHeaders).text
-        
-        // If the page does not contain "animeData", it is a 404 page (meaning it's a movie)
-        var tempNextData = extractNextData(html)
-        val isMoviePage = !tempNextData.contains("\"animeData\":")
-        if (isMoviePage) {
-            downloadUrl = "$mainUrl/download/$id"
+        var html = ""
+        var isMoviePage = false
+        try {
+            val downloadUrl = "$mainUrl/download/$id:1:1"
             html = app.get(downloadUrl, headers = baseHeaders).text
-            tempNextData = extractNextData(html)
+            val tempNextData = extractNextData(html)
+            isMoviePage = !tempNextData.contains("\"animeData\":")
+        } catch (e: Exception) {
+            isMoviePage = true
         }
 
-        val data = tempNextData
+        if (isMoviePage) {
+            try {
+                val downloadUrl = "$mainUrl/download/$id"
+                html = app.get(downloadUrl, headers = baseHeaders).text
+            } catch (e: Exception) {
+                return null
+            }
+        }
 
-        // Extract metadata from animeData
-        val name = extractAnimeField(data, "name") ?: return null
-        val poster = extractAnimeField(data, "poster")
-        val background = extractAnimeField(data, "background")
-        val plot = extractAnimeField(data, "description")
+        val data = extractNextData(html)
+        if (!data.contains("\"animeData\":") && !html.contains("<title>")) return null
+
+        // Extract metadata from animeData with HTML tag fallbacks
+        var name = extractAnimeField(data, "name")
+        if (name.isNullOrBlank()) {
+            val titleMatch = Regex("""<title>(.*?)</title>""", RegexOption.IGNORE_CASE).find(html)
+            name = titleMatch?.groupValues?.get(1)?.let { cleanTitle(it) } ?: "Anime"
+        }
+
+        var poster = extractAnimeField(data, "poster")
+        if (poster.isNullOrBlank()) {
+            poster = Regex("""<meta\s+property="og:image"\s+content="([^"]+)"""", RegexOption.IGNORE_CASE).find(html)?.groupValues?.get(1)
+        }
+
+        val background = extractAnimeField(data, "background") ?: poster
+
+        var plot = extractAnimeField(data, "description")
+        if (plot.isNullOrBlank()) {
+            plot = Regex("""<meta\s+property="og:description"\s+content="([^"]+)"""", RegexOption.IGNORE_CASE).find(html)?.groupValues?.get(1)
+        }
+
         val year = extractAnimeField(data, "year")?.toIntOrNull()
         val rating = extractAnimeField(data, "imdbRating")?.toFloatOrNull()
         val type = extractAnimeField(data, "type") ?: (if (isMoviePage) "movie" else "series")
@@ -219,7 +258,11 @@ class AnimeShrineDownloader : MainAPI() {
         if (data.isBlank()) return false
 
         val downloadUrl = "$mainUrl/download/$data"
-        val html = app.get(downloadUrl, headers = baseHeaders).text
+        val html = try {
+            app.get(downloadUrl, headers = baseHeaders).text
+        } catch (e: Exception) {
+            return false
+        }
         val streamData = extractNextData(html)
 
         // Parse streams
@@ -234,6 +277,11 @@ class AnimeShrineDownloader : MainAPI() {
                     url = stream.url,
                     type = ExtractorLinkType.VIDEO
                 ) {
+                    this.referer = "https://animeshrine.xyz/"
+                    this.headers = mapOf(
+                        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                        "Referer" to "https://animeshrine.xyz/"
+                    )
                     this.quality = when {
                         stream.name.contains("1080") -> Qualities.P1080.value
                         stream.name.contains("720") -> Qualities.P720.value

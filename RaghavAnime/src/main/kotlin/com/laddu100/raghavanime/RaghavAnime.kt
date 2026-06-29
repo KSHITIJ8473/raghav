@@ -295,21 +295,11 @@ class RaghavAnime : MainAPI() {
                 try {
                     val aniSuge = AniSugeProvider()
                     val searchTitles = listOfNotNull(title, jpTitle).filter { it.isNotBlank() }
-                    var matchedData: String? = null
-                    for (t in searchTitles) {
-                        val searchResults = aniSuge.search(t)
-                        val firstResult = matchSearchResult(searchResults, listOfNotNull(title, jpTitle)) ?: continue
-                        val loadResult = aniSuge.load(firstResult.url) as? com.lagradost.cloudstream3.AnimeLoadResponse
-                        val epList = if (isDub) loadResult?.episodes?.get(DubStatus.Dubbed) else loadResult?.episodes?.get(DubStatus.Subbed)
-                        val matchedEp = epList?.find { it.episode == episode }
-                        if (matchedEp != null) {
-                            matchedData = matchedEp.data
-                            break
-                        }
-                    }
-                    if (matchedData != null) {
-                        aniSuge.loadLinks(matchedData, false, subtitleCallback, callback)
-                    }
+                    val epData = findEpisodeData(searchTitles, listOfNotNull(title, jpTitle), episode, isDub,
+                        doSearch = { aniSuge.search(it) },
+                        doLoad = { aniSuge.load(it) as? com.lagradost.cloudstream3.AnimeLoadResponse }
+                    )
+                    if (epData != null) aniSuge.loadLinks(epData, false, subtitleCallback, callback)
                 } catch (_: Throwable) {}
             },
             {
@@ -317,22 +307,32 @@ class RaghavAnime : MainAPI() {
                 try {
                     val aniWaves = AniWaves()
                     val searchTitles = listOfNotNull(title, jpTitle).filter { it.isNotBlank() }
+                    // AniWaves encodes sub/dub in the data string — always load from Subbed list and flip the prefix
                     var matchedData: String? = null
                     for (t in searchTitles) {
-                        val searchResults = aniWaves.search(t)
-                        val firstResult = matchSearchResult(searchResults, listOfNotNull(title, jpTitle)) ?: continue
-                        val loadResult = aniWaves.load(firstResult.url) as? com.lagradost.cloudstream3.AnimeLoadResponse
-                        val matchedEp = loadResult?.episodes?.get(DubStatus.Subbed)?.find { it.episode == episode }
-                        if (matchedEp != null) {
-                            val parts = matchedEp.data.split("|").toMutableList()
-                            parts[0] = if (isDub) "dub" else "sub"
-                            matchedData = parts.joinToString("|")
-                            break
+                        val searchResults = try { aniWaves.search(t) } catch (_: Throwable) { continue }
+                        val sorted = searchResults.sortedByDescending { r ->
+                            val c = cleanTitle(r.name)
+                            val targets = listOfNotNull(title, jpTitle).map { cleanTitle(it) }
+                            when {
+                                targets.contains(c) -> 2
+                                targets.any { tgt -> tgt.contains(c) || c.contains(tgt) } -> 1
+                                else -> 0
+                            }
                         }
+                        for (result in sorted) {
+                            try {
+                                val loadResult = aniWaves.load(result.url) as? com.lagradost.cloudstream3.AnimeLoadResponse ?: continue
+                                val ep = loadResult.episodes?.get(DubStatus.Subbed)?.find { it.episode == episode } ?: continue
+                                val parts = ep.data.split("|").toMutableList()
+                                parts[0] = if (isDub) "dub" else "sub"
+                                matchedData = parts.joinToString("|")
+                                break
+                            } catch (_: Throwable) { continue }
+                        }
+                        if (matchedData != null) break
                     }
-                    if (matchedData != null) {
-                        aniWaves.loadLinks(matchedData, false, subtitleCallback, callback)
-                    }
+                    if (matchedData != null) aniWaves.loadLinks(matchedData, false, subtitleCallback, callback)
                 } catch (_: Throwable) {}
             },
             {
@@ -340,21 +340,11 @@ class RaghavAnime : MainAPI() {
                 try {
                     val anikai = Anikai()
                     val searchTitles = listOfNotNull(title, jpTitle).filter { it.isNotBlank() }
-                    var matchedData: String? = null
-                    for (t in searchTitles) {
-                        val searchResults = anikai.search(t)
-                        val firstResult = matchSearchResult(searchResults, listOfNotNull(title, jpTitle)) ?: continue
-                        val loadResult = anikai.load(firstResult.url) as? com.lagradost.cloudstream3.AnimeLoadResponse
-                        val epList = if (isDub) loadResult?.episodes?.get(DubStatus.Dubbed) else loadResult?.episodes?.get(DubStatus.Subbed)
-                        val matchedEp = epList?.find { it.episode == episode }
-                        if (matchedEp != null) {
-                            matchedData = matchedEp.data
-                            break
-                        }
-                    }
-                    if (matchedData != null) {
-                        anikai.loadLinks(matchedData, false, subtitleCallback, callback)
-                    }
+                    val epData = findEpisodeData(searchTitles, listOfNotNull(title, jpTitle), episode, isDub,
+                        doSearch = { anikai.search(it) },
+                        doLoad = { anikai.load(it) as? com.lagradost.cloudstream3.AnimeLoadResponse }
+                    )
+                    if (epData != null) anikai.loadLinks(epData, false, subtitleCallback, callback)
                 } catch (_: Throwable) {}
             },
             {
@@ -362,21 +352,11 @@ class RaghavAnime : MainAPI() {
                 try {
                     val aniDb = AniDb()
                     val searchTitles = listOfNotNull(title, jpTitle).filter { it.isNotBlank() }
-                    var matchedData: String? = null
-                    for (t in searchTitles) {
-                        val searchResults = aniDb.search(t, 1)
-                        val firstResult = matchSearchResult(searchResults.items, listOfNotNull(title, jpTitle)) ?: continue
-                        val loadResult = aniDb.load(firstResult.url) as? com.lagradost.cloudstream3.AnimeLoadResponse
-                        val epList = if (isDub) loadResult?.episodes?.get(DubStatus.Dubbed) else loadResult?.episodes?.get(DubStatus.Subbed)
-                        val matchedEp = epList?.find { it.episode == episode }
-                        if (matchedEp != null) {
-                            matchedData = matchedEp.data
-                            break
-                        }
-                    }
-                    if (matchedData != null) {
-                        aniDb.loadLinks(matchedData, false, subtitleCallback, callback)
-                    }
+                    val epData = findEpisodeData(searchTitles, listOfNotNull(title, jpTitle), episode, isDub,
+                        doSearch = { q -> aniDb.search(q, 1).items },
+                        doLoad = { aniDb.load(it) as? com.lagradost.cloudstream3.AnimeLoadResponse }
+                    )
+                    if (epData != null) aniDb.loadLinks(epData, false, subtitleCallback, callback)
                 } catch (_: Throwable) {}
             },
             {
@@ -384,21 +364,11 @@ class RaghavAnime : MainAPI() {
                 try {
                     val anikage = AnikageProvider()
                     val searchTitles = listOfNotNull(title, jpTitle).filter { it.isNotBlank() }
-                    var matchedData: String? = null
-                    for (t in searchTitles) {
-                        val searchResults = anikage.search(t)
-                        val firstResult = matchSearchResult(searchResults, listOfNotNull(title, jpTitle)) ?: continue
-                        val loadResult = anikage.load(firstResult.url) as? com.lagradost.cloudstream3.AnimeLoadResponse
-                        val epList = if (isDub) loadResult?.episodes?.get(DubStatus.Dubbed) else loadResult?.episodes?.get(DubStatus.Subbed)
-                        val matchedEp = epList?.find { it.episode == episode }
-                        if (matchedEp != null) {
-                            matchedData = matchedEp.data
-                            break
-                        }
-                    }
-                    if (matchedData != null) {
-                        anikage.loadLinks(matchedData, false, subtitleCallback, callback)
-                    }
+                    val epData = findEpisodeData(searchTitles, listOfNotNull(title, jpTitle), episode, isDub,
+                        doSearch = { anikage.search(it) },
+                        doLoad = { anikage.load(it) as? com.lagradost.cloudstream3.AnimeLoadResponse }
+                    )
+                    if (epData != null) anikage.loadLinks(epData, false, subtitleCallback, callback)
                 } catch (_: Throwable) {}
             },
             {
@@ -406,21 +376,11 @@ class RaghavAnime : MainAPI() {
                 try {
                     val anineko = Anineko()
                     val searchTitles = listOfNotNull(title, jpTitle).filter { it.isNotBlank() }
-                    var matchedData: String? = null
-                    for (t in searchTitles) {
-                        val searchResults = anineko.search(t)
-                        val firstResult = matchSearchResult(searchResults, listOfNotNull(title, jpTitle)) ?: continue
-                        val loadResult = anineko.load(firstResult.url) as? com.lagradost.cloudstream3.AnimeLoadResponse
-                        val epList = if (isDub) loadResult?.episodes?.get(DubStatus.Dubbed) else loadResult?.episodes?.get(DubStatus.Subbed)
-                        val matchedEp = epList?.find { it.episode == episode }
-                        if (matchedEp != null) {
-                            matchedData = matchedEp.data
-                            break
-                        }
-                    }
-                    if (matchedData != null) {
-                        anineko.loadLinks(matchedData, false, subtitleCallback, callback)
-                    }
+                    val epData = findEpisodeData(searchTitles, listOfNotNull(title, jpTitle), episode, isDub,
+                        doSearch = { anineko.search(it) },
+                        doLoad = { anineko.load(it) as? com.lagradost.cloudstream3.AnimeLoadResponse }
+                    )
+                    if (epData != null) anineko.loadLinks(epData, false, subtitleCallback, callback)
                 } catch (_: Throwable) {}
             },
             {
@@ -428,21 +388,11 @@ class RaghavAnime : MainAPI() {
                 try {
                     val animetsu = AnimetsuProvider()
                     val searchTitles = listOfNotNull(title, jpTitle).filter { it.isNotBlank() }
-                    var matchedData: String? = null
-                    for (t in searchTitles) {
-                        val searchResults = animetsu.search(t)
-                        val firstResult = matchSearchResult(searchResults, listOfNotNull(title, jpTitle)) ?: continue
-                        val loadResult = animetsu.load(firstResult.url) as? com.lagradost.cloudstream3.AnimeLoadResponse
-                        val epList = if (isDub) loadResult?.episodes?.get(DubStatus.Dubbed) else loadResult?.episodes?.get(DubStatus.Subbed)
-                        val matchedEp = epList?.find { it.episode == episode }
-                        if (matchedEp != null) {
-                            matchedData = matchedEp.data
-                            break
-                        }
-                    }
-                    if (matchedData != null) {
-                        animetsu.loadLinks(matchedData, false, subtitleCallback, callback)
-                    }
+                    val epData = findEpisodeData(searchTitles, listOfNotNull(title, jpTitle), episode, isDub,
+                        doSearch = { animetsu.search(it) },
+                        doLoad = { animetsu.load(it) as? com.lagradost.cloudstream3.AnimeLoadResponse }
+                    )
+                    if (epData != null) animetsu.loadLinks(epData, false, subtitleCallback, callback)
                 } catch (_: Throwable) {}
             }
         )
@@ -459,19 +409,59 @@ class RaghavAnime : MainAPI() {
 
     private fun matchSearchResult(searchResults: List<SearchResponse>, targetTitles: List<String>): SearchResponse? {
         val cleanedTargets = targetTitles.map { cleanTitle(it) }
+        // Pass 1: exact match
         for (res in searchResults) {
             val cleanedRes = cleanTitle(res.name)
             if (cleanedTargets.contains(cleanedRes)) {
                 return res
             }
         }
+        // Pass 2: substring match
         for (res in searchResults) {
             val cleanedRes = cleanTitle(res.name)
             if (cleanedTargets.any { target -> target.contains(cleanedRes) || cleanedRes.contains(target) }) {
                 return res
             }
         }
-        return searchResults.firstOrNull()
+        // No match — return null so the caller truly skips this result
+        return null
+    }
+
+    /**
+     * Exhaustively search all results from all titles for an episode match.
+     * Returns the episode data string, or null if truly not found.
+     */
+    private suspend fun findEpisodeData(
+        searchTitles: List<String>,
+        targetTitles: List<String>,
+        episode: Int,
+        isDub: Boolean,
+        doSearch: suspend (String) -> List<SearchResponse>,
+        doLoad: suspend (String) -> com.lagradost.cloudstream3.AnimeLoadResponse?,
+        dubKey: com.lagradost.cloudstream3.DubStatus = com.lagradost.cloudstream3.DubStatus.Dubbed,
+        subKey: com.lagradost.cloudstream3.DubStatus = com.lagradost.cloudstream3.DubStatus.Subbed
+    ): String? {
+        for (t in searchTitles) {
+            val searchResults = try { doSearch(t) } catch (_: Throwable) { continue }
+            // First try the best matching result, then fall through to others
+            val sorted = searchResults.sortedByDescending { r ->
+                val c = cleanTitle(r.name)
+                when {
+                    targetTitles.map { cleanTitle(it) }.contains(c) -> 2
+                    targetTitles.map { cleanTitle(it) }.any { tgt -> tgt.contains(c) || c.contains(tgt) } -> 1
+                    else -> 0
+                }
+            }
+            for (result in sorted) {
+                try {
+                    val loadResult = doLoad(result.url) ?: continue
+                    val epKey = if (isDub) dubKey else subKey
+                    val ep = loadResult.episodes?.get(epKey)?.find { it.episode == episode }
+                    if (ep != null) return ep.data
+                } catch (_: Throwable) { continue }
+            }
+        }
+        return null
     }
 
     data class LinkData(

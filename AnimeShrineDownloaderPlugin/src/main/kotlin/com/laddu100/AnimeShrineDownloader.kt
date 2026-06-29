@@ -28,7 +28,7 @@ import java.net.URLEncoder
 
 class AnimeShrineDownloader : MainAPI() {
     override var mainUrl = "https://animeshrine.xyz"
-    override var name = "Anime Shrine Downloader"
+    override var name = "AnimeShrineDownloader"
     override val hasMainPage = true
     override var lang = "en"
     override val hasDownloadSupport = true
@@ -287,16 +287,19 @@ class AnimeShrineDownloader : MainAPI() {
         val seen = mutableSetOf<String>()
 
         // Find all episode entries: "id":"<id>:<season>:<episode>.<version>","title":"<title>"
-        val pattern = Regex(""""id":"($animeId:\\d+:\\d+\\.\\d)","title":"((?:[^"\\]|\\.)*)"""")
+        val pattern = Regex(""""id":"($animeId:\\d+:\\d+(?:\\.\\d)?)","title":"((?:[^"\\]|\\.)*)"""")
         for (match in pattern.findAll(data)) {
             val epId = match.groupValues[1]
-            if (epId in seen) continue
-            seen.add(epId)
+            val dedupKey = epId.substringBefore(".")
+            if (dedupKey in seen) continue
+            seen.add(dedupKey)
 
             // Parse season and episode from the ID
             val parts = epId.split(":")
             val season = parts.getOrNull(1)?.substringBefore(".")?.toIntOrNull() ?: 1
             val episodePart = parts.getOrNull(2)?.substringBefore(".")?.toIntOrNull() ?: 1
+            // Normalize ID: ensure it has .0 suffix for the download URL
+            val normalizedId = if ("." in epId) epId else "$epId.0"
 
             // Unescape title
             val title = match.groupValues[2]
@@ -314,7 +317,7 @@ class AnimeShrineDownloader : MainAPI() {
                 ?.replace("\\\"", "\"")?.replace("\\n", "\n")?.replace("\\\\", "\\")
             val thumbnail = Regex(""""thumbnail":"([^"]*)"""").find(context)?.groupValues?.get(1)
 
-            episodes.add(EpisodeInfo(epId, title, season, episodePart, overview, thumbnail))
+            episodes.add(EpisodeInfo(normalizedId, title, season, episodePart, overview, thumbnail))
         }
 
         return episodes

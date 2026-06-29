@@ -307,20 +307,22 @@ class RaghavAnime : MainAPI() {
                 try {
                     val aniWaves = AniWaves()
                     val searchTitles = listOfNotNull(title, jpTitle).filter { it.isNotBlank() }
+                    val aniWavesTargets = listOfNotNull(title, jpTitle).map { cleanTitle(it) }
                     // AniWaves encodes sub/dub in the data string — always load from Subbed list and flip the prefix
                     var matchedData: String? = null
                     for (t in searchTitles) {
                         val searchResults = try { aniWaves.search(t) } catch (_: Throwable) { continue }
-                        val sorted = searchResults.sortedByDescending { r ->
+                        // Only consider results with at least a partial title match (score >= 1)
+                        val candidates = searchResults.mapNotNull { r ->
                             val c = cleanTitle(r.name)
-                            val targets = listOfNotNull(title, jpTitle).map { cleanTitle(it) }
-                            when {
-                                targets.contains(c) -> 2
-                                targets.any { tgt -> tgt.contains(c) || c.contains(tgt) } -> 1
+                            val score = when {
+                                aniWavesTargets.contains(c) -> 2
+                                aniWavesTargets.any { tgt -> tgt.contains(c) || c.contains(tgt) } -> 1
                                 else -> 0
                             }
-                        }
-                        for (result in sorted) {
+                            if (score > 0) Pair(score, r) else null
+                        }.sortedByDescending { it.first }
+                        for ((_, result) in candidates) {
                             try {
                                 val loadResult = aniWaves.load(result.url) as? com.lagradost.cloudstream3.AnimeLoadResponse ?: continue
                                 val ep = loadResult.episodes?.get(DubStatus.Subbed)?.find { it.episode == episode } ?: continue
@@ -429,6 +431,8 @@ class RaghavAnime : MainAPI() {
 
     /**
      * Exhaustively search all results from all titles for an episode match.
+     * Only considers results that have at least a partial title match (score >= 1)
+     * to prevent wrong anime from being loaded.
      * Returns the episode data string, or null if truly not found.
      */
     private suspend fun findEpisodeData(
@@ -441,18 +445,22 @@ class RaghavAnime : MainAPI() {
         dubKey: com.lagradost.cloudstream3.DubStatus = com.lagradost.cloudstream3.DubStatus.Dubbed,
         subKey: com.lagradost.cloudstream3.DubStatus = com.lagradost.cloudstream3.DubStatus.Subbed
     ): String? {
+        val cleanedTargets = targetTitles.map { cleanTitle(it) }
         for (t in searchTitles) {
             val searchResults = try { doSearch(t) } catch (_: Throwable) { continue }
-            // First try the best matching result, then fall through to others
-            val sorted = searchResults.sortedByDescending { r ->
+            // Score each result: 2 = exact match, 1 = partial match, 0 = unrelated
+            val candidates = searchResults.mapNotNull { r ->
                 val c = cleanTitle(r.name)
-                when {
-                    targetTitles.map { cleanTitle(it) }.contains(c) -> 2
-                    targetTitles.map { cleanTitle(it) }.any { tgt -> tgt.contains(c) || c.contains(tgt) } -> 1
+                val score = when {
+                    cleanedTargets.contains(c) -> 2
+                    cleanedTargets.any { tgt -> tgt.contains(c) || c.contains(tgt) } -> 1
                     else -> 0
                 }
-            }
-            for (result in sorted) {
+                // Only keep results with at least a partial title match
+                if (score > 0) Pair(score, r) else null
+            }.sortedByDescending { it.first }
+
+            for ((_, result) in candidates) {
                 try {
                     val loadResult = doLoad(result.url) ?: continue
                     val epKey = if (isDub) dubKey else subKey

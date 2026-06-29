@@ -196,7 +196,7 @@ class RaghavAnime : MainAPI() {
                     var matchedData: String? = null
                     for (t in searchTitles) {
                         val searchResults = aniSuge.search(t)
-                        val firstResult = searchResults.firstOrNull() ?: continue
+                        val firstResult = matchSearchResult(searchResults, listOfNotNull(title, jpTitle)) ?: continue
                         val loadResult = aniSuge.load(firstResult.url) as? com.lagradost.cloudstream3.AnimeLoadResponse
                         val epList = if (isDub) loadResult?.episodes?.get(DubStatus.Dubbed) else loadResult?.episodes?.get(DubStatus.Subbed)
                         val matchedEp = epList?.find { it.episode == episode }
@@ -218,7 +218,7 @@ class RaghavAnime : MainAPI() {
                     var matchedData: String? = null
                     for (t in searchTitles) {
                         val searchResults = aniWaves.search(t)
-                        val firstResult = searchResults.firstOrNull() ?: continue
+                        val firstResult = matchSearchResult(searchResults, listOfNotNull(title, jpTitle)) ?: continue
                         val loadResult = aniWaves.load(firstResult.url) as? com.lagradost.cloudstream3.AnimeLoadResponse
                         val matchedEp = loadResult?.episodes?.get(DubStatus.Subbed)?.find { it.episode == episode }
                         if (matchedEp != null) {
@@ -241,7 +241,7 @@ class RaghavAnime : MainAPI() {
                     var matchedData: String? = null
                     for (t in searchTitles) {
                         val searchResults = anikai.search(t)
-                        val firstResult = searchResults.firstOrNull() ?: continue
+                        val firstResult = matchSearchResult(searchResults, listOfNotNull(title, jpTitle)) ?: continue
                         val loadResult = anikai.load(firstResult.url) as? com.lagradost.cloudstream3.AnimeLoadResponse
                         val epList = if (isDub) loadResult?.episodes?.get(DubStatus.Dubbed) else loadResult?.episodes?.get(DubStatus.Subbed)
                         val matchedEp = epList?.find { it.episode == episode }
@@ -263,7 +263,7 @@ class RaghavAnime : MainAPI() {
                     var matchedData: String? = null
                     for (t in searchTitles) {
                         val searchResults = aniDb.search(t, 1)
-                        val firstResult = searchResults?.items?.firstOrNull() ?: continue
+                        val firstResult = matchSearchResult(searchResults.items, listOfNotNull(title, jpTitle)) ?: continue
                         val loadResult = aniDb.load(firstResult.url) as? com.lagradost.cloudstream3.AnimeLoadResponse
                         val epList = if (isDub) loadResult?.episodes?.get(DubStatus.Dubbed) else loadResult?.episodes?.get(DubStatus.Subbed)
                         val matchedEp = epList?.find { it.episode == episode }
@@ -285,7 +285,7 @@ class RaghavAnime : MainAPI() {
                     var matchedData: String? = null
                     for (t in searchTitles) {
                         val searchResults = anikage.search(t)
-                        val firstResult = searchResults.firstOrNull() ?: continue
+                        val firstResult = matchSearchResult(searchResults, listOfNotNull(title, jpTitle)) ?: continue
                         val loadResult = anikage.load(firstResult.url) as? com.lagradost.cloudstream3.AnimeLoadResponse
                         val epList = if (isDub) loadResult?.episodes?.get(DubStatus.Dubbed) else loadResult?.episodes?.get(DubStatus.Subbed)
                         val matchedEp = epList?.find { it.episode == episode }
@@ -307,7 +307,7 @@ class RaghavAnime : MainAPI() {
                     var matchedData: String? = null
                     for (t in searchTitles) {
                         val searchResults = anineko.search(t)
-                        val firstResult = searchResults.firstOrNull() ?: continue
+                        val firstResult = matchSearchResult(searchResults, listOfNotNull(title, jpTitle)) ?: continue
                         val loadResult = anineko.load(firstResult.url) as? com.lagradost.cloudstream3.AnimeLoadResponse
                         val epList = if (isDub) loadResult?.episodes?.get(DubStatus.Dubbed) else loadResult?.episodes?.get(DubStatus.Subbed)
                         val matchedEp = epList?.find { it.episode == episode }
@@ -320,10 +320,56 @@ class RaghavAnime : MainAPI() {
                         anineko.loadLinks(matchedData, false, subtitleCallback, callback)
                     }
                 } catch (_: Throwable) {}
+            },
+            {
+                // 8. Animetsu
+                try {
+                    val animetsu = AnimetsuProvider()
+                    val searchTitles = listOfNotNull(title, jpTitle).filter { it.isNotBlank() }
+                    var matchedData: String? = null
+                    for (t in searchTitles) {
+                        val searchResults = animetsu.search(t)
+                        val firstResult = matchSearchResult(searchResults, listOfNotNull(title, jpTitle)) ?: continue
+                        val loadResult = animetsu.load(firstResult.url) as? com.lagradost.cloudstream3.AnimeLoadResponse
+                        val epList = if (isDub) loadResult?.episodes?.get(DubStatus.Dubbed) else loadResult?.episodes?.get(DubStatus.Subbed)
+                        val matchedEp = epList?.find { it.episode == episode }
+                        if (matchedEp != null) {
+                            matchedData = matchedEp.data
+                            break
+                        }
+                    }
+                    if (matchedData != null) {
+                        animetsu.loadLinks(matchedData, false, subtitleCallback, callback)
+                    }
+                } catch (_: Throwable) {}
             }
         )
 
         return true
+    }
+
+    private fun cleanTitle(s: String): String {
+        return s.lowercase()
+            .replace(Regex("[^a-z0-9\\s]"), "")
+            .replace(Regex("\\s+"), " ")
+            .trim()
+    }
+
+    private fun matchSearchResult(searchResults: List<SearchResponse>, targetTitles: List<String>): SearchResponse? {
+        val cleanedTargets = targetTitles.map { cleanTitle(it) }
+        for (res in searchResults) {
+            val cleanedRes = cleanTitle(res.name)
+            if (cleanedTargets.contains(cleanedRes)) {
+                return res
+            }
+        }
+        for (res in searchResults) {
+            val cleanedRes = cleanTitle(res.name)
+            if (cleanedTargets.any { target -> target.contains(cleanedRes) || cleanedRes.contains(target) }) {
+                return res
+            }
+        }
+        return searchResults.firstOrNull()
     }
 
     data class LinkData(

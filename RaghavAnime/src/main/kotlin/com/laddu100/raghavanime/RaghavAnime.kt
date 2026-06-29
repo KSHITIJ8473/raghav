@@ -1,5 +1,12 @@
 package com.laddu100.raghavanime
 
+import com.lagradost.cloudstream3.CommonActivity.activity
+import android.content.Context
+import android.app.AlertDialog
+import android.widget.LinearLayout
+import android.widget.TextView
+import android.widget.CheckBox
+
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.LoadResponse.Companion.addAniListId
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
@@ -116,6 +123,51 @@ class RaghavAnime : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse? {
+        val activity = activity
+        if (activity != null) {
+            val sharedPref = activity.getSharedPreferences("RaghavAnimePrefs", Context.MODE_PRIVATE)
+            val neverShowAgain = sharedPref.getBoolean("never_show_prompt", false)
+
+            if (!neverShowAgain && !hasShownThisSession) {
+                hasShownThisSession = true
+                activity.runOnUiThread {
+                    try {
+                        val builder = AlertDialog.Builder(activity)
+                        val container = LinearLayout(activity).apply {
+                            orientation = LinearLayout.VERTICAL
+                            val padding = (16 * activity.resources.displayMetrics.density).toInt()
+                            setPadding(padding, padding, padding, padding)
+                        }
+
+                        val messageView = TextView(activity).apply {
+                            text = "Please allow all sources to load. If one source does not work for you, just select a different one."
+                            textSize = 16f
+                        }
+
+                        val checkBox = CheckBox(activity).apply {
+                            text = "Don't show again"
+                            val topPadding = (8 * activity.resources.displayMetrics.density).toInt()
+                            setPadding(0, topPadding, 0, 0)
+                        }
+
+                        container.addView(messageView)
+                        container.addView(checkBox)
+
+                        builder.setView(container)
+                        builder.setCancelable(false)
+                        builder.setPositiveButton("OK") { dialog: android.content.DialogInterface, _: Int ->
+                            if (checkBox.isChecked) {
+                                sharedPref.edit().putBoolean("never_show_prompt", true).apply()
+                            }
+                            dialog.dismiss()
+                        }
+
+                        builder.create().show()
+                    } catch (_: Throwable) {}
+                }
+            }
+        }
+
         val anilistId = Regex("""/info/(\d+)""").find(url)?.groupValues?.get(1)?.toIntOrNull() ?: return null
 
         val infoText = anilistQuery(INFO_QUERY, mapOf("id" to anilistId))
@@ -427,6 +479,10 @@ class RaghavAnime : MainAPI() {
         val isDub: Boolean,
         val year: Int?
     )
+
+    companion object {
+        var hasShownThisSession = false
+    }
 }
 
 val HOMEPAGE_QUERY = """

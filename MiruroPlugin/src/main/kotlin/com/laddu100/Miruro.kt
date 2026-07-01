@@ -185,10 +185,7 @@ class Miruro : MainAPI() {
             val providers = episodesData.providers ?: emptyMap()
 
             // Log available providers for debugging
-            val availableProviders = providers.keys.filter { !providers[it]?.episodes?.let { e ->
-                (e.sub?.isEmpty() ?: true) && (e.dub?.isEmpty() ?: true) && (e.ssub?.isEmpty() ?: true)
-            } ?: true }
-            println("Miruro: Available providers for $anilistId: $availableProviders")
+            println("Miruro: Providers for $anilistId: ${providers.keys}")
 
             // ── Sub episodes ──
             // Find provider with most sub/ssub episodes for the episode list

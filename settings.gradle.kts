@@ -1,6 +1,6 @@
 rootProject.name = "CloudstreamPlugins"
 
-val disabled = listOf<String>("LivXowPlugin")
+val disabled = listOf<String>("AnimetsuPlugin", "ExampleProvider", "Anizen","LivXowPlugin", "AniDoorPlugin", "PpvPlugin" )
 
 File(rootDir, ".").eachDir { dir ->
     if (!disabled.contains(dir.name) && File(dir, "build.gradle.kts").exists()) {

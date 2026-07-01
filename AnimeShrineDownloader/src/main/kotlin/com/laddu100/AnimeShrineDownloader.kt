@@ -65,16 +65,8 @@ class AnimeShrineDownloader : MainAPI() {
     }
 
     // ============================================================
-    //  Load — parse download page for metadata + episodes
+    //  Load
     // ============================================================
-    //
-    //  KEY FIX: Instead of using regex to extract __next_f data (which fails
-    //  on 400KB+ pushes for anime like One Piece), we search for patterns
-    //  DIRECTLY in the raw HTML. The HTML contains escaped JSON like:
-    //    \"id\":\"37854-1:1:1\",\"title\":\"...
-    //  We search for these patterns directly, avoiding the regex performance
-    //  issue on massive strings.
-    //
     override suspend fun load(url: String): LoadResponse? {
         val id = url.substringAfter("/info/").substringBefore("?")
         if (id.isBlank()) return null
@@ -87,27 +79,40 @@ class AnimeShrineDownloader : MainAPI() {
             return null
         }
 
-        // Extract metadata from raw HTML (search near "animeData" keyword)
-        val animeDataPos = html.indexOf("animeData")
-        val animeDataSection = if (animeDataPos >= 0) {
-            html.substring(animeDataPos, minOf(html.length, animeDataPos + 100000))
+        // Extract __next_f data using indexOf (handles ANY page size, even 500KB+)
+        val data = extractNextData(html)
+
+        // Extract animeData section
+        val animeDataStart = data.indexOf("\"animeData\":{")
+        val animeData = if (animeDataStart >= 0) {
+            var depth = 1
+            var i = animeDataStart + "\"animeData\":{".length
+            while (i < data.length && depth > 0) {
+                when (data[i]) {
+                    '{' -> depth++
+                    '}' -> depth--
+                }
+                i++
+            }
+            data.substring(animeDataStart, i)
         } else ""
 
-        val name = extractEscapedField(animeDataSection, "name")
+        // Extract metadata
+        val name = extractField(animeData, "name")
             ?: Regex("""<title>(.*?)</title>""", RegexOption.IGNORE_CASE).find(html)?.groupValues?.get(1)?.let { cleanTitle(it) }
             ?: return null
 
-        val poster = extractEscapedField(animeDataSection, "poster")
+        val poster = extractField(animeData, "poster")
             ?: Regex("""<meta\s+property="og:image"\s+content="([^"]+)"""", RegexOption.IGNORE_CASE).find(html)?.groupValues?.get(1)
             ?: ""
-        val background = extractEscapedField(animeDataSection, "background") ?: poster
-        val plot = extractEscapedField(animeDataSection, "description")
+        val background = extractField(animeData, "background") ?: poster
+        val plot = extractField(animeData, "description")
             ?: Regex("""<meta\s+property="og:description"\s+content="([^"]+)"""", RegexOption.IGNORE_CASE).find(html)?.groupValues?.get(1)
-        val year = extractEscapedField(animeDataSection, "year")?.toIntOrNull()
-        val rating = extractEscapedField(animeDataSection, "imdbRating")?.toFloatOrNull()
-        val genres = extractEscapedList(animeDataSection, "genres")
-        val cast = extractEscapedList(animeDataSection, "cast").map { ActorData(Actor(it)) }
-        val languages = extractEscapedList(animeDataSection, "languages")
+        val year = extractField(animeData, "year")?.toIntOrNull()
+        val rating = extractField(animeData, "imdbRating")?.toFloatOrNull()
+        val genres = extractListField(animeData, "genres")
+        val cast = extractListField(animeData, "cast").map { ActorData(Actor(it)) }
+        val languages = extractListField(animeData, "languages")
         val tags = if (languages.isNotEmpty()) genres + languages else genres
 
         if (isMovie) {
@@ -122,8 +127,8 @@ class AnimeShrineDownloader : MainAPI() {
             }
         }
 
-        // Parse episodes DIRECTLY from raw HTML (no __next_f extraction needed)
-        val episodes = parseEpisodesFromHtml(html, id)
+        // Parse episodes
+        val episodes = parseEpisodes(data, id)
 
         if (episodes.isEmpty()) {
             return newMovieLoadResponse(name, url, TvType.AnimeMovie, id) {
@@ -143,7 +148,6 @@ class AnimeShrineDownloader : MainAPI() {
                 this.episode = ep.episode
                 this.season = ep.season
                 this.posterUrl = ep.thumbnail
-                this.description = ep.overview
             }
         }
 
@@ -159,7 +163,7 @@ class AnimeShrineDownloader : MainAPI() {
     }
 
     // ============================================================
-    //  Load Links — fetch fresh download page, extract stream URLs
+    //  Load Links
     // ============================================================
     override suspend fun loadLinks(
         data: String,
@@ -176,8 +180,8 @@ class AnimeShrineDownloader : MainAPI() {
             return false
         }
 
-        // Extract stream URLs DIRECTLY from raw HTML
-        val streams = parseStreamsFromHtml(html)
+        val streamData = extractNextData(html)
+        val streams = parseStreams(streamData)
         if (streams.isEmpty()) return false
 
         for (stream in streams) {
@@ -202,58 +206,91 @@ class AnimeShrineDownloader : MainAPI() {
     }
 
     // ============================================================
-    //  Helpers: search for ESCAPED JSON fields directly in raw HTML
+    //  CRITICAL FIX: Extract __next_f data using indexOf, NOT regex
     // ============================================================
+    //  The regex ((?:[^"\\]|\\.)*) fails on 438KB+ strings (One Piece).
+    //  Using indexOf is O(n) and handles any page size.
     //
-    //  The HTML contains escaped JSON like: \"name\":\"One Piece\"
-    //  We search for these patterns directly, avoiding the need to
-    //  extract and unescape the entire __next_f data.
+    //  The HTML contains: self.__next_f.push([1,"CONTENT"])
+    //  The content is DOUBLE-escaped: \\" means " in the JSON
+    //  Unescape: \\" -> ", \\n -> newline, \\\\ -> \
     //
+    private fun extractNextData(html: String): String {
+        val prefix = "self.__next_f.push([1,\""
+        val suffix = "\"])"
+        val sb = StringBuilder()
+        var searchStart = 0
 
-    private fun extractEscapedField(section: String, field: String): String? {
-        // Pattern: \"field\":\"value\"
-        val pattern = Regex("""\\"$field\\":\\"((?:[^"\\]|\\.)*)\\"""")
+        while (true) {
+            val start = html.indexOf(prefix, searchStart)
+            if (start < 0) break
+            val contentStart = start + prefix.length
+            val end = html.indexOf(suffix, contentStart)
+            if (end < 0) break
+            val content = html.substring(contentStart, end)
+
+            // Unescape the JS string literal:
+            // The content has \\" for quotes, \\n for newlines, \\\\ for backslashes
+            // We need to unescape in the right order to avoid double-replacement
+            val unescaped = content
+                .replace("\\\\", "\u0000")   // temp: \\\\ -> placeholder
+                .replace("\\\"", "\"")        // \\" -> "
+                .replace("\\n", "\n")         // \\n -> newline
+                .replace("\u0000", "\\")      // placeholder -> \
+                .replace("\\u0026", "&")      // unicode &
+                .replace("\\/", "/")          // escaped /
+
+            sb.append(unescaped)
+            searchStart = end + suffix.length
+        }
+
+        return sb.toString()
+    }
+
+    // ============================================================
+    //  Helper: Extract a field from a JSON section
+    // ============================================================
+    private fun extractField(section: String, field: String): String? {
+        if (section.isBlank()) return null
+        val pattern = Regex(""""$field":"((?:[^"\\]|\\.)*)"""")
         val match = pattern.find(section) ?: return null
-        val value = match.groupValues[1]
+        return match.groupValues[1]
             .replace("\\\"", "\"")
             .replace("\\n", "\n")
             .replace("\\\\", "\\")
-        return value.takeIf { it.isNotBlank() }
+            .takeIf { it.isNotBlank() }
     }
 
-    private fun extractEscapedList(section: String, field: String): List<String> {
-        // Pattern: \"field\":[\"val1\",\"val2\",...]
-        val pattern = Regex("""\\"$field\\":\[([^\]]*)\]""")
+    // ============================================================
+    //  Helper: Extract a list field from a JSON section
+    // ============================================================
+    private fun extractListField(section: String, field: String): List<String> {
+        if (section.isBlank()) return emptyList()
+        val pattern = Regex(""""$field":\[([^\]]*)\]""")
         val match = pattern.find(section) ?: return emptyList()
-        return Regex("""\\"([^"]*)\\"""").findAll(match.groupValues[1])
+        return Regex(""""([^"]*)"""").findAll(match.groupValues[1])
             .map { it.groupValues[1] }
             .filter { it.isNotBlank() }
             .toList()
     }
 
     // ============================================================
-    //  Parse episodes from raw HTML (escaped format)
+    //  Helper: Parse episodes
     // ============================================================
-    //  Pattern in HTML: \"id\":\"37854-1:1:1\",\"title\":\"Episode Title\"
-    //  This works on ANY size page without regex performance issues.
-    //
     private data class EpisodeInfo(
         val id: String,
         val title: String,
         val season: Int,
         val episode: Int,
-        val overview: String?,
         val thumbnail: String?
     )
 
-    private fun parseEpisodesFromHtml(html: String, animeId: String): List<EpisodeInfo> {
+    private fun parseEpisodes(data: String, animeId: String): List<EpisodeInfo> {
         val episodes = mutableListOf<EpisodeInfo>()
         val seen = mutableSetOf<String>()
         val escapedId = Regex.escape(animeId)
-
-        // Search for escaped episode IDs: \"id\":\"<id>:<season>:<episode>\",\"title\":\"...\"
-        val pattern = Regex("""\\"id\\":\\"($escapedId:\d+:\d+(?:\.\d)?)\\",\\"title\\":\\"((?:[^"\\]|\\.)*)\\"""")
-        for (match in pattern.findAll(html)) {
+        val pattern = Regex(""""id":"($escapedId:\d+:\d+(?:\.\d)?)","title":"((?:[^"\\]|\\.)*)"""")
+        for (match in pattern.findAll(data)) {
             val epId = match.groupValues[1]
             val dedupKey = epId.substringBefore(".")
             if (dedupKey in seen) continue
@@ -269,41 +306,33 @@ class AnimeShrineDownloader : MainAPI() {
                 .replace("\\\\", "\\")
                 .ifBlank { "Episode $episodePart" }
 
-            // Find overview and thumbnail near this match
+            // Find thumbnail near this episode
             val contextStart = match.range.first
-            val contextEnd = minOf(html.length, match.range.last + 500)
-            val context = html.substring(contextStart, contextEnd)
+            val contextEnd = minOf(data.length, match.range.last + 300)
+            val context = data.substring(contextStart, contextEnd)
+            val thumbnail = Regex(""""thumbnail":"([^"]*)"""").find(context)?.groupValues?.get(1)
 
-            val overview = Regex("""\\"overview\\":\\"((?:[^"\\]|\\.)*)\\"""").find(context)?.groupValues?.get(1)
-                ?.replace("\\\"", "\"")?.replace("\\n", "\n")?.replace("\\\\", "\\")
-            val thumbnail = Regex("""\\"thumbnail\\":\\"([^"]*)\\"""").find(context)?.groupValues?.get(1)
-
-            episodes.add(EpisodeInfo(epId, title, season, episodePart, overview, thumbnail))
+            episodes.add(EpisodeInfo(epId, title, season, episodePart, thumbnail))
         }
-
         return episodes
     }
 
     // ============================================================
-    //  Parse streams from raw HTML (escaped format)
+    //  Helper: Parse streams
     // ============================================================
-    //  Pattern: \"name\":\"ANIMESHRINE 1080p\"...\"url\":\"https://dl.animeshrine.xyz/...\"
-    //
     private data class StreamInfo(val name: String, val url: String)
 
-    private fun parseStreamsFromHtml(html: String): List<StreamInfo> {
+    private fun parseStreams(data: String): List<StreamInfo> {
         val streams = mutableListOf<StreamInfo>()
         val seen = mutableSetOf<String>()
-
-        val pattern = Regex("""\\"name\\":\\"(ANIMESHRINE[^"]*)\\"[^}]*?\\"url\\":\\"(https://dl\.animeshrine\.xyz/[^"]*)\\"""")
-        for (match in pattern.findAll(html)) {
+        val pattern = Regex(""""name":"(ANIMESHRINE[^"]*)"[^}]*?"url":"(https://dl\.animeshrine\.xyz/[^"]*)"""")
+        for (match in pattern.findAll(data)) {
             val name = match.groupValues[1]
             val url = match.groupValues[2]
             if (url in seen) continue
             seen.add(url)
             streams.add(StreamInfo(name, url))
         }
-
         return streams
     }
 
@@ -319,7 +348,7 @@ class AnimeShrineDownloader : MainAPI() {
     }
 
     // ============================================================
-    //  Data classes for search API
+    //  Search API data classes
     // ============================================================
     @JsonIgnoreProperties(ignoreUnknown = true)
     data class SearchApiResponse(

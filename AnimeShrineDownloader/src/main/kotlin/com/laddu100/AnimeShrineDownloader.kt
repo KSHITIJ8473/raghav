@@ -74,58 +74,53 @@ class AnimeShrineDownloader : MainAPI() {
     //  Load
     // ============================================================
     //
-    //  URL format stored in search: <mainUrl>/info/<id>?type=<series|movie>
+    //  URL format: <mainUrl>/info/<id>?type=<series|movie>&total=<totalEpisodes>
     //
-    //  For SERIES: fetch /download/<id>:1:1 → page contains ALL episodes + metadata
-    //  For MOVIES: fetch /download/<id> → page contains stream URLs
-    //
-    //  Episode IDs in the videos array: "<id>:<season>:<episode>" (no .0 suffix)
-    //  Download URL for episodes: /download/<id>:<season>:<episode> (works with or without .0)
+    //  For SERIES:
+    //    1. Try to fetch /download/<id>:1:1 and parse episodes from __next_f
+    //    2. If that fails (large series like One Piece, 500KB+ page), generate
+    //       episodes from the totalSub count from the search API
+    //  For MOVIES:
+    //    Fetch /download/<id> for metadata
     //
     override suspend fun load(url: String): LoadResponse? {
         val id = url.substringAfter("/info/").substringBefore("?")
         if (id.isBlank()) return null
 
-        // Check if it's a movie or series from the URL
         val isMovie = url.contains("type=movie")
+        val totalEps = url.substringAfter("total=", "0").substringBefore("&").toIntOrNull() ?: 0
 
-        // Fetch the appropriate download page
-        val downloadUrl = if (isMovie) {
-            "$mainUrl/download/$id"
-        } else {
-            "$mainUrl/download/$id:1:1"
-        }
+        // Fetch the download page for metadata + episode list
+        val downloadUrl = if (isMovie) "$mainUrl/download/$id" else "$mainUrl/download/$id:1:1"
 
         val html = try {
             app.get(downloadUrl, headers = baseHeaders).text
         } catch (_: Exception) {
-            return null
+            // If fetch fails, generate episodes from totalSub
+            return generateFallbackLoad(url, id, isMovie, totalEps)
         }
 
         val data = extractNextData(html)
 
         // Extract metadata
-        val name = extractAnimeField(data, "name")
+        val name = extractField(data, "name")
             ?: Regex("""<title>(.*?)</title>""", RegexOption.IGNORE_CASE).find(html)?.groupValues?.get(1)?.let { cleanTitle(it) }
-            ?: return null
+            ?: return generateFallbackLoad(url, id, isMovie, totalEps)
 
-        val poster = extractAnimeField(data, "poster")
+        val poster = extractField(data, "poster")
             ?: Regex("""<meta\s+property="og:image"\s+content="([^"]+)"""", RegexOption.IGNORE_CASE).find(html)?.groupValues?.get(1)
             ?: ""
-
-        val background = extractAnimeField(data, "background") ?: poster
-        val plot = extractAnimeField(data, "description")
+        val background = extractField(data, "background") ?: poster
+        val plot = extractField(data, "description")
             ?: Regex("""<meta\s+property="og:description"\s+content="([^"]+)"""", RegexOption.IGNORE_CASE).find(html)?.groupValues?.get(1)
-
-        val year = extractAnimeField(data, "year")?.toIntOrNull()
-        val rating = extractAnimeField(data, "imdbRating")?.toFloatOrNull()
+        val year = extractField(data, "year")?.toIntOrNull()
+        val rating = extractField(data, "imdbRating")?.toFloatOrNull()
         val genres = extractListField(data, "genres")
         val cast = extractListField(data, "cast").map { ActorData(Actor(it)) }
         val languages = extractListField(data, "languages")
         val tags = if (languages.isNotEmpty()) genres + languages else genres
 
         if (isMovie) {
-            // Movie — data string is just the ID
             return newMovieLoadResponse(name, url, TvType.AnimeMovie, id) {
                 this.posterUrl = poster
                 this.backgroundPosterUrl = background
@@ -137,11 +132,19 @@ class AnimeShrineDownloader : MainAPI() {
             }
         }
 
-        // Series — parse ALL episodes
+        // Try to parse episodes from the page data
         val episodes = parseEpisodes(data, id)
 
+        if (episodes.isEmpty() && totalEps > 0) {
+            // Fallback for large series (One Piece, Pokemon, etc.)
+            // Generate episodes from totalSub count
+            val generatedEps = (1..totalEps).map { epNum ->
+                EpisodeInfo("$id:1:$epNum", "Episode $epNum", 1, epNum, null, null)
+            }
+            return createSeriesLoadResponse(name, url, poster, background, plot, year, rating, tags, cast, generatedEps)
+        }
+
         if (episodes.isEmpty()) {
-            // Fallback: if no episodes found, treat as movie
             return newMovieLoadResponse(name, url, TvType.AnimeMovie, id) {
                 this.posterUrl = poster
                 this.backgroundPosterUrl = background
@@ -153,6 +156,14 @@ class AnimeShrineDownloader : MainAPI() {
             }
         }
 
+        return createSeriesLoadResponse(name, url, poster, background, plot, year, rating, tags, cast, episodes)
+    }
+
+    private fun createSeriesLoadResponse(
+        name: String, url: String, poster: String?, background: String?,
+        plot: String?, year: Int?, rating: Float?, tags: List<String>,
+        cast: List<ActorData>, episodes: List<EpisodeInfo>
+    ): LoadResponse {
         val eps = episodes.map { ep ->
             newEpisode(ep.id) {
                 this.name = ep.title
@@ -162,7 +173,6 @@ class AnimeShrineDownloader : MainAPI() {
                 this.description = ep.overview
             }
         }
-
         return newTvSeriesLoadResponse(name, url, TvType.Anime, eps) {
             this.posterUrl = poster
             this.backgroundPosterUrl = background
@@ -172,6 +182,23 @@ class AnimeShrineDownloader : MainAPI() {
             this.score = rating?.let { Score.from10(it) }
             this.actors = cast
         }
+    }
+
+    private fun generateFallbackLoad(url: String, id: String, isMovie: Boolean, totalEps: Int): LoadResponse? {
+        if (isMovie) {
+            return newMovieLoadResponse("Anime", url, TvType.AnimeMovie, id) {}
+        }
+        if (totalEps <= 0) return null
+        val eps = (1..totalEps).map { epNum ->
+            EpisodeInfo("$id:1:$epNum", "Episode $epNum", 1, epNum, null, null)
+        }
+        return newTvSeriesLoadResponse("Anime", url, TvType.Anime, eps.map { ep ->
+            newEpisode(ep.id) {
+                this.name = ep.title
+                this.episode = ep.episode
+                this.season = ep.season
+            }
+        }) {}
     }
 
     private fun cleanTitle(raw: String): String {
@@ -188,13 +215,6 @@ class AnimeShrineDownloader : MainAPI() {
     // ============================================================
     //  Load Links
     // ============================================================
-    //
-    //  Data string:
-    //    Movie: "<id>" (e.g. "16907-1")
-    //    Series: "<id>:<season>:<episode>" (e.g. "1429-1:1:1")
-    //
-    //  Fetch: GET /download/<data> → parse streams from __next_f
-    //
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -251,26 +271,22 @@ class AnimeShrineDownloader : MainAPI() {
     }
 
     // ============================================================
-    //  Helper: Extract a field from animeData
+    //  Helper: Extract a field from the data (searches near animeData)
     // ============================================================
-    private fun extractAnimeField(data: String, field: String): String? {
+    //  Instead of depth-counting to find the end of animeData (which is slow
+    //  for 400KB+ objects), we search within a window after "animeData":{
+    //  The metadata fields appear at the beginning, before the videos array.
+    //
+    private fun extractField(data: String, field: String): String? {
         val animeDataStart = data.indexOf("\"animeData\":{")
         if (animeDataStart < 0) return null
 
-        var depth = 1
-        var i = animeDataStart + "\"animeData\":{".length
-        while (i < data.length && depth > 0) {
-            when (data[i]) {
-                '{' -> depth++
-                '}' -> depth--
-            }
-            i++
-        }
-        if (depth != 0) return null
-        val animeData = data.substring(animeDataStart, i)
+        // Search within the first 3000 chars of animeData (metadata is at the start)
+        val searchEnd = minOf(data.length, animeDataStart + 3000)
+        val searchArea = data.substring(animeDataStart, searchEnd)
 
         val fieldPattern = Regex(""""$field":"((?:[^"\\]|\\.)*)"""")
-        val match = fieldPattern.find(animeData) ?: return null
+        val match = fieldPattern.find(searchArea) ?: return null
         val value = match.groupValues[1]
             .replace("\\\"", "\"")
             .replace("\\n", "\n")
@@ -279,26 +295,17 @@ class AnimeShrineDownloader : MainAPI() {
     }
 
     // ============================================================
-    //  Helper: Extract a list field from animeData
+    //  Helper: Extract a list field from the data
     // ============================================================
     private fun extractListField(data: String, field: String): List<String> {
         val animeDataStart = data.indexOf("\"animeData\":{")
         if (animeDataStart < 0) return emptyList()
 
-        var depth = 1
-        var i = animeDataStart + "\"animeData\":{".length
-        while (i < data.length && depth > 0) {
-            when (data[i]) {
-                '{' -> depth++
-                '}' -> depth--
-            }
-            i++
-        }
-        if (depth != 0) return emptyList()
-        val animeData = data.substring(animeDataStart, i)
+        val searchEnd = minOf(data.length, animeDataStart + 3000)
+        val searchArea = data.substring(animeDataStart, searchEnd)
 
         val arrayPattern = Regex(""""$field":\[([^\]]*)\]""")
-        val match = arrayPattern.find(animeData) ?: return emptyList()
+        val match = arrayPattern.find(searchArea) ?: return emptyList()
         return Regex(""""([^"]*)"""").findAll(match.groupValues[1])
             .map { it.groupValues[1] }
             .filter { it.isNotBlank() }
@@ -308,9 +315,6 @@ class AnimeShrineDownloader : MainAPI() {
     // ============================================================
     //  Helper: Parse episodes from __next_f data
     // ============================================================
-    //  Episode ID format in videos array: "<id>:<season>:<episode>" (no .0)
-    //  Download URL works with this format directly.
-    //
     private data class EpisodeInfo(
         val id: String,
         val title: String,
@@ -324,13 +328,10 @@ class AnimeShrineDownloader : MainAPI() {
         val episodes = mutableListOf<EpisodeInfo>()
         val seen = mutableSetOf<String>()
 
-        // Match: "id":"<id>:<season>:<episode>","title":"<title>"
-        // The .0 suffix is optional (only the current episode has it)
         val escapedId = Regex.escape(animeId)
         val pattern = Regex(""""id":"($escapedId:\d+:\d+(?:\.\d)?)","title":"((?:[^"\\]|\\.)*)"""")
         for (match in pattern.findAll(data)) {
             val epId = match.groupValues[1]
-            // Deduplicate by stripping .0 suffix
             val dedupKey = epId.substringBefore(".")
             if (dedupKey in seen) continue
             seen.add(dedupKey)
@@ -345,7 +346,6 @@ class AnimeShrineDownloader : MainAPI() {
                 .replace("\\\\", "\\")
                 .ifBlank { "Episode $episodePart" }
 
-            // Find overview and thumbnail near this episode
             val contextStart = match.range.first
             val contextEnd = minOf(data.length, match.range.last + 500)
             val context = data.substring(contextStart, contextEnd)
@@ -400,7 +400,9 @@ class AnimeShrineDownloader : MainAPI() {
         @JsonProperty("background") val background: String?,
         @JsonProperty("year") val year: String?,
         @JsonProperty("imdbRating") val imdbRating: String?,
-        @JsonProperty("genres") val genres: List<String>?
+        @JsonProperty("genres") val genres: List<String>?,
+        @JsonProperty("totalSub") val totalSub: Int?,
+        @JsonProperty("totalDub") val totalDub: Int?
     )
 
     private fun SearchResult.toSearchResponse(): SearchResponse? {
@@ -410,8 +412,9 @@ class AnimeShrineDownloader : MainAPI() {
         val year = this.year?.toIntOrNull()
         val rating = this.imdbRating?.toFloatOrNull()
         val isMovie = this.type == "movie"
-        // Store type in URL so load() knows whether to use /download/<id> or /download/<id>:1:1
-        val url = "$mainUrl/info/$id?type=${if (isMovie) "movie" else "series"}"
+        // Store type AND totalSub in URL so load() can use them for fallback
+        val total = this.totalSub ?: 0
+        val url = "$mainUrl/info/$id?type=${if (isMovie) "movie" else "series"}&total=$total"
 
         return if (isMovie) {
             newMovieSearchResponse(name, url, TvType.AnimeMovie) {

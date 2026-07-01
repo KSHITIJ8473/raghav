@@ -177,8 +177,6 @@ class Miruro : MainAPI() {
         val subEpisodes = mutableListOf<Episode>()
         val dubEpisodes = mutableListOf<Episode>()
 
-        var loadError: String? = null
-
         try {
             val episodesJson = miruroPipeRequest("episodes", mapOf("anilistId" to anilistId))
             val episodesData = parseJson<MiruroEpisodesResponse>(episodesJson)
@@ -297,7 +295,6 @@ class Miruro : MainAPI() {
             )
         } catch (e: Exception) {
             println("Miruro: Failed to load episodes for $anilistId - ${e.message}")
-            loadError = e.message
         }
 
         return newAnimeLoadResponse(title, url, tvType) {
@@ -311,16 +308,6 @@ class Miruro : MainAPI() {
             addAniListId(anilistId)
             if (subEpisodes.isNotEmpty()) addEpisodes(DubStatus.Subbed, subEpisodes)
             if (dubEpisodes.isNotEmpty()) addEpisodes(DubStatus.Dubbed, dubEpisodes)
-            // If no episodes loaded, add a notice episode so the user sees
-            // WHY (Cloudflare/network) instead of a bare "coming soon".
-            if (subEpisodes.isEmpty() && dubEpisodes.isEmpty() && loadError != null) {
-                val errMsg = "Failed to load episodes: ${loadError.take(80)}"
-                subEpisodes.add(newEpisode("error|$anilistId") {
-                    this.name = errMsg
-                    this.episode = 0
-                })
-                addEpisodes(DubStatus.Subbed, subEpisodes)
-            }
         }
     }
 
@@ -331,11 +318,6 @@ class Miruro : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         val parts = data.split("|")
-        if (parts.size < 2) return false
-
-        // Handle error placeholder
-        if (parts[0] == "error") return false
-
         if (parts.size < 3) return false
 
         val dubOrSub = parts[0]  // "sub" or "dub"

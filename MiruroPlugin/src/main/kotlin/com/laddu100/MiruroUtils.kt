@@ -24,6 +24,8 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 import java.util.zip.GZIPInputStream
+import java.util.zip.Inflater
+import java.util.zip.InflaterInputStream
 import kotlin.coroutines.resume
 
 // ─── Pipe Encoding/Decoding ─────────────────────────────────────────────────
@@ -43,21 +45,34 @@ fun decodePipeResponse(responseBody: String): String {
     val trimmed = responseBody.trim()
     val padded = trimmed + "=".repeat((4 - trimmed.length % 4) % 4)
     val compressed = Base64.decode(padded, Base64.URL_SAFE)
-    return gunzip(compressed)
+    return decompress(compressed)
 }
 
-private fun gunzip(data: ByteArray): String {
-    val bais = ByteArrayInputStream(data)
-    val gzis = GZIPInputStream(bais)
-    val baos = ByteArrayOutputStream()
-    val buffer = ByteArray(8192)
-    var len: Int
-    while (gzis.read(buffer).also { len = it } != -1) {
-        baos.write(buffer, 0, len)
+/**
+ * Decompress data that may be gzip, zlib, or raw deflate.
+ * Mirrors the JS Kr() function: checks magic bytes to determine format.
+ */
+private fun decompress(data: ByteArray): String {
+    // gzip: magic bytes 1f 8b 08
+    if (data.size > 2 && data[0] == 0x1f.toByte() && data[1] == 0x8b.toByte()) {
+        val bais = ByteArrayInputStream(data)
+        val gzis = GZIPInputStream(bais)
+        return gzis.use { it.readBytes().toString(Charsets.UTF_8) }
     }
-    gzis.close()
-    return baos.toString("UTF-8")
+    // zlib or raw deflate: use Inflater with nowrap
+    // zlib header: first byte & 0x0f == 0x08, first byte >> 4 <= 7, (byte0<<8|byte1) % 31 == 0
+    val isZlib = data.size > 1 &&
+        (data[0].toInt() and 0x0f) == 0x08 &&
+        (data[0].toInt() shr 4) <= 7 &&
+        (((data[0].toInt() and 0xff) shl 8) or (data[1].toInt() and 0xff)) % 31 == 0
+
+    val inflater = if (isZlib) Inflater() else Inflater(true) // true = raw deflate (no zlib header)
+    val bais = ByteArrayInputStream(data)
+    val iis = InflaterInputStream(bais, inflater)
+    return iis.use { it.readBytes().toString(Charsets.UTF_8) }
 }
+
+private fun gunzip(data: ByteArray): String = decompress(data)
 
 // ─── XOR obfuscation key (from VITE_PIPE_OBF_KEY in env2.js) ────────────────
 // JS: Ga = new Uint8Array("71951034f8fbcf53d89db52ceb3dc22c".match(/.{2}/g).map(e => parseInt(e, 16)))
@@ -95,12 +110,12 @@ fun decodePipeResponseWithHeader(responseBody: String, obfuscatedHeader: String?
         decoded = xorDecrypt(decoded)
     }
 
-    return gunzip(decoded)
+    return decompress(decoded)
 }
 
 /**
  * Auto-detect response format (for WebView fallback where we can't read headers).
- * Tries: plain JSON → base64url+gzip → base64url+XOR+gzip
+ * Tries: plain JSON → base64url+decompress → base64url+XOR+decompress
  */
 fun decodePipeResponseAuto(responseBody: String): String {
     val trimmed = responseBody.trim()
@@ -110,26 +125,25 @@ fun decodePipeResponseAuto(responseBody: String): String {
         return trimmed
     }
 
-    // 2. base64url + gzip?
+    val padded = trimmed + "=".repeat((4 - trimmed.length % 4) % 4)
+    val decoded = try {
+        Base64.decode(padded, Base64.URL_SAFE)
+    } catch (_: Exception) {
+        throw Exception("Cannot base64-decode pipe response")
+    }
+
+    // 2. base64url + decompress (gzip/zlib/deflate)?
     try {
-        val padded = trimmed + "=".repeat((4 - trimmed.length % 4) % 4)
-        val decoded = Base64.decode(padded, Base64.URL_SAFE)
-        if (decoded.size > 2 && decoded[0] == 0x1f.toByte() && decoded[1] == 0x8b.toByte()) {
-            return gunzip(decoded)
-        }
+        return decompress(decoded)
     } catch (_: Exception) {}
 
-    // 3. base64url + XOR + gzip?
+    // 3. base64url + XOR + decompress?
     try {
-        val padded = trimmed + "=".repeat((4 - trimmed.length % 4) % 4)
-        val decoded = Base64.decode(padded, Base64.URL_SAFE)
         val xored = xorDecrypt(decoded)
-        if (xored.size > 2 && xored[0] == 0x1f.toByte() && xored[1] == 0x8b.toByte()) {
-            return gunzip(xored)
-        }
+        return decompress(xored)
     } catch (_: Exception) {}
 
-    throw Exception("Cannot decode pipe response (tried JSON, gzip, XOR+gzip)")
+    throw Exception("Cannot decode pipe response (tried JSON, decompress, XOR+decompress)")
 }
 
 fun translateEpisodeId(encodedId: String): String {
@@ -395,15 +409,14 @@ private fun isValidPipeResponse(text: String): Boolean {
     if (text.trimStart().startsWith("{") || text.trimStart().startsWith("[")) {
         return true
     }
-    // base64url + gzip or base64url + XOR + gzip?
+    // base64url + decompress or base64url + XOR + decompress?
     return try {
         val padded = text + "=".repeat((4 - text.length % 4) % 4)
         val decoded = Base64.decode(padded, Base64.URL_SAFE)
-        if (decoded.size > 2 && decoded[0] == 0x1f.toByte() && decoded[1] == 0x8b.toByte()) {
-            return true // gzip header
+        try { decompress(decoded); true } catch (_: Exception) {
+            val xored = xorDecrypt(decoded)
+            try { decompress(xored); true } catch (_: Exception) { false }
         }
-        val xored = xorDecrypt(decoded)
-        xored.size > 2 && xored[0] == 0x1f.toByte() && xored[1] == 0x8b.toByte()
     } catch (_: Exception) {
         false
     }
@@ -414,14 +427,22 @@ private fun isValidPipeResponse(text: String): Boolean {
 /**
  * Makes a Miruro pipe API request with automatic Cloudflare bypass.
  * Tries the working domain first, then one alternate.
+ *
+ * Adds live:true and _t (10-min floored timestamp) to query params,
+ * matching the site's JS: eo.request('episodes', {query: {anilistId, live:'true', _t:t}})
+ * Omits the 'version' field (JS sends undefined when protocolVersion is null).
  */
 suspend fun miruroPipeRequest(path: String, query: Map<String, Any>): String {
+    // Add live + _t params (cache-busting timestamp, 10-min floored)
+    val enrichedQuery = query.toMutableMap()
+    enrichedQuery["live"] = "true"
+    enrichedQuery["_t"] = (System.currentTimeMillis() / (600 * 1000)) * (600 * 1000)
+
     val payload = mapOf(
         "path" to path,
         "method" to "GET",
-        "query" to query,
-        "body" to null,
-        "version" to "0.1.0"
+        "query" to enrichedQuery,
+        "body" to null
     )
     val encoded = encodePipeRequest(payload)
 

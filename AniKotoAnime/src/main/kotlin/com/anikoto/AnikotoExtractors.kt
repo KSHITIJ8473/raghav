@@ -54,7 +54,7 @@ open class MegaPlay : ExtractorApi() {
 
             val pageHeaders = mapOf(
                 "User-Agent" to USER_AGENT,
-                "Referer" to (referer ?: "https://anikoto.cz/")
+                "Referer" to (referer ?: "https://anikototv.to/")
             )
 
             val doc = app.get(url, headers = pageHeaders).document

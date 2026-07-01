@@ -36,11 +36,18 @@ fun encodePipeRequest(payload: Map<String, Any?>): String {
     )
 }
 
+/**
+ * Decode a base64url + gzip response (old format, no XOR).
+ */
 fun decodePipeResponse(responseBody: String): String {
     val trimmed = responseBody.trim()
     val padded = trimmed + "=".repeat((4 - trimmed.length % 4) % 4)
     val compressed = Base64.decode(padded, Base64.URL_SAFE)
-    val bais = ByteArrayInputStream(compressed)
+    return gunzip(compressed)
+}
+
+private fun gunzip(data: ByteArray): String {
+    val bais = ByteArrayInputStream(data)
     val gzis = GZIPInputStream(bais)
     val baos = ByteArrayOutputStream()
     val buffer = ByteArray(8192)
@@ -52,21 +59,77 @@ fun decodePipeResponse(responseBody: String): String {
     return baos.toString("UTF-8")
 }
 
+// ─── XOR obfuscation key (from VITE_PIPE_OBF_KEY in env2.js) ────────────────
+// JS: Ga = new Uint8Array("71951034f8fbcf53d89db52ceb3dc22c".match(/.{2}/g).map(e => parseInt(e, 16)))
+private val XOR_KEY = byteArrayOf(
+    0x71, 0x95.toByte(), 0x10, 0x34, 0xF8.toByte(), 0xFB.toByte(), 0xCF.toByte(), 0x53,
+    0xD8.toByte(), 0x9D.toByte(), 0xB5.toByte(), 0x2C, 0xEB.toByte(), 0x3D, 0xC2.toByte(), 0x2C
+)
+
+private fun xorDecrypt(data: ByteArray): ByteArray {
+    val result = ByteArray(data.size)
+    for (i in data.indices) {
+        result[i] = (data[i].toInt() xor XOR_KEY[i % XOR_KEY.size].toInt()).toByte()
+    }
+    return result
+}
+
 /**
- * Try to decode a pipe response. Falls back to plain JSON if the response
- * is not gzip+base64 (API may have changed format).
+ * Decode pipe response based on x-obfuscated header value.
+ *
+ * - No header / null  → plain JSON text, return as-is
+ * - Header present, value != "2" → base64url + gzip
+ * - Header === "2" → base64url + XOR + gzip
  */
-fun decodePipeResponseSafe(responseBody: String): String {
+fun decodePipeResponseWithHeader(responseBody: String, obfuscatedHeader: String?): String {
+    if (obfuscatedHeader == null) {
+        // Plain JSON response
+        return responseBody.trim()
+    }
+
     val trimmed = responseBody.trim()
-    // Try gzip+base64 first
-    try {
-        return decodePipeResponse(trimmed)
-    } catch (_: Exception) {}
-    // Fallback: maybe it's plain JSON
+    val padded = trimmed + "=".repeat((4 - trimmed.length % 4) % 4)
+    var decoded = Base64.decode(padded, Base64.URL_SAFE)
+
+    if (obfuscatedHeader == "2") {
+        decoded = xorDecrypt(decoded)
+    }
+
+    return gunzip(decoded)
+}
+
+/**
+ * Auto-detect response format (for WebView fallback where we can't read headers).
+ * Tries: plain JSON → base64url+gzip → base64url+XOR+gzip
+ */
+fun decodePipeResponseAuto(responseBody: String): String {
+    val trimmed = responseBody.trim()
+
+    // 1. Plain JSON?
     if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
         return trimmed
     }
-    throw Exception("Cannot decode pipe response (not gzip+base64, not JSON)")
+
+    // 2. base64url + gzip?
+    try {
+        val padded = trimmed + "=".repeat((4 - trimmed.length % 4) % 4)
+        val decoded = Base64.decode(padded, Base64.URL_SAFE)
+        if (decoded.size > 2 && decoded[0] == 0x1f.toByte() && decoded[1] == 0x8b.toByte()) {
+            return gunzip(decoded)
+        }
+    } catch (_: Exception) {}
+
+    // 3. base64url + XOR + gzip?
+    try {
+        val padded = trimmed + "=".repeat((4 - trimmed.length % 4) % 4)
+        val decoded = Base64.decode(padded, Base64.URL_SAFE)
+        val xored = xorDecrypt(decoded)
+        if (xored.size > 2 && xored[0] == 0x1f.toByte() && xored[1] == 0x8b.toByte()) {
+            return gunzip(xored)
+        }
+    } catch (_: Exception) {}
+
+    throw Exception("Cannot decode pipe response (tried JSON, gzip, XOR+gzip)")
 }
 
 fun translateEpisodeId(encodedId: String): String {
@@ -80,12 +143,6 @@ fun translateEpisodeId(encodedId: String): String {
 }
 
 // ─── Cloudflare Bypass + Domain Management ──────────────────────────────────
-//
-// Design (v2 — fast & reliable):
-//   1. OkHttp direct with cached cookies (fast path — ~1s when cookies work)
-//   2. WebView fetch (solves CF challenge + reads response body in one step)
-//   Only 2 domains tried (not 4). Cookies cached after first WebView success
-//   so subsequent requests take the fast OkHttp path.
 
 val MIRURO_DOMAINS = listOf(
     "https://www.miruro.ru",
@@ -100,6 +157,7 @@ const val CF_USER_AGENT =
 object MiruroCloudflare {
     private val cookieCache = ConcurrentHashMap<String, String>()
     private val workingDomain = AtomicReference<String?>(MIRURO_DOMAINS[0])
+    private val warmingUp = ConcurrentHashMap<String, Boolean>()
 
     fun getWorkingDomain(): String = workingDomain.get() ?: MIRURO_DOMAINS[0]
     fun setWorkingDomain(d: String) { workingDomain.set(d) }
@@ -124,13 +182,113 @@ object MiruroCloudflare {
     }
 
     /**
-     * Fetch a pipe URL via WebView. Solves Cloudflare challenge automatically
-     * (WebView executes CF JS), then reads the response body via innerText.
+     * Warm up Cloudflare cookies by loading the homepage in a WebView.
+     * The WebView solves the CF "Just a moment..." JS challenge and obtains
+     * cf_clearance + __cf_bm cookies. These are cached for future OkHttp calls.
      *
-     * Polls content at 3s, 6s, 9s, 12s, 15s, 18s to catch the response after
-     * CF challenge resolves (can take 5-10s).
-     *
-     * On success, saves cookies for future fast OkHttp requests.
+     * Polls for cf_clearance cookie every 2s (up to 15s). Returns immediately
+     * once cf_clearance appears.
+     */
+    suspend fun warmUp(context: Context?, domain: String): String {
+        if (context == null) return ""
+
+        // Return cached cookies if we already have cf_clearance
+        val existing = cookieCache[domain]
+        if (existing != null && existing.contains("cf_clearance")) {
+            return existing
+        }
+
+        // Prevent concurrent warm-ups for the same domain
+        if (warmingUp.putIfAbsent(domain, true) != null) {
+            // Another coroutine is already warming up — wait for it
+            var waitCount = 0
+            while (waitCount < 20) {
+                val c = cookieCache[domain]
+                if (c != null && c.contains("cf_clearance")) return c
+                try { kotlinx.coroutines.delay(500) } catch (_: Exception) {}
+                waitCount++
+            }
+            return cookieCache[domain] ?: ""
+        }
+
+        try {
+            return withContext(Dispatchers.Main) {
+                suspendCancellableCoroutine { cont ->
+                    val done = AtomicBoolean(false)
+                    var webView: WebView? = null
+
+                    fun finish(cookieValue: String) {
+                        if (done.compareAndSet(false, true)) {
+                            try { webView?.destroy() } catch (_: Exception) {}
+                            if (cookieValue.isNotEmpty()) {
+                                cookieCache[domain] = cookieValue
+                            }
+                            warmingUp.remove(domain)
+                            cont.resume(cookieValue)
+                        }
+                    }
+
+                    fun checkCookies() {
+                        if (done.get()) return
+                        try {
+                            val cookies = CookieManager.getInstance().getCookie(domain) ?: ""
+                            if (cookies.contains("cf_clearance")) {
+                                finish(cookies)
+                            }
+                        } catch (_: Exception) {}
+                    }
+
+                    try {
+                        webView = WebView(context).apply {
+                            settings.javaScriptEnabled = true
+                            settings.domStorageEnabled = true
+                            settings.databaseEnabled = true
+                            settings.mediaPlaybackRequiresUserGesture = false
+                            settings.userAgentString = CF_USER_AGENT
+                            CookieManager.getInstance().setAcceptCookie(true)
+
+                            webViewClient = object : WebViewClient() {
+                                override fun onPageFinished(view: WebView?, pageUrl: String?) {
+                                    super.onPageFinished(view, pageUrl)
+                                    // Check cookies after each page load (CF challenge
+                                    // causes multiple loads before real page appears)
+                                    Handler(Looper.getMainLooper()).postDelayed({
+                                        checkCookies()
+                                    }, 1500)
+                                }
+                            }
+                        }
+
+                        webView?.loadUrl(domain)
+
+                        // Poll for cf_clearance every 2s
+                        for (delay in longArrayOf(2000, 4000, 6000, 8000, 10000, 12000, 14000)) {
+                            Handler(Looper.getMainLooper()).postDelayed({
+                                checkCookies()
+                            }, delay)
+                        }
+
+                        // Overall timeout: 16s — grab whatever cookies we have
+                        Handler(Looper.getMainLooper()).postDelayed({
+                            val cookies = try {
+                                CookieManager.getInstance().getCookie(domain) ?: ""
+                            } catch (_: Exception) { "" }
+                            finish(cookies)
+                        }, 16000)
+                    } catch (e: Exception) {
+                        finish("")
+                    }
+                }
+            }
+        } finally {
+            warmingUp.remove(domain)
+        }
+    }
+
+    /**
+     * Fetch a pipe URL via WebView as a last resort. Solves CF challenge
+     * and reads the response body via innerText. Uses auto-detect decoding
+     * since we can't read the x-obfuscated header from WebView.
      */
     suspend fun fetchViaWebView(
         context: Context?,
@@ -147,7 +305,6 @@ object MiruroCloudflare {
 
                 fun finish(result: String?) {
                     if (done.compareAndSet(false, true)) {
-                        // Save cookies for future OkHttp calls
                         try {
                             val cookies = CookieManager.getInstance().getCookie(domain) ?: ""
                             if (cookies.isNotEmpty()) {
@@ -179,7 +336,6 @@ object MiruroCloudflare {
                         if (isValidPipeResponse(text)) {
                             finish(text)
                         }
-                        // If not valid, keep waiting (CF still resolving or page not ready)
                     }
                 }
 
@@ -195,7 +351,6 @@ object MiruroCloudflare {
                         webViewClient = object : WebViewClient() {
                             override fun onPageFinished(view: WebView?, pageUrl: String?) {
                                 super.onPageFinished(view, pageUrl)
-                                // Wait 3s for CF challenge JS to run, then check content
                                 Handler(Looper.getMainLooper()).postDelayed({
                                     checkContent(view)
                                 }, 3000)
@@ -207,16 +362,12 @@ object MiruroCloudflare {
                     headers["Referer"] = referer
                     webView?.loadUrl(url, headers)
 
-                    // Poll content at 6s, 9s, 12s, 15s, 18s
-                    // (3s is handled by onPageFinished)
-                    val pollDelays = longArrayOf(6000, 9000, 12000, 15000, 18000)
-                    for (delay in pollDelays) {
+                    for (delay in longArrayOf(6000, 9000, 12000, 15000, 18000)) {
                         Handler(Looper.getMainLooper()).postDelayed({
                             checkContent(webView)
                         }, delay)
                     }
 
-                    // Overall timeout: 22s
                     Handler(Looper.getMainLooper()).postDelayed({
                         finish(null)
                     }, 22000)
@@ -229,8 +380,7 @@ object MiruroCloudflare {
 }
 
 /**
- * Check if text looks like a valid pipe API response (not a CF challenge page).
- * Valid responses are long base64 strings that decode to gzip data.
+ * Check if text looks like a valid pipe API response.
  */
 private fun isValidPipeResponse(text: String): Boolean {
     if (text.length < 50) return false
@@ -241,23 +391,29 @@ private fun isValidPipeResponse(text: String): Boolean {
         lower.contains("attention required") || lower.contains("cf-ray")) {
         return false
     }
-    // Check if it's valid base64 that decompresses as gzip
+    // Plain JSON?
+    if (text.trimStart().startsWith("{") || text.trimStart().startsWith("[")) {
+        return true
+    }
+    // base64url + gzip or base64url + XOR + gzip?
     return try {
         val padded = text + "=".repeat((4 - text.length % 4) % 4)
-        val compressed = Base64.decode(padded, Base64.URL_SAFE)
-        compressed.size > 2 &&
-            compressed[0] == 0x1f.toByte() &&
-            compressed[1] == 0x8b.toByte()
+        val decoded = Base64.decode(padded, Base64.URL_SAFE)
+        if (decoded.size > 2 && decoded[0] == 0x1f.toByte() && decoded[1] == 0x8b.toByte()) {
+            return true // gzip header
+        }
+        val xored = xorDecrypt(decoded)
+        xored.size > 2 && xored[0] == 0x1f.toByte() && xored[1] == 0x8b.toByte()
     } catch (_: Exception) {
         false
     }
 }
 
-// ─── Pipe Request (Cloudflare-aware, 2 domains max) ─────────────────────────
+// ─── Pipe Request (Cloudflare-aware) ────────────────────────────────────────
 
 /**
- * Makes a Miruro pipe API request. Tries the working domain first,
- * then ONE alternate. Each domain gets 2 attempts: OkHttp → WebView fetch.
+ * Makes a Miruro pipe API request with automatic Cloudflare bypass.
+ * Tries the working domain first, then one alternate.
  */
 suspend fun miruroPipeRequest(path: String, query: Map<String, Any>): String {
     val payload = mapOf(
@@ -305,30 +461,55 @@ private suspend fun miruroPipeRequestForDomain(
     )
     MiruroCloudflare.getCookies(domain)?.let { headers["Cookie"] = it }
 
-    // ── Step 1: OkHttp direct (fast path — ~1s when cookies work) ──
+    // ── Step 1: OkHttp direct with cached cookies ──
     try {
         val response = app.get(pipeUrl, headers = headers, timeout = 15)
         if (response.code == 200) {
             val body = response.text
             if (!MiruroCloudflare.isCloudflareBlock(body, 200)) {
+                // Read x-obfuscated header
+                val obfHeader = response.headers["x-obfuscated"]
                 try {
-                    return decodePipeResponseSafe(body)
+                    return decodePipeResponseWithHeader(body, obfHeader)
                 } catch (_: Exception) {
-                    // Body wasn't decodable — fall through to WebView
+                    // Try auto-detect as fallback
+                    try {
+                        return decodePipeResponseAuto(body)
+                    } catch (_: Exception) {}
                 }
             }
         }
-    } catch (_: Exception) {
-        // Network error — fall through to WebView
+    } catch (_: Exception) {}
+
+    // ── Step 2: Warm up CF cookies via WebView, then retry OkHttp ──
+    val cookies = MiruroCloudflare.warmUp(Miruro.context, domain)
+    if (cookies.isNotEmpty()) {
+        headers["Cookie"] = cookies
+        try {
+            val response = app.get(pipeUrl, headers = headers, timeout = 15)
+            if (response.code == 200) {
+                val body = response.text
+                if (!MiruroCloudflare.isCloudflareBlock(body, 200)) {
+                    val obfHeader = response.headers["x-obfuscated"]
+                    try {
+                        return decodePipeResponseWithHeader(body, obfHeader)
+                    } catch (_: Exception) {
+                        try {
+                            return decodePipeResponseAuto(body)
+                        } catch (_: Exception) {}
+                    }
+                }
+            }
+        } catch (_: Exception) {}
     }
 
-    // ── Step 2: WebView fetch (solves CF + reads response body) ──
+    // ── Step 3: WebView fetch (last resort, auto-detect format) ──
     val webBody = MiruroCloudflare.fetchViaWebView(
         Miruro.context, domain, pipeUrl, "$domain/"
     )
     if (webBody != null) {
         try {
-            return decodePipeResponseSafe(webBody)
+            return decodePipeResponseAuto(webBody)
         } catch (_: Exception) {}
     }
 
@@ -563,7 +744,6 @@ data class AniListRelationEdge(
     @JsonProperty("node") val node: AniListMedia? = null
 )
 
-// Miruro Pipe response models
 @JsonIgnoreProperties(ignoreUnknown = true)
 data class MiruroEpisodesResponse(
     @JsonProperty("providers") val providers: Map<String, MiruroProvider>? = null,

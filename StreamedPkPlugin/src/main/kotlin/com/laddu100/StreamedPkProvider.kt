@@ -6,6 +6,7 @@ import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.AppUtils.toJson
 import com.fasterxml.jackson.annotation.JsonProperty
 import okhttp3.Dns
+import okhttp3.Headers
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.net.InetAddress
@@ -24,6 +25,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlin.coroutines.resume
 import android.util.Log
 
@@ -104,7 +106,7 @@ class StreamedPkProvider : MainAPI() {
         app.baseClient.newBuilder()
             .dns(customDns)
             .connectTimeout(15, TimeUnit.SECONDS)
-            .readTimeout(15, TimeUnit.SECONDS)
+            .readTimeout(20, TimeUnit.SECONDS)
             .build()
     }
 
@@ -132,18 +134,152 @@ class StreamedPkProvider : MainAPI() {
         return emptyList()
     }
 
-    private fun customGet(path: String): String {
+    // ── DDoS-Guard cookie management ───────────────────────────────────────────
+    // streamed.pk is fronted by DDoS-Guard (server: ddos-guard) which intermittently
+    // issues challenge cookies (__ddg1_, __ddg8_, __ddg9_, __ddg10_ and, under
+    // stricter scrutiny, a JS-challenge cookie __ddg2_). OkHttp cannot execute
+    // the JS challenge, but DDoS-Guard lets a large share of requests through
+    // once the tracking cookies are present and echoed back. The previous code
+    // never persisted or re-sent these cookies, so every home-page load was a
+    // cold coin-flip against DDoS-Guard -> "no live matches" until the user
+    // reloaded enough times for one request to slip through and seed the
+    // (baseClient) cookie jar. We now manage cookies explicitly here so the
+    // success rate is high and predictable regardless of the base client config.
+    private val cookieStore = ConcurrentHashMap<String, String>()
+
+    private fun parseAndStoreCookies(headers: Headers) {
+        for (i in 0 until headers.size) {
+            val name = headers.name(i)
+            if (!name.equals("Set-Cookie", ignoreCase = true)) continue
+            val raw = headers.value(i) ?: continue
+            val cookiePart = raw.substringBefore(";").trim()
+            val eqIdx = cookiePart.indexOf('=')
+            if (eqIdx <= 0) continue
+            val cName = cookiePart.substring(0, eqIdx).trim()
+            val cValue = cookiePart.substring(eqIdx + 1).trim()
+            if (cName.isNotEmpty() && cValue.isNotEmpty()) {
+                cookieStore[cName] = cValue
+            }
+        }
+    }
+
+    private fun cookieHeader(): String =
+        if (cookieStore.isEmpty()) "" else cookieStore.entries.joinToString("; ") { "${it.key}=${it.value}" }
+
+    /**
+     * Warm up DDoS-Guard cookies by fetching the main HTML page.
+     * The HTML page is served leniently (always 200 with __ddg* cookies) and
+     * seeds the cookie store so the subsequent /api/matches/all call is far
+     * more likely to pass DDoS-Guard without a challenge.
+     */
+    private fun warmUpCookies() {
+        try {
+            val builder = Request.Builder()
+                .url("$mainUrl/")
+                .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
+                .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+                .header("Accept-Language", "en-US,en;q=0.9")
+            val c = cookieHeader()
+            if (c.isNotEmpty()) builder.header("Cookie", c)
+            dnsClient.newCall(builder.build()).execute().use { response ->
+                parseAndStoreCookies(response.headers)
+            }
+        } catch (e: Exception) {
+            println("StreamedPk: warm-up error - ${e.message}")
+        }
+    }
+
+    /**
+     * Single-attempt GET with cookie send/store + DDoS-Guard challenge detection.
+     * Throws on HTTP error or when an HTML challenge page is returned instead of data.
+     */
+    private fun customGetRaw(path: String, acceptHtml: Boolean = false): String {
         val url = if (path.startsWith("http")) path else "$mainUrl$path"
-        val request = Request.Builder()
+        val builder = Request.Builder()
             .url(url)
             .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
+            .header("Accept", if (acceptHtml) "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8" else "application/json, text/plain, */*")
+            .header("Accept-Language", "en-US,en;q=0.9")
             .header("Referer", "$mainUrl/")
             .header("Origin", mainUrl)
-            .build()
-        
-        dnsClient.newCall(request).execute().use { response ->
-            if (!response.isSuccessful) throw Exception("HTTP Error: ${response.code}")
-            return response.body?.string() ?: ""
+        val c = cookieHeader()
+        if (c.isNotEmpty()) builder.header("Cookie", c)
+
+        dnsClient.newCall(builder.build()).execute().use { response ->
+            // Always persist any cookies DDoS-Guard hands back, even on error responses.
+            parseAndStoreCookies(response.headers)
+
+            if (!response.isSuccessful) {
+                throw Exception("HTTP ${response.code}")
+            }
+            val body = response.body?.string() ?: ""
+            // Detect a DDoS-Guard challenge: the API must return JSON. If we get
+            // HTML (challenge / interstitial page) instead, surface a retryable error.
+            if (!acceptHtml) {
+                val trimmed = body.trimStart()
+                if (trimmed.startsWith("<") || body.contains("__ddg", ignoreCase = true)) {
+                    throw Exception("DDoS-Guard challenge page (HTML) instead of data")
+                }
+            }
+            return body
+        }
+    }
+
+    /**
+     * Retrying GET with exponential backoff + periodic cookie warm-up.
+     *
+     * streamed.pk's DDoS-Guard intermittently challenges requests; a single
+     * transient failure must NOT surface to the user as "no matches". We retry
+     * up to [maxAttempts] times, priming cookies before the first attempt and
+     * again after a couple of failures so later attempts carry fresh __ddg* cookies.
+     */
+    private suspend fun customGetWithRetry(
+        path: String,
+        maxAttempts: Int = 6,
+        acceptHtml: Boolean = false
+    ): String {
+        var lastError: Exception? = null
+        for (attempt in 1..maxAttempts) {
+            try {
+                if (attempt == 1 || attempt == 3 || attempt == 5) {
+                    warmUpCookies()
+                }
+                return customGetRaw(path, acceptHtml)
+            } catch (e: Exception) {
+                lastError = e
+                println("StreamedPk: GET $path attempt $attempt/$maxAttempts failed - ${e.message}")
+                if (attempt < maxAttempts) {
+                    val backoff = (attempt * 450L).coerceAtMost(2500L)
+                    try { delay(backoff) } catch (_: Exception) {}
+                }
+            }
+        }
+        throw lastError ?: Exception("GET $path failed after $maxAttempts attempts")
+    }
+
+    // ── In-memory matches cache ────────────────────────────────────────────────
+    // Serves recent data on transient failures so the home page never shows
+    // "no matches" when matches actually exist.
+    private data class CachedMatches(val matches: List<StreamedMatch>, val timestamp: Long)
+    @Volatile private var matchesCache: CachedMatches? = null
+    private val CACHE_TTL_MS = 60_000L          // considered fresh within 60s
+    private val CACHE_STALE_LIMIT_MS = 600_000L // serve stale up to 10min on total failure
+
+    private suspend fun fetchAllMatches(): List<StreamedMatch> {
+        try {
+            val text = customGetWithRetry("/api/matches/all")
+            val matches = parseJson<List<StreamedMatch>>(text)
+            matchesCache = CachedMatches(matches, System.currentTimeMillis())
+            return matches
+        } catch (e: Exception) {
+            // Last-resort: serve cached data (even stale) instead of failing,
+            // so the user never sees an empty home page due to a transient blip.
+            val cached = matchesCache
+            if (cached != null && System.currentTimeMillis() - cached.timestamp < CACHE_STALE_LIMIT_MS) {
+                println("StreamedPk: API failed (${e.message}); serving cached matches (age=${(System.currentTimeMillis() - cached.timestamp) / 1000}s)")
+                return cached.matches
+            }
+            throw e
         }
     }
 
@@ -257,10 +393,10 @@ class StreamedPkProvider : MainAPI() {
         request: MainPageRequest
     ): HomePageResponse {
         val lists = mutableListOf<HomePageList>()
+        var fetchFailed = false
 
         try {
-            val text = customGet("/api/matches/all")
-            val allMatches = parseJson<List<StreamedMatch>>(text)
+            val allMatches = fetchAllMatches()
 
             // 1. Live Matches (sources list is not empty)
             val liveMatches = allMatches.filter { !it.sources.isNullOrEmpty() }
@@ -303,20 +439,29 @@ class StreamedPkProvider : MainAPI() {
                 lists.add(HomePageList("📅 Upcoming Matches", upcomingItems, isHorizontalImages = true))
             }
         } catch (e: Exception) {
-            println("StreamedPk: Failed to load main page - ${e.message}")
+            println("StreamedPk: getMainPage failed after retries - ${e.message}")
+            fetchFailed = true
         }
 
+        // Only show the placeholder when there is genuinely nothing to display.
+        // A transient fetch failure shows a distinct "connection issue" message so
+        // the user knows it is not an empty catalogue and should pull to refresh.
         if (lists.isEmpty()) {
             val dummyLoadData = EventLoadData(
-                title = "No matches available",
+                title = if (fetchFailed) "Connection issue" else "No matches available",
                 id = "dummy",
                 posterUrl = "",
                 date = null,
                 category = "other",
                 sources = null
             )
+            val message = if (fetchFailed) {
+                "Connection issue with streamed.pk. Pull down to refresh — live matches are being loaded."
+            } else {
+                "No matches available right now. Please check back later!"
+            }
             val dummyItem = newLiveSearchResponse(
-                name = "No matches available right now. Please check back later!",
+                name = message,
                 url = dummyLoadData.toJson(),
                 type = TvType.Live
             )
@@ -331,8 +476,7 @@ class StreamedPkProvider : MainAPI() {
     override suspend fun search(query: String): List<SearchResponse> {
         val results = mutableListOf<SearchResponse>()
         try {
-            val text = customGet("/api/matches/all")
-            val allMatches = parseJson<List<StreamedMatch>>(text)
+            val allMatches = fetchAllMatches()
             allMatches.filter { match ->
                 match.title.contains(query, ignoreCase = true) ||
                 (match.category?.contains(query, ignoreCase = true) ?: false)
@@ -381,8 +525,7 @@ class StreamedPkProvider : MainAPI() {
 
         // Fetch fresh match details to get active sources dynamically if match was scheduled
         try {
-            val text = customGet("/api/matches/all")
-            val allMatches = parseJson<List<StreamedMatch>>(text)
+            val allMatches = fetchAllMatches()
             val freshMatch = allMatches.find { it.id == eventData.id }
             if (freshMatch != null) {
                 sources = freshMatch.sources
@@ -401,19 +544,19 @@ class StreamedPkProvider : MainAPI() {
             sources.forEach { src ->
                 try {
                     val streamUrl = "/api/stream/${src.source}/${src.id}"
-                    val streamText = customGet(streamUrl)
+                    val streamText = customGetWithRetry(streamUrl)
                     val variants = parseJson<List<StreamVariant>>(streamText)
-                    
+
                     variants.forEach { st ->
                         val sn = st.streamNo
                         val langSuffix = if (!st.language.isNullOrBlank()) " (${st.language})" else ""
                         val hdSuffix = if (st.hd == true) " [HD]" else ""
                         val serverName = "Server $sn - ${src.source.uppercase()}$langSuffix$hdSuffix"
-                        
+
                         val encodedId = java.net.URLEncoder.encode(src.id, "UTF-8").replace("+", "%20")
                         val encodedFallback = st.embedUrl?.let { java.net.URLEncoder.encode(it, "UTF-8").replace("+", "%20") } ?: ""
                         val customUrl = "streamed://${src.source}?id=$encodedId&num=$sn&fallback=$encodedFallback"
-                        
+
                         streamsList.add(StreamInfo(name = serverName, url = customUrl))
                     }
                 } catch (e: Exception) {
@@ -506,7 +649,7 @@ class StreamedPkProvider : MainAPI() {
                             ): WebResourceResponse? {
                                 val reqUrl = request?.url?.toString() ?: return null
                                 Log.d("StreamedPkNet", "Request: $reqUrl")
-                                
+
                                 if ((reqUrl.contains(".m3u8", ignoreCase = true) || reqUrl.contains("master.txt", ignoreCase = true)) && !captured.get()) {
                                     Log.d("StreamedPk", "Captured stream URL: $reqUrl")
                                     if (captured.compareAndSet(false, true)) {
@@ -651,9 +794,9 @@ class StreamedPkProvider : MainAPI() {
                     val stripped = stream.url.substring("streamed://".length)
                     val queryIndex = stripped.indexOf('?')
                     val queryString = if (queryIndex != -1) stripped.substring(queryIndex + 1) else ""
-                    
+
                     var fallbackUrl = ""
-                    
+
                     if (queryString.isNotEmpty()) {
                         val params = queryString.split('&')
                         for (param in params) {

@@ -171,7 +171,6 @@ const val CF_USER_AGENT =
 object MiruroCloudflare {
     private val cookieCache = ConcurrentHashMap<String, String>()
     private val workingDomain = AtomicReference<String?>(MIRURO_DOMAINS[0])
-    private val warmingUp = ConcurrentHashMap<String, Boolean>()
 
     fun getWorkingDomain(): String = workingDomain.get() ?: MIRURO_DOMAINS[0]
     fun setWorkingDomain(d: String) { workingDomain.set(d) }
@@ -196,119 +195,29 @@ object MiruroCloudflare {
     }
 
     /**
-     * Warm up Cloudflare cookies by loading the homepage in a WebView.
-     * The WebView solves the CF "Just a moment..." JS challenge and obtains
-     * cf_clearance + __cf_bm cookies. These are cached for future OkHttp calls.
+     * THE KEY FIX: Fetch pipe API response via JavaScript fetch() injection.
      *
-     * Polls for cf_clearance cookie every 2s (up to 15s). Returns immediately
-     * once cf_clearance appears.
+     * Previous approach failed because:
+     * 1. warmUp checked for cf_clearance cookie — but CF managed challenges
+     *    don't always set that cookie.
+     * 2. fetchViaWebView loaded the pipe URL directly — but the pipe response
+     *    is non-HTML (text/plain), so WebView can't render it and innerText
+     *    returns empty.
+     *
+     * New approach:
+     * 1. Load the HOMEPAGE (HTML) in WebView — CF challenge solves here.
+     * 2. Detect challenge is solved by checking document.title != "Just a moment..."
+     * 3. Once solved, inject: fetch('/api/secure/pipe?e=...').then(r => r.text())
+     * 4. The fetch carries all CF cookies automatically (same-origin).
+     * 5. Read the response text from a JS variable.
+     *
+     * This works because the WebView's fetch() runs in the same browser context
+     * that solved the CF challenge — it passes all CF checks transparently.
      */
-    suspend fun warmUp(context: Context?, domain: String): String {
-        if (context == null) return ""
-
-        // Return cached cookies if we already have cf_clearance
-        val existing = cookieCache[domain]
-        if (existing != null && existing.contains("cf_clearance")) {
-            return existing
-        }
-
-        // Prevent concurrent warm-ups for the same domain
-        if (warmingUp.putIfAbsent(domain, true) != null) {
-            // Another coroutine is already warming up — wait for it
-            var waitCount = 0
-            while (waitCount < 20) {
-                val c = cookieCache[domain]
-                if (c != null && c.contains("cf_clearance")) return c
-                try { kotlinx.coroutines.delay(500) } catch (_: Exception) {}
-                waitCount++
-            }
-            return cookieCache[domain] ?: ""
-        }
-
-        try {
-            return withContext(Dispatchers.Main) {
-                suspendCancellableCoroutine { cont ->
-                    val done = AtomicBoolean(false)
-                    var webView: WebView? = null
-
-                    fun finish(cookieValue: String) {
-                        if (done.compareAndSet(false, true)) {
-                            try { webView?.destroy() } catch (_: Exception) {}
-                            if (cookieValue.isNotEmpty()) {
-                                cookieCache[domain] = cookieValue
-                            }
-                            warmingUp.remove(domain)
-                            cont.resume(cookieValue)
-                        }
-                    }
-
-                    fun checkCookies() {
-                        if (done.get()) return
-                        try {
-                            val cookies = CookieManager.getInstance().getCookie(domain) ?: ""
-                            if (cookies.contains("cf_clearance")) {
-                                finish(cookies)
-                            }
-                        } catch (_: Exception) {}
-                    }
-
-                    try {
-                        webView = WebView(context).apply {
-                            settings.javaScriptEnabled = true
-                            settings.domStorageEnabled = true
-                            settings.databaseEnabled = true
-                            settings.mediaPlaybackRequiresUserGesture = false
-                            settings.userAgentString = CF_USER_AGENT
-                            CookieManager.getInstance().setAcceptCookie(true)
-
-                            webViewClient = object : WebViewClient() {
-                                override fun onPageFinished(view: WebView?, pageUrl: String?) {
-                                    super.onPageFinished(view, pageUrl)
-                                    // Check cookies after each page load (CF challenge
-                                    // causes multiple loads before real page appears)
-                                    Handler(Looper.getMainLooper()).postDelayed({
-                                        checkCookies()
-                                    }, 1500)
-                                }
-                            }
-                        }
-
-                        webView?.loadUrl(domain)
-
-                        // Poll for cf_clearance every 2s
-                        for (delay in longArrayOf(2000, 4000, 6000, 8000, 10000, 12000, 14000)) {
-                            Handler(Looper.getMainLooper()).postDelayed({
-                                checkCookies()
-                            }, delay)
-                        }
-
-                        // Overall timeout: 16s — grab whatever cookies we have
-                        Handler(Looper.getMainLooper()).postDelayed({
-                            val cookies = try {
-                                CookieManager.getInstance().getCookie(domain) ?: ""
-                            } catch (_: Exception) { "" }
-                            finish(cookies)
-                        }, 16000)
-                    } catch (e: Exception) {
-                        finish("")
-                    }
-                }
-            }
-        } finally {
-            warmingUp.remove(domain)
-        }
-    }
-
-    /**
-     * Fetch a pipe URL via WebView as a last resort. Solves CF challenge
-     * and reads the response body via innerText. Uses auto-detect decoding
-     * since we can't read the x-obfuscated header from WebView.
-     */
-    suspend fun fetchViaWebView(
+    suspend fun fetchPipeViaWebView(
         context: Context?,
         domain: String,
-        url: String,
-        referer: String
+        pipeUrl: String
     ): String? {
         if (context == null) return null
 
@@ -316,6 +225,8 @@ object MiruroCloudflare {
             suspendCancellableCoroutine { cont ->
                 val done = AtomicBoolean(false)
                 var webView: WebView? = null
+                var challengeSolved = false
+                var fetchAttempted = false
 
                 fun finish(result: String?) {
                     if (done.compareAndSet(false, true)) {
@@ -330,25 +241,76 @@ object MiruroCloudflare {
                     }
                 }
 
-                fun checkContent(view: WebView?) {
-                    if (done.get()) return
-                    view?.evaluateJavascript(
-                        """(function(){
-                            var t = '';
-                            try { t = document.body.innerText || ''; } catch(e) {}
-                            if (!t) try { t = document.documentElement.textContent || ''; } catch(e) {}
-                            return t;
-                        })()"""
-                    ) { result ->
-                        if (done.get()) return@evaluateJavascript
-                        val text = result
-                            ?.trim()
-                            ?.removeSurrounding("\"")
-                            ?.replace("\\n", "\n")
-                            ?.replace("\\\"", "\"")
-                            ?.replace("\\\\", "\\") ?: ""
-                        if (isValidPipeResponse(text)) {
-                            finish(text)
+                // Inject fetch() for the pipe URL and read the response
+                fun injectFetch(view: WebView?) {
+                    if (done.get() || fetchAttempted) return
+                    fetchAttempted = true
+
+                    // The pipeUrl is absolute. Use a relative path for the fetch
+                    // to ensure same-origin (CF cookies are domain-scoped).
+                    val relativeUrl = pipeUrl.substringAfter(domain)
+
+                    val js = """
+                        (function() {
+                            window.__pipe_result = null;
+                            window.__pipe_error = null;
+                            fetch("$relativeUrl", {
+                                method: "GET",
+                                credentials: "include",
+                                headers: { "Accept": "*/*" }
+                            })
+                            .then(function(r) { return r.text(); })
+                            .then(function(text) { window.__pipe_result = text; })
+                            .catch(function(e) { window.__pipe_error = e.message; });
+                        })();
+                    """.trimIndent()
+
+                    view?.evaluateJavascript(js) {
+                        println("Miruro: fetch() injected, waiting for result...")
+                    }
+
+                    // Poll for result at 1s intervals (up to 10s)
+                    for (delay in longArrayOf(1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000)) {
+                        Handler(Looper.getMainLooper()).postDelayed({
+                            if (done.get()) return@postDelayed
+                            view?.evaluateJavascript(
+                                "(window.__pipe_result !== null ? window.__pipe_result : (window.__pipe_error ? 'ERROR:' + window.__pipe_error : null))"
+                            ) { result ->
+                                if (done.get()) return@evaluateJavascript
+                                if (result != null && result != "null") {
+                                    val text = result.trim().removeSurrounding("\"")
+                                        .replace("\\n", "\n")
+                                        .replace("\\\"", "\"")
+                                        .replace("\\\\", "\\")
+                                    if (text.startsWith("ERROR:")) {
+                                        println("Miruro: fetch() error: ${text.substring(6)}")
+                                    } else if (text.isNotEmpty()) {
+                                        println("Miruro: fetch() got response (${text.length} chars)")
+                                        finish(text)
+                                    }
+                                }
+                            }
+                        }, delay)
+                    }
+                }
+
+                // Check if CF challenge is solved by reading document.title
+                fun checkChallengeSolved(view: WebView?) {
+                    if (done.get() || challengeSolved) return
+                    view?.evaluateJavascript("document.title") { result ->
+                        if (done.get() || challengeSolved) return@evaluateJavascript
+                        val title = result?.trim()?.removeSurrounding("\"") ?: ""
+                        // Real page title is "Miruro · Watch Anime Online Free..."
+                        // Challenge page title is "Just a moment..."
+                        if (title.isNotBlank() &&
+                            !title.lowercase().contains("just a moment") &&
+                            !title.lowercase().contains("attention required") &&
+                            !title.lowercase().contains("cloudflare") &&
+                            !title.lowercase().contains("blocked")) {
+                            challengeSolved = true
+                            println("Miruro: CF challenge solved, title='$title'")
+                            // Now inject the fetch() call
+                            injectFetch(view)
                         }
                     }
                 }
@@ -365,27 +327,31 @@ object MiruroCloudflare {
                         webViewClient = object : WebViewClient() {
                             override fun onPageFinished(view: WebView?, pageUrl: String?) {
                                 super.onPageFinished(view, pageUrl)
+                                println("Miruro: onPageFinished: $pageUrl")
+                                // Check after 1s if the challenge is solved
                                 Handler(Looper.getMainLooper()).postDelayed({
-                                    checkContent(view)
+                                    checkChallengeSolved(view)
+                                }, 1000)
+                                // Also check at 2s and 3s (challenge may redirect)
+                                Handler(Looper.getMainLooper()).postDelayed({
+                                    checkChallengeSolved(view)
+                                }, 2000)
+                                Handler(Looper.getMainLooper()).postDelayed({
+                                    checkChallengeSolved(view)
                                 }, 3000)
                             }
                         }
                     }
 
-                    val headers = HashMap<String, String>()
-                    headers["Referer"] = referer
-                    webView?.loadUrl(url, headers)
+                    println("Miruro: Loading homepage: $domain")
+                    webView?.loadUrl(domain)
 
-                    for (delay in longArrayOf(6000, 9000, 12000, 15000, 18000)) {
-                        Handler(Looper.getMainLooper()).postDelayed({
-                            checkContent(webView)
-                        }, delay)
-                    }
-
+                    // Overall timeout: 30s (CF challenge can take 5-10s to solve + 10s for fetch)
                     Handler(Looper.getMainLooper()).postDelayed({
                         finish(null)
-                    }, 22000)
+                    }, 30000)
                 } catch (e: Exception) {
+                    println("Miruro: WebView error: ${e.message}")
                     finish(null)
                 }
             }
@@ -393,47 +359,9 @@ object MiruroCloudflare {
     }
 }
 
-/**
- * Check if text looks like a valid pipe API response.
- */
-private fun isValidPipeResponse(text: String): Boolean {
-    if (text.length < 50) return false
-    val lower = text.lowercase()
-    if (lower.contains("cloudflare") || lower.contains("just a moment") ||
-        lower.contains("blocked") || lower.contains("enable cookies") ||
-        lower.contains("<html") || lower.contains("<!doctype") ||
-        lower.contains("attention required") || lower.contains("cf-ray")) {
-        return false
-    }
-    // Plain JSON?
-    if (text.trimStart().startsWith("{") || text.trimStart().startsWith("[")) {
-        return true
-    }
-    // base64url + decompress or base64url + XOR + decompress?
-    return try {
-        val padded = text + "=".repeat((4 - text.length % 4) % 4)
-        val decoded = Base64.decode(padded, Base64.URL_SAFE)
-        try { decompress(decoded); true } catch (_: Exception) {
-            val xored = xorDecrypt(decoded)
-            try { decompress(xored); true } catch (_: Exception) { false }
-        }
-    } catch (_: Exception) {
-        false
-    }
-}
-
 // ─── Pipe Request (Cloudflare-aware) ────────────────────────────────────────
 
-/**
- * Makes a Miruro pipe API request with automatic Cloudflare bypass.
- * Tries the working domain first, then one alternate.
- *
- * Adds live:true and _t (10-min floored timestamp) to query params,
- * matching the site's JS: eo.request('episodes', {query: {anilistId, live:'true', _t:t}})
- * Omits the 'version' field (JS sends undefined when protocolVersion is null).
- */
 suspend fun miruroPipeRequest(path: String, query: Map<String, Any>): String {
-    // Add live + _t params (cache-busting timestamp, 10-min floored)
     val enrichedQuery = query.toMutableMap()
     enrichedQuery["live"] = "true"
     enrichedQuery["_t"] = (System.currentTimeMillis() / (600 * 1000)) * (600 * 1000)
@@ -482,60 +410,37 @@ private suspend fun miruroPipeRequestForDomain(
     )
     MiruroCloudflare.getCookies(domain)?.let { headers["Cookie"] = it }
 
-    // ── Step 1: OkHttp direct with cached cookies ──
+    // ── Step 1: OkHttp direct (fast path — works if we have valid cached cookies) ──
     try {
         val response = app.get(pipeUrl, headers = headers, timeout = 15)
         if (response.code == 200) {
             val body = response.text
             if (!MiruroCloudflare.isCloudflareBlock(body, 200)) {
-                // Read x-obfuscated header
                 val obfHeader = response.headers["x-obfuscated"]
                 try {
                     return decodePipeResponseWithHeader(body, obfHeader)
                 } catch (_: Exception) {
-                    // Try auto-detect as fallback
-                    try {
-                        return decodePipeResponseAuto(body)
-                    } catch (_: Exception) {}
+                    try { return decodePipeResponseAuto(body) } catch (_: Exception) {}
                 }
             }
         }
     } catch (_: Exception) {}
 
-    // ── Step 2: Warm up CF cookies via WebView, then retry OkHttp ──
-    val cookies = MiruroCloudflare.warmUp(Miruro.context, domain)
-    if (cookies.isNotEmpty()) {
-        headers["Cookie"] = cookies
-        try {
-            val response = app.get(pipeUrl, headers = headers, timeout = 15)
-            if (response.code == 200) {
-                val body = response.text
-                if (!MiruroCloudflare.isCloudflareBlock(body, 200)) {
-                    val obfHeader = response.headers["x-obfuscated"]
-                    try {
-                        return decodePipeResponseWithHeader(body, obfHeader)
-                    } catch (_: Exception) {
-                        try {
-                            return decodePipeResponseAuto(body)
-                        } catch (_: Exception) {}
-                    }
-                }
-            }
-        } catch (_: Exception) {}
-    }
-
-    // ── Step 3: WebView fetch (last resort, auto-detect format) ──
-    val webBody = MiruroCloudflare.fetchViaWebView(
-        Miruro.context, domain, pipeUrl, "$domain/"
+    // ── Step 2: JS fetch() injection via WebView (reliable CF bypass) ──
+    val webBody = MiruroCloudflare.fetchPipeViaWebView(
+        Miruro.context, domain, pipeUrl
     )
-    if (webBody != null) {
+    if (webBody != null && webBody.isNotEmpty()) {
         try {
             return decodePipeResponseAuto(webBody)
-        } catch (_: Exception) {}
+        } catch (e: Exception) {
+            println("Miruro: Failed to decode WebView response (${webBody.length} chars) - ${e.message}")
+        }
     }
 
     throw Exception("Failed on $domain for /$path")
 }
+
 
 // ─── AniList GraphQL ────────────────────────────────────────────────────────
 

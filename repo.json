@@ -1,0 +1,9 @@
+{
+  "name": "raghav repo",
+  "iconUrl": "https://i.pinimg.com/236x/bb/d4/4b/bbd44b37f18e40a01543b8b4721b1cce.jpg",
+  "description": "Raghav clone CloudStream extensions",
+  "manifestVersion": 1,
+  "pluginLists": [
+    "https://raw.githubusercontent.com/KSHITIJ8473/raghav/builds/plugins.json"
+  ]
+}

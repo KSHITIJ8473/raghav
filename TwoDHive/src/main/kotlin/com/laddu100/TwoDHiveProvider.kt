@@ -99,12 +99,6 @@ class TwoDHiveProvider : MainAPI() {
         return parseGrid(soup)
     }
 
-    private data class EpisodeMeta(
-        val number: Int,
-        val title: String?,
-        val thumbnail: String?
-    )
-
     private fun decodeAstro(node: JsonNode): JsonNode {
         if (node.isArray && node.size() == 2 && node.get(0).isNumber) {
             return decodeAstro(node.get(1))
@@ -185,7 +179,7 @@ class TwoDHiveProvider : MainAPI() {
         }
 
         var totalEpisodes = 1
-        var episodeMetaList = mutableListOf<EpisodeMeta>()
+        val titleMap = mutableMapOf<Int, Pair<String?, String?>>()
 
         val episodeBrowserIsland = soup.select("astro-island").firstOrNull {
             it.attr("component-url").contains("EpisodeBrowser", ignoreCase = true)
@@ -204,7 +198,7 @@ class TwoDHiveProvider : MainAPI() {
                             val epTitle = ep.get("title")?.asText()
                             val thumb = ep.get("thumbnail")?.asText()
                             if (num != null) {
-                                episodeMetaList.add(EpisodeMeta(num, epTitle, thumb))
+                                titleMap[num] = Pair(epTitle, thumb)
                             }
                         }
                     }
@@ -212,27 +206,18 @@ class TwoDHiveProvider : MainAPI() {
             }
         }
 
-        if (episodeMetaList.isEmpty()) {
-            soup.select("a[href*=\"/episode?\"]").forEach { a ->
-                val href = a.attr("href")
-                val epNumMatch = Regex("""ep_num=(\d+)""").find(href)
-                val epNum = epNumMatch?.groupValues?.get(1)?.toIntOrNull() ?: return@forEach
-                episodeMetaList.add(EpisodeMeta(epNum, null, null))
-            }
-        }
+        val maxFromLinks = soup.select("a[href*=\"/episode?\"]").mapNotNull { a ->
+            Regex("""ep_num=(\d+)""").find(a.attr("href"))?.groupValues?.get(1)?.toIntOrNull()
+        }.maxOrNull() ?: 0
+        val epCount = maxOf(totalEpisodes, maxFromLinks).coerceAtLeast(1)
 
-        if (episodeMetaList.isEmpty() && totalEpisodes > 0) {
-            for (i in 1..totalEpisodes.coerceAtMost(1000)) {
-                episodeMetaList.add(EpisodeMeta(i, null, null))
-            }
-        }
-
-        val episodes = episodeMetaList.map { ep ->
-            val epUrl = "$mainUrl/episode?anime=${malId ?: ""}&ep_num=${ep.number}"
+        val episodes = (1..epCount).map { num ->
+            val epUrl = "$mainUrl/episode?anime=${malId ?: ""}&ep_num=$num"
+            val meta = titleMap[num]
             newEpisode(epUrl) {
-                this.episode = ep.number
-                this.name = ep.title?.takeIf { it.isNotBlank() } ?: "Episode ${ep.number}"
-                this.posterUrl = ep.thumbnail
+                this.episode = num
+                this.name = meta?.first?.takeIf { it.isNotBlank() } ?: "Episode $num"
+                this.posterUrl = meta?.second
             }
         }
 

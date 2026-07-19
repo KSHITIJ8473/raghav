@@ -2,10 +2,9 @@ package com.laddu100.raghavanime
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.databind.JsonNode
-import com.fasterxml.jackson.databind.node.ArrayNode
-import com.fasterxml.jackson.databind.node.ObjectNode
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
+import com.lagradost.cloudstream3.newSubtitleFile
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import java.net.URLEncoder
@@ -32,47 +31,47 @@ class RaghavTwoDHive : MainAPI() {
     )
 
     private val userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    private val mapper = ObjectMapper()
 
     private suspend fun quickGet(url: String, referer: String? = null): String {
-        val headersMap = mutableMapOf("User-Agent" to userAgent)
-        if (referer != null) {
-            headersMap["Referer"] = referer
-        } else {
-            headersMap["Referer"] = "$mainUrl/"
-        }
-        return app.get(url = url, headers = headersMap).text
+        val headers = mutableMapOf("User-Agent" to userAgent)
+        headers["Referer"] = referer ?: "$mainUrl/"
+        return app.get(url = url, headers = headers).text
     }
 
     private fun parseGrid(soup: Document): List<SearchResponse> {
         val results = mutableListOf<SearchResponse>()
         soup.select("a[href*=\"/anime?anime=\"]").forEach { a ->
             val href = a.attr("href")
-            val title = a.selectFirst("h3")?.text()?.trim()
-                ?: a.text().trim().replace("Play Now", "").trim()
+            val title = a.selectFirst("h3 span.truncate")?.text()?.trim()
+                ?: a.selectFirst("h3")?.text()?.trim()
+                ?: a.selectFirst("img")?.attr("alt")?.takeIf { it.isNotBlank() }
+                ?: ""
+            if (title.length < 2) return@forEach
+
+            var posterUrl: String? = null
             val img = a.selectFirst("img")
-            val posterUrl = img?.attr("src")?.takeIf { it.isNotBlank() }
-                ?: img?.attr("data-src")
-
-            results.add(newAnimeSearchResponse(title, href, TvType.Anime) {
-                this.posterUrl = posterUrl
-            })
-        }
-        return results.distinctBy { it.url }
-    }
-
-    private fun parseSection(soup: Document, sectionName: String): List<SearchResponse> {
-        val header = soup.select("h2").firstOrNull { it.text().contains(sectionName, ignoreCase = true) }
-        val headerDiv = header?.parent()?.parent()
-        val grid = headerDiv?.nextElementSibling()
-
-        val results = mutableListOf<SearchResponse>()
-        grid?.select("a[href*=\"/anime?anime=\"]")?.forEach { a ->
-            val href = a.attr("href")
-            val title = a.selectFirst("h3")?.text()?.trim()
-                ?: a.text().trim().replace("Play Now", "").trim()
-            val img = a.selectFirst("img")
-            val posterUrl = img?.attr("src")?.takeIf { it.isNotBlank() }
-                ?: img?.attr("data-src")
+            if (img != null) {
+                val src = img.attr("src").takeIf { it.isNotBlank() }
+                if (src != null && (src.contains("anilist") || src.contains("myanimelist") || src.contains("tmdb"))) {
+                    posterUrl = src
+                }
+            }
+            if (posterUrl == null) {
+                var parent = a.parent()
+                repeat(5) {
+                    if (parent != null && posterUrl == null) {
+                        val pImg = parent!!.selectFirst("img")
+                        if (pImg != null) {
+                            val src = pImg.attr("src").takeIf { it.isNotBlank() }
+                            if (src != null && (src.contains("anilist") || src.contains("myanimelist") || src.contains("tmdb"))) {
+                                posterUrl = src
+                            }
+                        }
+                    }
+                    parent = parent?.parent()
+                }
+            }
 
             results.add(newAnimeSearchResponse(title, href, TvType.Anime) {
                 this.posterUrl = posterUrl
@@ -89,14 +88,7 @@ class RaghavTwoDHive : MainAPI() {
         }
         val html = quickGet(url)
         val soup = Jsoup.parse(html)
-
-        val items = if (page == 1) {
-            val sectionName = if (request.data == "completed") "Completed Classics" else "Top Rated Anime"
-            parseSection(soup, sectionName)
-        } else {
-            parseGrid(soup)
-        }
-
+        val items = parseGrid(soup)
         return newHomePageResponse(request.name, items)
     }
 
@@ -108,80 +100,11 @@ class RaghavTwoDHive : MainAPI() {
         return parseGrid(soup)
     }
 
-    override suspend fun load(url: String): LoadResponse? {
-        mainUrl = FirebaseDomainHelper.getDomain("twodhive") ?: mainUrl
-        val html = quickGet(url)
-        val soup = Jsoup.parse(html)
-
-        val title = soup.selectFirst("h1")?.text()?.trim()
-            ?: soup.selectFirst("meta[property=og:title]")?.attr("content")?.trim()
-            ?: "Unknown"
-
-        val poster = soup.select("img.object-cover").firstOrNull {
-            it.attr("src").contains("myanimelist.net", ignoreCase = true)
-        }?.attr("src") ?: soup.selectFirst("meta[property=og:image]")?.attr("content")
-
-        val summary = soup.selectFirst("p.text-zinc-300")?.text()?.trim() ?: ""
-        val mainPlot = soup.selectFirst("p.text-zinc-400")?.text()?.trim() ?: ""
-        val plot = if (summary.isNotEmpty()) "$summary\n\n$mainPlot" else mainPlot
-
-        val genres = mutableListOf<String>()
-        soup.select("div.text-sm").forEach { div ->
-            if (div.selectFirst("span")?.text()?.contains("Genres", ignoreCase = true) == true) {
-                div.select("a").forEach { a ->
-                    genres.add(a.text().trim())
-                }
-            }
-        }
-
-        var year: Int? = null
-        soup.select("div.text-sm").forEach { div ->
-            val text = div.text()
-            if (text.contains("Premiered", ignoreCase = true) || text.contains("Aired", ignoreCase = true)) {
-                val match = Regex("""\b(19\d\d|20\d\d)\b""").find(text)
-                if (match != null) {
-                    year = match.groupValues[1].toIntOrNull()
-                }
-            }
-        }
-
-        val episodes = mutableListOf<Episode>()
-        soup.select("a[href*=\"/episode?\"]").forEach { a ->
-            val href = a.attr("href")
-            val epNumMatch = Regex("""ep_num=(\d+)""").find(href)
-            val epNum = epNumMatch?.groupValues?.get(1)?.toIntOrNull() ?: 1
-            val epTitle = "Episode $epNum"
-
-            episodes.add(newEpisode("$mainUrl$href") {
-                this.episode = epNum
-                this.name = epTitle
-            })
-        }
-
-        val subEpisodes = episodes.map { ep ->
-            newEpisode("${ep.data}|sub") {
-                this.episode = ep.episode
-                this.name = ep.name
-            }
-        }
-        val dubEpisodes = episodes.map { ep ->
-            newEpisode("${ep.data}|dub") {
-                this.episode = ep.episode
-                this.name = ep.name
-            }
-        }
-
-        return newAnimeLoadResponse(title, url, TvType.Anime) {
-            this.posterUrl = poster
-            this.year = year
-            this.plot = plot
-            this.tags = genres
-            if (subEpisodes.isNotEmpty()) addEpisodes(DubStatus.Subbed, subEpisodes)
-            if (dubEpisodes.isNotEmpty()) addEpisodes(DubStatus.Dubbed, dubEpisodes)
-        }
-    }
-
-    private val mapper = ObjectMapper()
+    private data class EpisodeMeta(
+        val number: Int,
+        val title: String?,
+        val thumbnail: String?
+    )
 
     private fun decodeAstro(node: JsonNode): JsonNode {
         if (node.isArray && node.size() == 2 && node.get(0).isNumber) {
@@ -202,23 +125,156 @@ class RaghavTwoDHive : MainAPI() {
         return node
     }
 
+    override suspend fun load(url: String): LoadResponse? {
+        mainUrl = FirebaseDomainHelper.getDomain("twodhive") ?: mainUrl
+        val malId = url.substringAfter("anime=").substringBefore("&").substringBefore("/").toIntOrNull()
+        val html = quickGet(url)
+        val soup = Jsoup.parse(html)
+
+        val title = soup.selectFirst("h1")?.text()?.trim()
+            ?: soup.selectFirst("meta[property=og:title]")?.attr("content")?.trim()
+            ?: "Unknown"
+
+        var poster: String? = null
+        soup.select("img").forEach { img ->
+            val src = img.attr("src")
+            if (src.contains("anilist") && src.contains("cover")) {
+                poster = src
+                return@forEach
+            }
+        }
+        if (poster == null) {
+            poster = soup.selectFirst("meta[property=og:image]")?.attr("content")
+        }
+
+        var plot = ""
+        val summaryLabel = soup.select("p").firstOrNull { it.text().trim() == "Synopsis" }
+        if (summaryLabel != null) {
+            val summaryP = summaryLabel.nextElementSibling()
+            if (summaryP != null) {
+                plot = summaryP.text().trim()
+            }
+        }
+        if (plot.isBlank() && malId != null) {
+            try {
+                val apiResp = quickGet("$mainUrl/api/anime/summary?malId=$malId")
+                val apiJson = mapper.readTree(apiResp)
+                plot = apiJson.get("anime")?.get("synopsis")?.asText() ?: ""
+            } catch (_: Exception) {}
+        }
+
+        val genres = mutableListOf<String>()
+        var year: Int? = null
+        if (malId != null) {
+            try {
+                val apiResp = quickGet("$mainUrl/api/anime/summary?malId=$malId")
+                val apiJson = mapper.readTree(apiResp)
+                val genresNode = apiJson.get("anime")?.get("genres")
+                if (genresNode != null && genresNode.isArray) {
+                    genresNode.forEach { g -> genres.add(g.asText()) }
+                }
+                year = apiJson.get("anime")?.get("year")?.asInt()
+            } catch (_: Exception) {}
+        }
+        if (year == null) {
+            soup.select("div, span, p, small").forEach { el ->
+                val text = el.text()
+                val match = Regex("""\b(19\d\d|20\d\d)\b""").find(text)
+                if (match != null && (text.contains("Premiered", true) || text.contains("Aired", true) || text.contains("Year", true))) {
+                    year = match.groupValues[1].toIntOrNull()
+                }
+            }
+        }
+
+        var totalEpisodes = 1
+        var episodeMetaList = mutableListOf<EpisodeMeta>()
+
+        val episodeBrowserIsland = soup.select("astro-island").firstOrNull {
+            it.attr("component-url").contains("EpisodeBrowser", ignoreCase = true)
+        }
+        if (episodeBrowserIsland != null) {
+            val propsStr = episodeBrowserIsland.attr("props").takeIf { it.isNotEmpty() }
+            if (!propsStr.isNullOrEmpty()) {
+                try {
+                    val props = mapper.readTree(propsStr)
+                    val decoded = decodeAstro(props)
+                    totalEpisodes = decoded.get("totalEpisodes")?.asInt() ?: 1
+                    val episodeMetaNode = decoded.get("episodeMeta")
+                    if (episodeMetaNode != null && episodeMetaNode.isArray) {
+                        episodeMetaNode.forEach { ep ->
+                            val num = ep.get("number")?.asInt()
+                            val epTitle = ep.get("title")?.asText()
+                            val thumb = ep.get("thumbnail")?.asText()
+                            if (num != null) {
+                                episodeMetaList.add(EpisodeMeta(num, epTitle, thumb))
+                            }
+                        }
+                    }
+                } catch (_: Exception) {}
+            }
+        }
+
+        if (episodeMetaList.isEmpty()) {
+            soup.select("a[href*=\"/episode?\"]").forEach { a ->
+                val href = a.attr("href")
+                val epNumMatch = Regex("""ep_num=(\d+)""").find(href)
+                val epNum = epNumMatch?.groupValues?.get(1)?.toIntOrNull() ?: return@forEach
+                episodeMetaList.add(EpisodeMeta(epNum, null, null))
+            }
+        }
+
+        if (episodeMetaList.isEmpty() && totalEpisodes > 0) {
+            for (i in 1..totalEpisodes.coerceAtMost(1000)) {
+                episodeMetaList.add(EpisodeMeta(i, null, null))
+            }
+        }
+
+        val episodes = episodeMetaList.map { ep ->
+            val epUrl = "$mainUrl/episode?anime=${malId ?: ""}&ep_num=${ep.number}"
+            newEpisode(epUrl) {
+                this.episode = ep.number
+                this.name = ep.title?.takeIf { it.isNotBlank() } ?: "Episode ${ep.number}"
+                this.posterUrl = ep.thumbnail
+            }
+        }
+
+        val subEpisodes = episodes.map { ep ->
+            newEpisode("${ep.data}|sub") {
+                this.episode = ep.episode
+                this.name = ep.name
+                this.posterUrl = ep.posterUrl
+            }
+        }
+        val dubEpisodes = episodes.map { ep ->
+            newEpisode("${ep.data}|dub") {
+                this.episode = ep.episode
+                this.name = ep.name
+                this.posterUrl = ep.posterUrl
+            }
+        }
+
+        return newAnimeLoadResponse(title, url, TvType.Anime) {
+            this.posterUrl = poster
+            this.year = year
+            this.plot = plot
+            this.tags = genres
+            if (subEpisodes.isNotEmpty()) addEpisodes(DubStatus.Subbed, subEpisodes)
+            if (dubEpisodes.isNotEmpty()) addEpisodes(DubStatus.Dubbed, dubEpisodes)
+        }
+    }
+
     private suspend fun getProxyUrl(malId: Int, epNum: Int): String {
         try {
             val apiRespText = app.get(
                 url = "$mainUrl/api/hianime?mal_id=$malId&ep_num=$epNum",
-                headers = mapOf(
-                    "User-Agent" to userAgent,
-                    "Referer" to "$mainUrl/"
-                )
+                headers = mapOf("User-Agent" to userAgent, "Referer" to "$mainUrl/")
             ).text
             val apiJson = mapper.readTree(apiRespText)
             val m3u8 = apiJson.get("m3u8")?.asText()
             if (!m3u8.isNullOrEmpty() && m3u8.contains("/m3u8-proxy")) {
                 return m3u8.substringBefore("/m3u8-proxy") + "/m3u8-proxy"
             }
-        } catch (e: Exception) {
-
-        }
+        } catch (_: Exception) {}
         return "https://anicloud-hls-proxy.n3779118.workers.dev/m3u8-proxy"
     }
 
@@ -262,7 +318,6 @@ class RaghavTwoDHive : MainAPI() {
                 val animeName = serverItem.get("anime_name")?.asText()?.trim() ?: ""
 
                 val mappedServerName = if (serverName.equals("hydrax", ignoreCase = true)) "hadfree" else serverName
-
                 val isServerDub = isDub || mappedServerName.contains("dub", ignoreCase = true) || animeName.contains("dub", ignoreCase = true)
 
                 if ((type == "dub" && isServerDub) || (type == "sub" && !isServerDub)) {
@@ -272,106 +327,60 @@ class RaghavTwoDHive : MainAPI() {
                                 mappedServerName.equals("hadfree", ignoreCase = true) -> {
                                     val apiResp = app.get(
                                         url = "$mainUrl/api/hadfree?slug=$slug",
-                                        headers = mapOf(
-                                            "User-Agent" to userAgent,
-                                            "Referer" to "$mainUrl/"
-                                        )
+                                        headers = mapOf("User-Agent" to userAgent, "Referer" to "$mainUrl/")
                                     ).text
                                     val streamUrl = mapper.readTree(apiResp).get("streamUrl")?.asText()
                                     if (!streamUrl.isNullOrEmpty()) {
                                         callback(
-                                            newExtractorLink(
-                                                source = "Hadfree",
-                                                name = "Hadfree",
-                                                url = streamUrl,
-                                                type = ExtractorLinkType.VIDEO
-                                            ) {
-                                                this.headers = mapOf(
-                                                    "User-Agent" to userAgent,
-                                                    "Referer" to "$mainUrl/"
-                                                )
+                                            newExtractorLink("Hadfree", "Hadfree", streamUrl, type = ExtractorLinkType.VIDEO) {
+                                                this.headers = mapOf("User-Agent" to userAgent, "Referer" to "$mainUrl/")
                                                 this.referer = "$mainUrl/"
                                             }
                                         )
                                         true
-                                    } else {
-                                        false
-                                    }
+                                    } else false
                                 }
                                 mappedServerName.equals("mp4upload", ignoreCase = true) -> {
-                                    loadExtractor(
-                                        url = "https://www.mp4upload.com/embed-$slug.html",
-                                        referer = epUrl,
-                                        subtitleCallback = subtitleCallback,
-                                        callback = callback
-                                    )
+                                    loadExtractor("https://www.mp4upload.com/embed-$slug.html", epUrl, subtitleCallback, callback)
                                 }
                                 mappedServerName.equals("meta_media_id", ignoreCase = true) -> {
-                                    loadExtractor(
-                                        url = "https://www.facebook.com/video/embed?video_id=$slug",
-                                        referer = epUrl,
-                                        subtitleCallback = subtitleCallback,
-                                        callback = callback
-                                    )
+                                    loadExtractor("https://www.facebook.com/video/embed?video_id=$slug", epUrl, subtitleCallback, callback)
                                 }
                                 mappedServerName.equals("abyssplayer", ignoreCase = true) -> {
-                                    loadExtractor(
-                                        url = "https://abyssplayer.com/$slug",
-                                        referer = epUrl,
-                                        subtitleCallback = subtitleCallback,
-                                        callback = callback
-                                    )
+                                    loadExtractor("https://abyssplayer.com/$slug", epUrl, subtitleCallback, callback)
                                 }
                                 slug.startsWith("http://") || slug.startsWith("https://") -> {
                                     val encodedSlug = slug.replace(" ", "%20")
                                     if (encodedSlug.contains(".mp4") || encodedSlug.contains(".m3u8")) {
                                         callback(
                                             newExtractorLink(
-                                                source = mappedServerName.takeIf { it.isNotEmpty() } ?: "Direct",
-                                                name = mappedServerName.takeIf { it.isNotEmpty() } ?: "Direct Link",
-                                                url = encodedSlug,
+                                                mappedServerName.ifEmpty { "Direct" },
+                                                mappedServerName.ifEmpty { "Direct Link" },
+                                                encodedSlug,
                                                 type = if (encodedSlug.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
                                             ) {
-                                                this.headers = mapOf(
-                                                    "User-Agent" to userAgent,
-                                                    "Referer" to "$mainUrl/"
-                                                )
+                                                this.headers = mapOf("User-Agent" to userAgent, "Referer" to "$mainUrl/")
                                                 this.referer = "$mainUrl/"
                                             }
                                         )
                                         true
                                     } else {
-                                        loadExtractor(
-                                            url = encodedSlug,
-                                            referer = epUrl,
-                                            subtitleCallback = subtitleCallback,
-                                            callback = callback
-                                        )
+                                        loadExtractor(encodedSlug, epUrl, subtitleCallback, callback)
                                     }
                                 }
                                 else -> false
                             }
-                        } catch (e: Exception) {
-                            false
-                        }
+                        } catch (_: Exception) { false }
                     })
                 }
             }
         }
 
         if (malId != null) {
-
             loadedResults.add(async {
                 try {
                     val megaplayUrl = "https://megaplay.buzz/stream/mal/$malId/$epNum/$type"
-                    val playerPageHtml = app.get(
-                        url = megaplayUrl,
-                        headers = mapOf(
-                            "User-Agent" to userAgent,
-                            "Referer" to epUrl
-                        )
-                    ).text
-
+                    val playerPageHtml = app.get(megaplayUrl, headers = mapOf("User-Agent" to userAgent, "Referer" to epUrl)).text
                     val playerPageSoup = Jsoup.parse(playerPageHtml)
                     val playerId = playerPageSoup.selectFirst("#megaplay-player")?.attr("data-id")
                         ?: Regex("""data-id=["'](\d+)""").find(playerPageHtml)?.groupValues?.get(1)
@@ -381,7 +390,7 @@ class RaghavTwoDHive : MainAPI() {
 
                     if (playerId != null) {
                         val sourcesText = app.get(
-                            url = "https://megaplay.buzz/stream/getSources?id=$playerId&type=$type",
+                            "https://megaplay.buzz/stream/getSources?id=$playerId&type=$type",
                             headers = mapOf(
                                 "User-Agent" to userAgent,
                                 "Referer" to megaplayUrl,
@@ -403,25 +412,17 @@ class RaghavTwoDHive : MainAPI() {
                             tracks.forEach { track ->
                                 val file = track.get("file")?.asText() ?: return@forEach
                                 val label = track.get("label")?.asText() ?: "Unknown"
-                                subtitleCallback(SubtitleFile(label, file))
+                                subtitleCallback(newSubtitleFile(label, file) {
+                                    this.headers = mapOf("Referer" to "https://megaplay.buzz/")
+                                })
                             }
                         }
 
                         if (!m3u8Url.isNullOrEmpty()) {
                             val displayName = if (type == "sub") "MegaPlay Sub" else "MegaPlay Dub"
-
                             callback(
-                                newExtractorLink(
-                                    source = displayName,
-                                    name = "$displayName (Direct)",
-                                    url = m3u8Url,
-                                    type = ExtractorLinkType.M3U8
-                                ) {
-                                    this.headers = mapOf(
-                                        "User-Agent" to userAgent,
-                                        "Referer" to "https://megaplay.buzz/",
-                                        "Origin" to "https://megaplay.buzz"
-                                    )
+                                newExtractorLink(displayName, "$displayName (Direct)", m3u8Url, type = ExtractorLinkType.M3U8) {
+                                    this.headers = mapOf("User-Agent" to userAgent, "Referer" to "https://megaplay.buzz/", "Origin" to "https://megaplay.buzz")
                                     this.referer = "https://megaplay.buzz/"
                                 }
                             )
@@ -430,31 +431,16 @@ class RaghavTwoDHive : MainAPI() {
                             val encodedTarget = URLEncoder.encode(m3u8Url, "UTF-8")
                             val encodedHeaders = URLEncoder.encode("{\"referer\":\"https://megaplay.buzz/\"}", "UTF-8")
                             val wrappedUrl = "$proxyPrefix?url=$encodedTarget&headers=$encodedHeaders"
-
                             callback(
-                                newExtractorLink(
-                                    source = displayName,
-                                    name = "$displayName (Proxy)",
-                                    url = wrappedUrl,
-                                    type = ExtractorLinkType.M3U8
-                                ) {
-                                    this.headers = mapOf(
-                                        "User-Agent" to userAgent,
-                                        "Referer" to "https://megaplay.buzz/"
-                                    )
+                                newExtractorLink(displayName, "$displayName (Proxy)", wrappedUrl, type = ExtractorLinkType.M3U8) {
+                                    this.headers = mapOf("User-Agent" to userAgent, "Referer" to "https://megaplay.buzz/")
                                     this.referer = "https://megaplay.buzz/"
                                 }
                             )
                             true
-                        } else {
-                            false
-                        }
-                    } else {
-                        false
-                    }
-                } catch (e: Exception) {
-                    false
-                }
+                        } else false
+                    } else false
+                } catch (_: Exception) { false }
             })
         }
 

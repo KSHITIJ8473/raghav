@@ -1,4 +1,4 @@
-version = 11
+version = 12
 
 android {
     buildFeatures {
@@ -6,18 +6,11 @@ android {
     }
 }
 
-dependencies {
-    implementation("androidx.core:core:1.16.0")
-    implementation("androidx.appcompat:appcompat:1.7.0")
-    implementation("com.google.android.material:material:1.12.0")
-}
-
 cloudstream {
     language = "hi"
-    description = "Netflix, PrimeVideo, Disney+ Hotstar Contents in Multiple Languages"
+    description = "Netflix, PrimeVideo, Hotstar, Disney — multiple languages via netmirror"
     authors = listOf("raghav")
     status = 1
-    tvTypes = listOf("Movie", "TvSeries")
-    requiresResources = true
+    tvTypes = listOf("Movie", "TvSeries", "Anime", "AsianDrama")
     iconUrl = "https://raw.githubusercontent.com/KSHITIJ8473/raghav/master/NetMirror/logo.jpeg"
 }

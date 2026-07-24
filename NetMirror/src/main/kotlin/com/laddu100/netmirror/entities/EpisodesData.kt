@@ -1,8 +1,8 @@
 package com.laddu100.netmirror.entities
 
 data class EpisodesData(
-    val episodes: List<Episode>?,
-    val nextPage: Int,
-    val nextPageSeason: String,
-    val nextPageShow: Int,
+    val episodes: List<Episode?>?,
+    val nextPage: Int?,
+    val nextPageSeason: String?,
+    val nextPageShow: Int?
 )

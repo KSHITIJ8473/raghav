@@ -328,8 +328,9 @@ abstract class NetMirrorBaseProvider(
                     }
                     subtitleCallback.invoke(
                         SubtitleFile(
-                            label = track.label ?: "Subtitles",
-                            url = subUrl
+                            lang = track.label ?: "Subtitles",
+                            url = subUrl,
+                            headers = null
                         )
                     )
                 }

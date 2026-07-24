@@ -1,7 +1,9 @@
 package com.laddu100.netmirror
 
-/** Prime Video section of netmirror. ott = "pv". */
+/** Prime Video section of netmirror. ott = "pv", URL prefix = "/pv". */
 class PrimeVideoMirrorProvider : NetMirrorBaseProvider(
-    ott = "pv",
+    browseOtt = "pv",
+    loadLinksOtt = "pv",
+    urlPrefix = "/pv",
     displayName = "PrimeVideo"
 )

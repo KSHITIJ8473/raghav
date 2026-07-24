@@ -1,15 +1,19 @@
 package com.laddu100.netmirror
 
 /**
- * Disney section of netmirror. ott = "dp", with an extra `studio=disney`
- * cookie so the backend serves Disney-only content.
+ * Disney section of netmirror.
  *
- * (The upstream mobile plugin also exposes Marvel / Star Wars / Pixar via the
- * same mechanism — those studio sub-plugins have intentionally been removed
- * here. Only Disney remains, as a single, top-level provider.)
+ * Browse uses ott=dp + studio=disney cookies, but the URL prefix is "/hs"
+ * (same as Hotstar — Disney content is served from the Hotstar endpoint,
+ * filtered by the studio cookie).
+ *
+ * loadLinks uses ott=hs (NOT dp) for the playlist.php request — the server
+ * expects the Hotstar ott value for playlist access.
  */
 class DisneyPlusProvider : NetMirrorBaseProvider(
-    ott = "dp",
+    browseOtt = "dp",
+    loadLinksOtt = "hs",
+    urlPrefix = "/hs",
     displayName = "Disney",
     studio = "disney"
 )

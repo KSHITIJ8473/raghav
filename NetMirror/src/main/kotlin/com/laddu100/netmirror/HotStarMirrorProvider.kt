@@ -1,7 +1,9 @@
 package com.laddu100.netmirror
 
-/** Hotstar section of netmirror. ott = "hs". */
+/** Hotstar section of netmirror. ott = "hs", URL prefix = "/hs". */
 class HotStarMirrorProvider : NetMirrorBaseProvider(
-    ott = "hs",
+    browseOtt = "hs",
+    loadLinksOtt = "hs",
+    urlPrefix = "/hs",
     displayName = "Hotstar"
 )

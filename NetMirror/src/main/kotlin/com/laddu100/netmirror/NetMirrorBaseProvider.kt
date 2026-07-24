@@ -10,6 +10,7 @@ import com.lagradost.cloudstream3.amap
 import com.lagradost.cloudstream3.utils.AppUtils.toJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
+import com.lagradost.cloudstream3.utils.Qualities
 import org.jsoup.nodes.Element
 import com.lagradost.cloudstream3.APIHolder.unixTime
 import okhttp3.Interceptor
@@ -205,7 +206,7 @@ abstract class NetMirrorBaseProvider(
             } catch (e: Exception) {
                 break
             }
-            data.episodes?.mapTo(episodes) {
+            data.episodes?.filterNotNull()?.mapTo(episodes) {
                 newEpisode(LoadData(title, it.id)) {
                     name = it.t
                     episode = it.ep.replace("E", "").toIntOrNull()

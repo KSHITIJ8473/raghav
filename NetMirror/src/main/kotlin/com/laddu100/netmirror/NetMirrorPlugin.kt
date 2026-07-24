@@ -28,7 +28,7 @@ class NetMirrorPlugin : Plugin() {
             registerMainAPI(DisneyPlusProvider())
             Log.d("NetMirror", "Plugin.load() SUCCESS — 4 providers registered")
         } catch (e: Throwable) {
-            Log.e("NetMirror", "Plugin.load() FAILED: ${e.message}", e)
+            Log.e("NetMirror", "Plugin.load() FAILED: ${e.message}")
             throw e
         }
     }

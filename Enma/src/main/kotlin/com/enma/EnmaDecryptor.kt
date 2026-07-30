@@ -46,7 +46,7 @@ object EnmaDecryptor {
     // Callback bridge: JS calls AndroidDecrypt.onResult(result) which resumes the coroutine
     private class DecryptBridge {
         @Volatile
-        var pendingCont: kotlin.coroutines.CancellableContinuation<String>? = null
+        var pendingCont: kotlinx.coroutines.CancellableContinuation<String>? = null
 
         @JavascriptInterface
         fun onResult(result: String) {

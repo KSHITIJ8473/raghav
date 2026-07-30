@@ -1,4 +1,5 @@
 package com.laddu100.raghavanime
+import com.lagradost.api.Log
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties
 import com.fasterxml.jackson.annotation.JsonProperty
@@ -141,7 +142,7 @@ class RaghavAnimo : MainAPI() {
                         })
                     }
                 }
-            } catch (e: Exception) { }
+            } catch (e: Exception) { Log.e("RaghavAnime", "Animo: ${e.message}") }
             if (found) break
         }
         return found

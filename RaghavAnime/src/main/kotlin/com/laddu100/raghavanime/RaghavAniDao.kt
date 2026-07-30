@@ -109,7 +109,6 @@ class RaghavAniDao : MainAPI() {
         return doc
     }
 
-    // /search sits behind Cloudflare; scrape the animelist catalog and filter locally.
     override suspend fun search(query: String): List<SearchResponse> {
         val q = query.lowercase().trim()
         if (q.isEmpty()) return emptyList()
@@ -206,7 +205,6 @@ class RaghavAniDao : MainAPI() {
         val seenEps = mutableSetOf<String>()
         var epRows = doc.select("""[data-an-panel="oldest"] article.an-episode-row""")
         if (epRows.isEmpty()) epRows = doc.select("article.an-episode-row")
-        // DOM renders newest-first; reverse so the episode list ascends.
         val orderedRows = epRows.reversed()
 
         for (row in orderedRows) {
@@ -226,9 +224,6 @@ class RaghavAniDao : MainAPI() {
             val hasSub = row.select(".an-badge--sub").isNotEmpty()
             val hasDub = row.select(".an-badge--dub").isNotEmpty()
 
-            // Stash the requested DubStatus in the data string so loadLinks only
-            // fetches the matching panel. Hardsub lives in its own "hsub" panel
-            // but is surfaced under the Subbed tab.
             if (hasSub || hasHsub) {
                 subEpisodes.add(newEpisode("$href|sub") {
                     this.name = epName
@@ -295,7 +290,6 @@ class RaghavAniDao : MainAPI() {
     }
 
     // AniDao soft-404s episode-1 URLs of long anime (e.g. one-piece-100-episode-1);
-    // the real URL drops the "-100-" segment, so retry with it stripped.
     private suspend fun fetchWatchDoc(url: String): Document {
         val doc = app.get(url, headers = baseHeaders).document
         if (hasAnyPanel(doc)) return doc
@@ -382,8 +376,6 @@ class RaghavAniDao : MainAPI() {
 
     private fun toAnimePath(watchHref: String): String {
         val slug = watchHref.substringAfter("/watch-online/", "")
-            // Strip "-episode-N" (and any stray "-100-" on episode-1 URLs) to map
-            // a /watch-online/<slug>-episode-N link to /anime/<slug>.
             .replace(Regex("-100-episode-\\d+.*"), "")
             .replace(Regex("-episode-\\d+.*"), "")
             .trim()

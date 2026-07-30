@@ -1,4 +1,5 @@
 package com.laddu100.raghavanime
+import com.lagradost.api.Log
 
 import com.lagradost.cloudstream3.DubStatus
 import com.lagradost.cloudstream3.Episode
@@ -241,7 +242,7 @@ class Anikai : MainAPI() {
                         ?.let { URLDecoder.decode(it, "UTF-8") } ?: "English"
                     subtitleCallback.invoke(newSubtitleFile(subLabel, decodedSub))
                 }
-            } catch (_: Exception) {}
+            } catch (e: Exception) { Log.e("RaghavAnime", "Anikai: ${e.message}") }
 
             try {
                 when {
@@ -314,7 +315,7 @@ class Anikai : MainAPI() {
                         }
                     }
                 }
-            } catch (_: Exception) {}
+            } catch (e: Exception) { Log.e("RaghavAnime", "Anikai: ${e.message}") }
         }
 
         return foundAnySources

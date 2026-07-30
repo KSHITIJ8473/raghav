@@ -1,4 +1,4 @@
-version = 41
+version = 39
 
 android {
     buildFeatures {

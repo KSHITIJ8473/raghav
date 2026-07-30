@@ -162,17 +162,29 @@ class EnmaProvider : MainAPI() {
         val type: String
     )
 
+    /**
+     * Fetch an API URL and decrypt the WASM-encrypted response.
+     * The site encrypts ALL API responses with a WASM-based AES decryption.
+     * See EnmaDecryptor for details.
+     */
+    private suspend fun fetchApi(url: String): String? {
+        return EnmaDecryptor.fetchAndDecrypt(url, headers)
+    }
+
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        mainUrl = FirebaseDomainHelper.getDomain("enma") ?: mainUrl
         val url = "${request.data}?page=$page"
         val response = try {
-            app.get(url, headers = headers).text
+            fetchApi(url)
         } catch (e: Exception) {
-            Log.d("Enma", "Enma: getMainPage failed - ${e.message}")
+            Log.d("Enma", "getMainPage failed - ${e.message}")
+            return newHomePageResponse(request.name, emptyList())
+        }
+        if (response.isNullOrBlank()) {
+            Log.d("Enma", "getMainPage: empty response for $url")
             return newHomePageResponse(request.name, emptyList())
         }
         val parsed = try { parseJson<EnmaSearchResponse>(response) } catch (e: Exception) {
-            Log.d("Enma", "Enma: getMainPage parse failed - ${e.message}")
+            Log.d("Enma", "getMainPage parse failed - ${e.message}")
             return newHomePageResponse(request.name, emptyList())
         }
         val items = parsed.results?.data?.mapNotNull { it.toSearchResult() } ?: emptyList()
@@ -180,16 +192,16 @@ class EnmaProvider : MainAPI() {
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
-        mainUrl = FirebaseDomainHelper.getDomain("enma") ?: mainUrl
         val encoded = URLEncoder.encode(query, "UTF-8")
         val response = try {
-            app.get("$apiUrl/search?keyword=$encoded&page=1", headers = headers).text
+            fetchApi("$apiUrl/search?keyword=$encoded&page=1")
         } catch (e: Exception) {
-            Log.d("Enma", "Enma: search failed - ${e.message}")
+            Log.d("Enma", "search failed - ${e.message}")
             return emptyList()
         }
+        if (response.isNullOrBlank()) return emptyList()
         val parsed = try { parseJson<EnmaSearchResponse>(response) } catch (e: Exception) {
-            Log.d("Enma", "Enma: search parse failed - ${e.message}")
+            Log.d("Enma", "search parse failed - ${e.message}")
             return emptyList()
         }
         return parsed.results?.data?.mapNotNull { it.toSearchResult() } ?: emptyList()
@@ -205,15 +217,14 @@ class EnmaProvider : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse? {
-        mainUrl = FirebaseDomainHelper.getDomain("enma") ?: mainUrl
         val animeId = url.substringAfterLast("/").takeIf { it.isNotBlank() } ?: url
 
         // Fetch anime info
         val infoText = try {
-            app.get("$apiUrl/info?id=$animeId", headers = headers).text
+            fetchApi("$apiUrl/info?id=$animeId")
         } catch (e: Exception) {
             return null
-        }
+        } ?: return null
         val info = try {
             parseJson<EnmaInfoResponse>(infoText).results?.data
         } catch (e: Exception) {
@@ -240,10 +251,10 @@ class EnmaProvider : MainAPI() {
 
         // Fetch episodes
         val epsText = try {
-            app.get("$apiUrl/episodes/$animeId", headers = headers).text
+            fetchApi("$apiUrl/episodes/$animeId")
         } catch (e: Exception) {
             return null
-        }
+        } ?: return null
         val epsData = try {
             parseJson<EnmaEpisodesResponse>(epsText).results?.episodes
         } catch (e: Exception) {
@@ -253,12 +264,14 @@ class EnmaProvider : MainAPI() {
         var hasDub = false
         var hasSub = true
         try {
-            val serversText = app.get("$apiUrl/servers/$animeId?ep=1", headers = headers).text
-            val servers = parseJson<EnmaServersResponse>(serversText).results ?: emptyList()
-            hasDub = servers.any { it.type == "dub" }
-            hasSub = servers.any { it.type == "sub" }
+            val serversText = fetchApi("$apiUrl/servers/$animeId?ep=1")
+            if (!serversText.isNullOrBlank()) {
+                val servers = parseJson<EnmaServersResponse>(serversText).results ?: emptyList()
+                hasDub = servers.any { it.type == "dub" }
+                hasSub = servers.any { it.type == "sub" }
+            }
         } catch (e: Exception) {
-            Log.d("Enma", "Enma: Failed to check dub availability - ${e.message}")
+            Log.d("Enma", "Failed to check dub availability - ${e.message}")
         }
 
         val subEpisodes = mutableListOf<Episode>()
@@ -285,7 +298,7 @@ class EnmaProvider : MainAPI() {
             }
         }
 
-        Log.d("Enma", "Enma: ${subEpisodes.size} sub episodes, ${dubEpisodes.size} dub episodes")
+        Log.d("Enma", "${subEpisodes.size} sub episodes, ${dubEpisodes.size} dub episodes")
 
         val finalType = if (tvType == TvType.AnimeMovie && dubEpisodes.isNotEmpty()) TvType.Anime else tvType
         return newAnimeLoadResponse(title, url, finalType) {
@@ -317,8 +330,9 @@ class EnmaProvider : MainAPI() {
 
         // Fetch available servers
         val servers = try {
-            val serversText = app.get("$apiUrl/servers/$animeId?ep=$epNum", headers = headers).text
-            parseJson<EnmaServersResponse>(serversText).results ?: emptyList()
+            val serversText = fetchApi("$apiUrl/servers/$animeId?ep=$epNum")
+            if (serversText.isNullOrBlank()) emptyList()
+            else parseJson<EnmaServersResponse>(serversText).results ?: emptyList()
         } catch (e: Exception) {
             emptyList()
         }
@@ -336,7 +350,7 @@ class EnmaProvider : MainAPI() {
             try {
                 val encodedId = URLEncoder.encode(episodeId, "UTF-8")
                 val streamUrl = "$apiUrl/stream?id=$encodedId&server=$serverName&type=$type"
-                val streamText = app.get(streamUrl, headers = headers).text
+                val streamText = fetchApi(streamUrl) ?: continue
                 val streamData = parseJson<EnmaStreamResponse>(streamText)
                 val iframe = streamData.results?.streamingLink?.iframe ?: continue
 
@@ -345,13 +359,6 @@ class EnmaProvider : MainAPI() {
                 val domain = Regex("""https?://([^/]+)""").find(iframe)?.groupValues?.get(1) ?: ""
                 val displayType = if (type == "dub") "DUB" else "SUB"
 
-                // Route to the correct resolver based on the embed domain.
-                // Each HD-* server uses a different embed provider:
-                //   HD-1 → megaplay.buzz    (MegaPlay resolver)
-                //   HD-2 → tryembed.us.cc   (VideoJS + nonce-protected stream_data API)
-                //   HD-3 → vidnest.fun      (React SPA, uses upcloud.animanga.fun proxy)
-                //   HD-4 → cdn.4animo.xyz   (JW Player + getSources endpoint)
-                //   HD-5 → cdn.4animo.xyz   (same as HD-4 but hd-2 server)
                 val resolved = when {
                     domain.contains("megaplay", ignoreCase = true) ->
                         resolveMegaPlay(iframe, serverName, type, subtitleCallback, callback)
@@ -371,20 +378,14 @@ class EnmaProvider : MainAPI() {
                 }
                 if (resolved) found = true
             } catch (e: Exception) {
-                Log.d("Enma", "Enma: Failed to resolve $serverName - ${e.message}")
+                Log.d("Enma", "Failed to resolve $serverName - ${e.message}")
             }
         }
 
-        Log.d("Enma", "Enma: loadLinks result found=$found")
+        Log.d("Enma", "loadLinks result found=$found")
         return found
     }
 
-    /**
-     * Resolve a cdn.4animo.xyz embed (HD-4, HD-5).
-     * Flow: fetch embed page → extract getSourcesUrl → fetch getSources → get m3u8.
-     * The getSources response has sources[] with relative /p/vp or /p URLs that
-     * resolve to m3u8 playlists at the same host.
-     */
     private suspend fun resolve4Animo(
         iframeUrl: String,
         serverName: String,
@@ -400,7 +401,6 @@ class EnmaProvider : MainAPI() {
                 "Referer" to "$mainUrl/"
             )
             val doc = app.get(iframeUrl, headers = pageHeaders).document
-            // The getSourcesUrl is in a JS config object on the page
             val getSourcesUrl = Regex("""getSourcesUrl\s*:\s*["']([^"']+)["']""").find(doc.html())?.groupValues?.get(1)
                 ?: return false
             val sourcesApiUrl = if (getSourcesUrl.startsWith("http")) getSourcesUrl else "$host$getSourcesUrl"
@@ -413,7 +413,6 @@ class EnmaProvider : MainAPI() {
             val sourcesText = app.get(sourcesApiUrl, headers = ajaxHeaders).text
             val root = JsonParser.parseString(sourcesText).asJsonObject
 
-            // sources can be array [{file, type}] or object {file, type}
             val m3u8 = try {
                 val sourcesEl = root.get("sources")
                 if (sourcesEl?.isJsonArray == true && sourcesEl.asJsonArray.size() > 0) {
@@ -423,10 +422,8 @@ class EnmaProvider : MainAPI() {
                 } else null
             } catch (_: Exception) { null } ?: return false
 
-            // Resolve relative URL
             val fullM3u8 = if (m3u8.startsWith("http")) m3u8 else "$host$m3u8"
 
-            // The m3u8 URL itself returns the playlist (it's a proxy endpoint)
             val m3u8Headers = mapOf(
                 "Referer" to "$host/",
                 "Origin" to host,
@@ -451,7 +448,6 @@ class EnmaProvider : MainAPI() {
                 )
             }
 
-            // Subtitles
             try {
                 val tracks = root.getAsJsonArray("tracks")
                 if (tracks != null) {
@@ -468,17 +464,11 @@ class EnmaProvider : MainAPI() {
             } catch (e: Exception) { e.message?.let { Log.d("Plugin", it) } }
             return true
         } catch (e: Exception) {
-            Log.d("Enma", "Enma: 4Animo resolution failed for $iframeUrl - ${e.message}")
+            Log.d("Enma", "4Animo resolution failed for $iframeUrl - ${e.message}")
             return false
         }
     }
 
-    /**
-     * Resolve a vidnest.fun embed (HD-3).
-     * vidnest.fun is a React SPA that proxies m3u8 through upcloud.animanga.fun.
-     * The m3u8 URL is built client-side from the anilist ID + episode + type.
-     * We use WebViewResolver to let the SPA build the URL and intercept the m3u8.
-     */
     private suspend fun resolveVidnest(
         iframeUrl: String,
         serverName: String,
@@ -497,27 +487,20 @@ class EnmaProvider : MainAPI() {
             )
             val resolved = app.get(iframeUrl, referer = "$mainUrl/", interceptor = resolver).url
             if (resolved.contains(".m3u8", true)) {
-                // The m3u8 is proxied through upcloud.animanga.fun — use that as referer
                 val proxyHost = Regex("""(https?://[^/]+)""").find(resolved)?.groupValues?.get(1) ?: host
                 M3u8Helper.generateM3u8(
                     "Enma $serverName $displayType", resolved, proxyHost
                 ).forEach(callback)
                 return true
             }
-            Log.d("Enma", "Enma: Vidnest $serverName no m3u8 intercepted")
+            Log.d("Enma", "Vidnest $serverName no m3u8 intercepted")
             return false
         } catch (e: Exception) {
-            Log.d("Enma", "Enma: Vidnest resolution failed - ${e.message}")
+            Log.d("Enma", "Vidnest resolution failed - ${e.message}")
             return false
         }
     }
 
-    /**
-     * Resolve a tryembed.us.cc embed (HD-2).
-     * tryembed uses VideoJS with a nonce-protected /api/stream_data endpoint.
-     * The nonce is generated client-side, so we use WebViewResolver to intercept
-     * the m3u8 that VideoJS requests after solving the nonce.
-     */
     private suspend fun resolveTryEmbed(
         iframeUrl: String,
         serverName: String,
@@ -541,17 +524,14 @@ class EnmaProvider : MainAPI() {
                 ).forEach(callback)
                 return true
             }
-            Log.d("Enma", "Enma: TryEmbed $serverName no m3u8 intercepted")
+            Log.d("Enma", "TryEmbed $serverName no m3u8 intercepted")
             return false
         } catch (e: Exception) {
-            Log.d("Enma", "Enma: TryEmbed resolution failed - ${e.message}")
+            Log.d("Enma", "TryEmbed resolution failed - ${e.message}")
             return false
         }
     }
 
-    /**
-     * Resolve a megaplay.buzz iframe URL to m3u8 + subtitles.
-     */
     private suspend fun resolveMegaPlay(
         iframeUrl: String,
         serverName: String,
@@ -573,7 +553,6 @@ class EnmaProvider : MainAPI() {
                 "Referer" to "$mainUrl/",
             )
 
-            // 1. Fetch the megaplay page to get data-id
             val doc = app.get(iframeUrl, headers = pageHeaders).document
             val playerEl = doc.selectFirst("#megaplay-player")
             val streamId = playerEl?.attr("data-id")
@@ -581,7 +560,6 @@ class EnmaProvider : MainAPI() {
                 ?: return false
             if (streamId.isBlank()) return false
 
-            // 2. Fetch getSources
             val ajaxHeaders = mapOf(
                 "User-Agent" to "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36",
                 "Accept" to "*/*",
@@ -594,7 +572,6 @@ class EnmaProvider : MainAPI() {
             val sourcesText = app.get(sourcesUrl, headers = ajaxHeaders, referer = iframeUrl).text
             val root = JsonParser.parseString(sourcesText).asJsonObject
 
-            // sources can be object {file:...} or array [{file:...}]
             val m3u8 = try {
                 val sourcesEl = root.get("sources")
                 if (sourcesEl?.isJsonObject == true) {
@@ -605,11 +582,10 @@ class EnmaProvider : MainAPI() {
             } catch (_: Exception) { null }
 
             if (m3u8.isNullOrBlank()) {
-                Log.d("Enma", "Enma: No m3u8 in getSources response")
+                Log.d("Enma", "No m3u8 in getSources response")
                 return false
             }
 
-            // 3. Generate m3u8 links
             val displayType = if (type == "dub") "DUB" else "SUB"
             val m3u8Headers = mapOf(
                 "Referer" to "$host/",
@@ -636,7 +612,6 @@ class EnmaProvider : MainAPI() {
                 )
             }
 
-            // 4. Subtitles
             try {
                 val tracks = root.getAsJsonArray("tracks")
                 if (tracks != null) {
@@ -653,7 +628,7 @@ class EnmaProvider : MainAPI() {
 
             return true
         } catch (e: Exception) {
-            Log.d("Enma", "Enma: MegaPlay resolution failed for $iframeUrl - ${e.message}")
+            Log.d("Enma", "MegaPlay resolution failed for $iframeUrl - ${e.message}")
             return false
         }
     }

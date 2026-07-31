@@ -15,6 +15,10 @@ class RaghavAnimePlugin : Plugin() {
         initAnidapCFBypass(context)
 
         initSenshiCFBypass(context)
+
+        EnmaDecryptor.setContext(context)
+        EnmaDecryptor.startInit()
+
         registerMainAPI(RaghavAnime())
 
         registerExtractorAPI(MiruroMegaPlay())

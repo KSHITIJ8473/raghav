@@ -1,11 +1,5 @@
 package com.laddu100
 
-import android.annotation.SuppressLint
-import android.webkit.CookieManager
-import android.webkit.WebResourceRequest
-import android.webkit.WebSettings
-import android.webkit.WebView
-import android.webkit.WebViewClient
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.api.Log
@@ -15,16 +9,9 @@ import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.AppUtils.toJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
-import com.lagradost.cloudstream3.utils.INFER_TYPE
-import com.lagradost.cloudstream3.utils.M3u8Helper
 import com.lagradost.cloudstream3.utils.newExtractorLink
 import com.lagradost.cloudstream3.newSubtitleFile
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.suspendCancellableCoroutine
-import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeoutOrNull
 import java.net.URLEncoder
-import kotlin.coroutines.resume
 
 class Animo : MainAPI() {
     override var mainUrl = "https://4animo.xyz"
@@ -36,8 +23,7 @@ class Animo : MainAPI() {
 
     private val apiUrl = "https://api.kryzox.xyz"
     private val cdnUrl = "https://cdn.4animo.xyz"
-
-    private val ua = "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
+    private val ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36"
     private val apiHeaders = mapOf(
         "User-Agent" to ua,
         "Accept" to "application/json, text/plain, */*",
@@ -47,22 +33,22 @@ class Animo : MainAPI() {
     )
 
     override val mainPage = mainPageOf(
-        Pair("trending", "Trending"),
-        Pair("recently-updated", "Recently Updated"),
-        Pair("recently-added", "Recently Added"),
-        Pair("top", "Top Rated"),
-        Pair("movie", "Movies"),
-        Pair("tv", "TV Series"),
-        Pair("ova", "OVA"),
-        Pair("ona", "ONA"),
-        Pair("special", "Specials"),
-        Pair("completed", "Completed")
+        "trending" to "Trending",
+        "recently-updated" to "Recently Updated",
+        "recently-added" to "Recently Added",
+        "top" to "Top Rated",
+        "movie" to "Movies",
+        "tv" to "TV Series",
+        "ova" to "OVA",
+        "ona" to "ONA",
+        "special" to "Specials",
+        "completed" to "Completed"
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         mainUrl = FirebaseDomainHelper.getDomain("animo") ?: mainUrl
-        val url = "$apiUrl/anime/${request.data}?page=$page&limit=20"
         return try {
+            val url = "$apiUrl/anime/${request.data}?page=$page&limit=20"
             val items = parseAnimeList(app.get(url, headers = apiHeaders).text)
             val home = items.mapNotNull { it.toSearchResponse() }
             newHomePageResponse(request.name, home, hasNext = home.size == 20)
@@ -71,17 +57,12 @@ class Animo : MainAPI() {
         }
     }
 
-    private fun parseAnimeList(text: String): List<AnimeSearchItem> {
-        return try {
-            val trimmed = text.trim()
-            if (trimmed.startsWith("[")) {
-                parseJson<List<AnimeSearchItem>>(text)
-            } else {
-                parseJson<SearchResponseData>(text).data ?: emptyList()
-            }
-        } catch (e: Exception) {
-            emptyList()
-        }
+    private fun parseAnimeList(text: String): List<AnimeSearchItem> = try {
+        val trimmed = text.trim()
+        if (trimmed.startsWith("[")) parseJson(text)
+        else parseJson<SearchResponseData>(text).data ?: emptyList()
+    } catch (e: Exception) {
+        emptyList()
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
@@ -109,7 +90,9 @@ class Animo : MainAPI() {
         val title = anime.titles?.english ?: anime.titles?.romaji ?: return null
 
         val episodes = try {
-            parseJson<EpisodesResponse>(app.get("$apiUrl/anime/$animeId/episodes", headers = apiHeaders).text).data ?: emptyList()
+            parseJson<EpisodesResponse>(
+                app.get("$apiUrl/anime/$animeId/episodes", headers = apiHeaders).text
+            ).data ?: emptyList()
         } catch (e: Exception) {
             emptyList()
         }
@@ -121,15 +104,16 @@ class Animo : MainAPI() {
             val num = ep.number ?: return@forEach
             val epId = ep.id ?: return@forEach
             val epName = ep.titles?.en ?: ep.titles?.romaji ?: "Episode $num"
+            val ani = ep.ani ?: ""
             if (ep.sub == true) {
-                subEps.add(newEpisode(EpisodeData(animeId, epId, ep.embed_id, num, anime.slug ?: "", "sub").toJson()) {
+                subEps.add(newEpisode(EpisodeData(animeId, epId, ep.embed_id, num, ani, "sub").toJson()) {
                     this.episode = num
                     this.name = epName
                     this.posterUrl = ep.thumbnail
                 })
             }
             if (ep.dub == true) {
-                dubEps.add(newEpisode(EpisodeData(animeId, epId, ep.embed_id, num, anime.slug ?: "", "dub").toJson()) {
+                dubEps.add(newEpisode(EpisodeData(animeId, epId, ep.embed_id, num, ani, "dub").toJson()) {
                     this.episode = num
                     this.name = epName
                     this.posterUrl = ep.thumbnail
@@ -168,151 +152,104 @@ class Animo : MainAPI() {
             return false
         }
 
-        val playHeaders = mapOf(
-            "Referer" to "$mainUrl/",
-            "Origin" to mainUrl,
-            "User-Agent" to ua
+        val type = epData.streamType
+        val query = "?k=1&autoPlay=1&skipIntro=1&skipOutro=1"
+
+        val embeds = mutableListOf(
+            "a-1" to "$cdnUrl/embed/a-1/${epData.episodeId}/$type$query",
+            "s-1" to "$cdnUrl/embed/s-1/${epData.embedId ?: epData.episodeId}/$type$query"
         )
-
-        var found = false
-        val typesToTry = if (epData.streamType == "dub") listOf("dub", "sub") else listOf("sub", "dub")
-        for (type in typesToTry) {
-            var subsPassedForType = false
-            for (hd in 1..4) {
-                val sourcesUrl = "$cdnUrl/stream/getSources?hd=$hd&id=${epData.animeId}&episode=${epData.episodeNum}&type=$type"
-                try {
-                    val response = app.get(
-                        sourcesUrl,
-                        headers = mapOf(
-                            "User-Agent" to ua,
-                            "Accept" to "application/json, text/plain, */*",
-                            "Referer" to "$cdnUrl/embed/hd-$hd/${epData.animeId}/${epData.episodeNum}/$type",
-                            "Origin" to cdnUrl
-                        ),
-                        timeout = 30_000L
-                    )
-                    if (response.code != 200) continue
-                    val text = response.text
-                    if (text.contains("Just a moment") || text.contains("cloudflare")) continue
-
-                    val sources = parseJson<GetSourcesResponse>(text)
-
-                    sources.sources?.forEach { s ->
-                        val file = s.file ?: return@forEach
-                        val streamUrl = if (file.startsWith("http")) file else "$cdnUrl/${file.removePrefix("/")}"
-                        val label = "$name HD$hd ($type)"
-                        if (s.type == "hls" || streamUrl.contains(".m3u8")) {
-                            try {
-                                M3u8Helper.generateM3u8(label, streamUrl, "$cdnUrl/", headers = playHeaders).forEach(callback)
-                            } catch (e: Exception) {
-                                callback.invoke(
-                                    newExtractorLink(label, label, streamUrl, type = ExtractorLinkType.M3U8) {
-                                        this.referer = "$cdnUrl/"
-                                        this.headers = playHeaders
-                                    }
-                                )
-                            }
-                            found = true
-                        } else {
-                            callback.invoke(
-                                newExtractorLink(label, label, streamUrl, type = INFER_TYPE) {
-                                    this.referer = "$cdnUrl/"
-                                    this.headers = playHeaders
-                                }
-                            )
-                            found = true
-                        }
-                    }
-
-                    if (!subsPassedForType && !sources.tracks.isNullOrEmpty()) {
-                        sources.tracks.forEach { t ->
-                            val file = t.file ?: return@forEach
-                            val subUrl = if (file.startsWith("http")) file else "$cdnUrl/${file.removePrefix("/")}"
-                            subtitleCallback.invoke(newSubtitleFile(t.label ?: "English", subUrl) {
-                                this.headers = playHeaders
-                            })
-                        }
-                        subsPassedForType = true
-                    }
-                } catch (e: Exception) {
-                }
-            }
-            if (found) break
+        if (epData.ani.isNotEmpty()) {
+            embeds.add("hd-1" to "$cdnUrl/embed/hd-1/ani/${epData.ani}/$type$query")
+            embeds.add("hd-2" to "$cdnUrl/embed/hd-2/ani/${epData.ani}/$type$query")
         }
 
-        if (!found) {
-            val watchUrl = if (epData.slug.isNotBlank()) {
-                "$mainUrl/watch/${epData.slug}?ep=${epData.episodeNum}"
-            } else {
-                "$mainUrl/embed/${epData.embedId}"
-            }
-            val streamUrl = withTimeoutOrNull(30_000L) {
-                extractStreamFromWebView(watchUrl)
-            }
-            if (streamUrl != null && streamUrl.isNotEmpty()) {
-                if (streamUrl.contains(".m3u8")) {
-                    try {
-                        M3u8Helper.generateM3u8(name, streamUrl, "$cdnUrl/", headers = playHeaders).forEach(callback)
-                    } catch (e: Exception) {
-                        callback.invoke(
-                            newExtractorLink(name, name, streamUrl, type = ExtractorLinkType.M3U8) {
-                                this.referer = "$cdnUrl/"
-                                this.headers = playHeaders
-                            }
-                        )
-                    }
-                    found = true
-                } else {
-                    callback.invoke(
-                        newExtractorLink(name, name, streamUrl, type = INFER_TYPE) {
-                            this.referer = "$cdnUrl/"
-                            this.headers = playHeaders
-                        }
-                    )
-                    found = true
+        var found = false
+        var subsAdded = false
+
+        for ((key, embedUrl) in embeds) {
+            try {
+                if (!resolveSource(embedUrl, key, type, subsAdded, subtitleCallback, callback)) {
+                    continue
                 }
+                found = true
+                subsAdded = true
+            } catch (e: Exception) {
+                Log.d("Animo", "source $key failed: ${e.message}")
             }
         }
 
         return found
     }
 
-    @SuppressLint("SetJavaScriptEnabled")
-    private suspend fun extractStreamFromWebView(url: String): String? = withContext(Dispatchers.Main) {
-        val context = com.lagradost.cloudstream3.CommonActivity.activity ?: return@withContext null
-        suspendCancellableCoroutine { cont ->
-            var foundUrl: String? = null
-            val webView = WebView(context)
-            try {
-                CookieManager.getInstance().setAcceptCookie(true)
-                CookieManager.getInstance().setAcceptThirdPartyCookies(webView, true)
-                webView.settings.apply {
-                    javaScriptEnabled = true
-                    domStorageEnabled = true
-                    mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
-                    userAgentString = ua
-                }
-                webView.webViewClient = object : WebViewClient() {
-                    override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?) = false
+    // The stream token is bound to the keep-alive connection, so all three
+    // requests must go through the same OkHttp connection pool.
+    private suspend fun resolveSource(
+        embedUrl: String,
+        key: String,
+        type: String,
+        subsAlreadyAdded: Boolean,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
+        val embedResp = app.get(embedUrl, headers = mapOf(
+            "User-Agent" to ua,
+            "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language" to "en-US,en;q=0.7"
+        ), timeout = 15_000L)
+        if (embedResp.code != 200) return false
 
-                    override fun onLoadResource(view: WebView?, resourceUrl: String?) {
-                        super.onLoadResource(view, resourceUrl)
-                        if (resourceUrl != null && foundUrl == null) {
-                            if (resourceUrl.contains(".m3u8") || resourceUrl.contains(".mp4")) {
-                                foundUrl = resourceUrl
-                                if (cont.isActive) cont.resume(resourceUrl)
-                            }
-                        }
-                    }
-                }
-                webView.loadUrl(url)
-            } catch (e: Exception) {
-                if (cont.isActive) cont.resume(null)
+        val token = Regex("getSources\\?t=([A-Za-z0-9_.-]+)")
+            .find(embedResp.text)?.groupValues?.get(1) ?: return false
+
+        val reqHeaders = mapOf(
+            "User-Agent" to ua,
+            "Accept" to "*/*",
+            "Referer" to embedUrl,
+            "Sec-Fetch-Site" to "same-origin",
+            "Sec-Fetch-Mode" to "cors",
+            "Sec-Fetch-Dest" to "empty"
+        )
+
+        val sourcesResp = app.get("$cdnUrl/stream/getSources?t=$token", headers = reqHeaders, timeout = 15_000L)
+        if (sourcesResp.code != 200) return false
+
+        val sourcesText = sourcesResp.text
+        if (sourcesText.contains("invalid token")) return false
+
+        val sources = parseJson<GetSourcesResponse>(sourcesText)
+        val masterFile = sources.sources?.firstOrNull()?.file ?: return false
+        val masterUrl = if (masterFile.startsWith("http")) masterFile else "$cdnUrl/${masterFile.removePrefix("/")}"
+
+        val masterResp = app.get(masterUrl, headers = reqHeaders, timeout = 15_000L)
+        if (masterResp.code != 200 || !masterResp.text.trim().startsWith("#EXTM3U")) return false
+
+        val playHeaders = mapOf(
+            "User-Agent" to ua,
+            "Accept" to "*/*",
+            "Referer" to embedUrl,
+            "Origin" to cdnUrl
+        )
+
+        val label = "$name $key ($type)"
+        callback.invoke(
+            newExtractorLink(label, label, masterUrl, type = ExtractorLinkType.M3U8) {
+                this.referer = embedUrl
+                this.headers = playHeaders
             }
-            cont.invokeOnCancellation {
-                try { webView.destroy() } catch (_: Exception) {}
+        )
+
+        if (!subsAlreadyAdded) {
+            sources.tracks?.forEach { t ->
+                val file = t.file ?: return@forEach
+                val subUrl = if (file.startsWith("http")) file else "$cdnUrl/${file.removePrefix("/")}"
+                subtitleCallback.invoke(newSubtitleFile(t.label ?: "English", subUrl) {
+                    this.headers = playHeaders
+                })
             }
         }
+
+        return true
     }
 
     private fun AnimeSearchItem.toSearchResponse(): SearchResponse? {
@@ -329,7 +266,7 @@ class Animo : MainAPI() {
         val episodeId: Int,
         val embedId: String?,
         val episodeNum: Int,
-        val slug: String,
+        val ani: String,
         val streamType: String
     )
 
@@ -355,17 +292,10 @@ class Animo : MainAPI() {
     )
 
     @JsonIgnoreProperties(ignoreUnknown = true)
-    data class Images(
-        val poster: String? = null,
-        val banner: String? = null
-    )
+    data class Images(val poster: String? = null, val banner: String? = null)
 
     @JsonIgnoreProperties(ignoreUnknown = true)
-    data class Titles(
-        val romaji: String? = null,
-        val english: String? = null,
-        val native: String? = null
-    )
+    data class Titles(val romaji: String? = null, val english: String? = null, val native: String? = null)
 
     @JsonIgnoreProperties(ignoreUnknown = true)
     data class AnimeDetails(
@@ -383,10 +313,7 @@ class Animo : MainAPI() {
     )
 
     @JsonIgnoreProperties(ignoreUnknown = true)
-    data class Air(
-        val start: String? = null,
-        val end: String? = null
-    )
+    data class Air(val start: String? = null, val end: String? = null)
 
     @JsonIgnoreProperties(ignoreUnknown = true)
     data class EpisodesResponse(
@@ -407,29 +334,24 @@ class Animo : MainAPI() {
         val thumbnail: String? = null,
         val sub: Boolean? = null,
         val dub: Boolean? = null,
-        @JsonProperty("embed_id") val embed_id: String? = null
+        @JsonProperty("embed_id") val embed_id: String? = null,
+        val ani: String? = null,
+        val mal: String? = null
     )
 
     @JsonIgnoreProperties(ignoreUnknown = true)
-    data class EpisodeTitles(
-        val en: String? = null,
-        val ja: String? = null,
-        val romaji: String? = null
-    )
+    data class EpisodeTitles(val en: String? = null, val ja: String? = null, val romaji: String? = null)
 
     @JsonIgnoreProperties(ignoreUnknown = true)
     data class GetSourcesResponse(
         val sources: List<MegaSource>? = null,
         val tracks: List<MegaTrack>? = null,
         val encrypted: Boolean? = null,
-        val server: Int? = null
+        val server: String? = null
     )
 
     @JsonIgnoreProperties(ignoreUnknown = true)
-    data class MegaSource(
-        val file: String? = null,
-        val type: String? = null
-    )
+    data class MegaSource(val file: String? = null, val type: String? = null)
 
     @JsonIgnoreProperties(ignoreUnknown = true)
     data class MegaTrack(

@@ -1,4 +1,4 @@
-version = 8
+version = 2
 
 cloudstream {
     description = "Enma - Watch Anime Sub & Dub in HD"

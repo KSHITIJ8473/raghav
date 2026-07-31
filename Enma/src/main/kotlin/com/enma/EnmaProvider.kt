@@ -179,7 +179,7 @@ class EnmaProvider : MainAPI() {
         val parsed = try {
             parseJson<EnmaSearchResponse>(response)
         } catch (e: Exception) {
-            newHomePageResponse(request.name, emptyList())
+            return newHomePageResponse(request.name, emptyList())
         }
         val items = parsed.results?.data?.mapNotNull { it.toSearchResult() } ?: emptyList()
         return newHomePageResponse(request.name, items)

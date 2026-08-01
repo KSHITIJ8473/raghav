@@ -14,7 +14,7 @@ cloudstream {
     language = "en"
     description = "Best site for hard subs and some dubs"
     authors = listOf("raghav")
-    status = 1
+    status = 0
     tvTypes = listOf(
         "Anime",
         "AnimeMovie",

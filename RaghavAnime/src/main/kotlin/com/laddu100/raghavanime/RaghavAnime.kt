@@ -3,9 +3,14 @@ package com.laddu100.raghavanime
 import com.lagradost.cloudstream3.CommonActivity.activity
 import android.content.Context
 import android.app.AlertDialog
+import android.graphics.Color
+import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
+import android.view.Gravity
 import android.widget.LinearLayout
 import android.widget.TextView
-import android.widget.CheckBox
+import android.widget.Button
+import android.widget.ScrollView
 
 import com.lagradost.api.Log
 import com.lagradost.cloudstream3.*
@@ -29,6 +34,108 @@ class RaghavAnime : MainAPI() {
         TvType.AnimeMovie,
         TvType.OVA
     )
+
+    @Volatile
+    private var anilistDownPopupShown = false
+
+    private val downCheckLock = kotlinx.coroutines.sync.Mutex()
+    @Volatile
+    private var lastDownCheckTime: Long = 0L
+    private val DOWN_CHECK_INTERVAL = 60_000L
+
+    private suspend fun isAniListDown(): Boolean {
+        val now = System.currentTimeMillis()
+        if (now - lastDownCheckTime < DOWN_CHECK_INTERVAL) {
+            return anilistDownPopupShown
+        }
+        if (!downCheckLock.tryLock()) return anilistDownPopupShown
+        try {
+            lastDownCheckTime = now
+            val testQuery = "query { Page(page:1, perPage:1) { media(type: ANIME) { id } } }"
+            val responseText = anilistQuery(testQuery, emptyMap())
+
+            if (responseText.contains("temporarily disabled")) {
+                showAniListDownPopup()
+                return true
+            }
+
+            if (responseText.contains("\"data\"") && !responseText.contains("\"data\":null")) {
+                anilistDownPopupShown = false
+                return false
+            }
+
+            if (responseText.contains("Too Many Requests") || responseText.contains("429")) {
+                return false
+            }
+
+            return false
+        } catch (e: Exception) {
+            return false
+        } finally {
+            downCheckLock.unlock()
+        }
+    }
+
+    private fun showAniListDownPopup() {
+        if (anilistDownPopupShown) return
+        anilistDownPopupShown = true
+        val ctx = activity ?: return
+        ctx.runOnUiThread {
+            try {
+                val cBg = Color.parseColor("#0A0A0A")
+                val cCard = Color.parseColor("#1A1A1A")
+                val cAccent = Color.parseColor("#FF1744")
+                val cText = Color.parseColor("#FFFFFF")
+                val cTextSub = Color.parseColor("#9E9E9E")
+                val d = ctx.resources.displayMetrics.density
+                fun Int.dp() = (this * d).toInt()
+
+                val container = LinearLayout(ctx).apply {
+                    orientation = LinearLayout.VERTICAL
+                    setPadding(24.dp(), 28.dp(), 24.dp(), 24.dp())
+                    setBackgroundColor(cBg)
+                }
+
+                container.addView(TextView(ctx).apply {
+                    text = "AniList API is Down"
+                    textSize = 20f
+                    setTextColor(cAccent)
+                    setTypeface(typeface, Typeface.BOLD)
+                    gravity = Gravity.CENTER
+                    setPadding(0, 0, 0, 12.dp())
+                })
+
+                container.addView(TextView(ctx).apply {
+                    text = "RaghavAnime depends on the AniList API for anime metadata, search, and homepage content.\n\nThe AniList API has been temporarily disabled due to stability issues on their end.\n\nThis is not a plugin issue — everything will work again once AniList restores service.\n\nYou can still browse any cached content or use other providers in the meantime."
+                    textSize = 13f
+                    setTextColor(cTextSub)
+                    setLineSpacing(1.4f, 1.0f)
+                    setPadding(0, 0, 0, 20.dp())
+                })
+
+                val scroll = ScrollView(ctx).apply { addView(container) }
+                val dialog = AlertDialog.Builder(ctx).setView(scroll).create()
+
+                container.addView(Button(ctx).apply {
+                    text = "Got it"
+                    setTextColor(Color.WHITE)
+                    textSize = 14f
+                    setTypeface(typeface, Typeface.BOLD)
+                    background = GradientDrawable().apply {
+                        cornerRadius = 12 * d
+                        setColor(cAccent)
+                    }
+                    setPadding(0, 14.dp(), 0, 14.dp())
+                    setOnClickListener { dialog.dismiss() }
+                })
+
+                dialog.show()
+                dialog.window?.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(Color.TRANSPARENT))
+            } catch (e: Exception) {
+                Log.e("RaghavAnime", "showAniListDownPopup: ${e.message}")
+            }
+        }
+    }
 
     override val mainPage = mainPageOf(
         "TRENDING" to "Trending Now",
@@ -59,6 +166,8 @@ class RaghavAnime : MainAPI() {
                 newHomePageResponse(request.name, emptyList())
             }
         }
+
+        isAniListDown()
 
         val query = HOMEPAGE_QUERY
         val variables = mutableMapOf<String, Any?>("page" to page, "perPage" to 20)
@@ -122,6 +231,7 @@ class RaghavAnime : MainAPI() {
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
+        isAniListDown()
         val results = try {
             val variables = mapOf<String, Any?>("search" to query, "page" to 1, "perPage" to 20)
             val responseText = anilistQuery(SEARCH_QUERY, variables)
@@ -145,6 +255,8 @@ class RaghavAnime : MainAPI() {
 
     override suspend fun load(url: String): LoadResponse? {
         val anilistId = Regex("""/info/(\d+)""").find(url)?.groupValues?.get(1)?.toIntOrNull() ?: return null
+
+        isAniListDown()
 
         val media = try {
             val infoText = anilistQuery(INFO_QUERY, mapOf("id" to anilistId))

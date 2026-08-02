@@ -21,7 +21,7 @@ dependencies {
 cloudstream {
     language = "en"
     description = "Watch LIVE TV channels & sports via LIVE TV"
-    authors = listOf("raghav")
+    authors = listOf("raghav,cnc")
 
     /**
      * Status int as the following:

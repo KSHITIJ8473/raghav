@@ -34,10 +34,32 @@ class RaghavAnime : MainAPI() {
         "TRENDING" to "Trending Now",
         "POPULAR" to "Popular This Season",
         "RECENT" to "Recently Updated",
-        "TOP_RATED" to "Top Rated Series"
+        "TOP_RATED" to "Top Rated Series",
+        "RECOMMEND" to "Recommended For You"
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+        if (request.data == "RECOMMEND") {
+            if (!RaghavAnimeFeatures.isEnabled("recommendations")) {
+                return newHomePageResponse(request.name, emptyList())
+            }
+            if (page > 1) {
+                return newHomePageResponse(request.name, emptyList())
+            }
+            return try {
+                val list = RaghavAnimeFeatures.getRecommendationsList()
+                val home = list.map { item ->
+                    newAnimeSearchResponse(item.title, item.url, TvType.Anime) {
+                        this.posterUrl = item.posterUrl
+                    }
+                }
+                newHomePageResponse(request.name, home)
+            } catch (e: Exception) {
+                Log.e("RaghavAnime", "[Recommendations] FAILED: ${e.message}")
+                newHomePageResponse(request.name, emptyList())
+            }
+        }
+
         val query = HOMEPAGE_QUERY
         val variables = mutableMapOf<String, Any?>("page" to page, "perPage" to 20)
 
@@ -100,7 +122,7 @@ class RaghavAnime : MainAPI() {
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
-        return try {
+        val results = try {
             val variables = mapOf<String, Any?>("search" to query, "page" to 1, "perPage" to 20)
             val responseText = anilistQuery(SEARCH_QUERY, variables)
             val response = parseJson<AniListResponse>(responseText)
@@ -118,6 +140,7 @@ class RaghavAnime : MainAPI() {
         } catch (e: Exception) {
             emptyList()
         }
+        return results
     }
 
     override suspend fun load(url: String): LoadResponse? {
@@ -229,6 +252,9 @@ class RaghavAnime : MainAPI() {
         val episode = linkData.episode
         val isDub = linkData.isDub
 
+        if (RaghavAnimeFeatures.isEnabled("watch_time")) {
+            try { RaghavAnimeFeatures.recordWatchTime(aniId, title, null, 24 * 60 * 1000L) } catch (_: Exception) {}
+        }
 
         runAllAsync(
             {
@@ -257,9 +283,9 @@ class RaghavAnime : MainAPI() {
                         doLoad = { aniSuge.load(it) as? com.lagradost.cloudstream3.AnimeLoadResponse },
                         sourceTag = "AniSuge"
                     )
-                    if (epData != null) {
-                        aniSuge.loadLinks(epData, false, subtitleCallback, callback)
+                    if (epData == null) {
                     } else {
+                        aniSuge.loadLinks(epData, false, subtitleCallback, callback)
                     }
                 } catch (e: Throwable) {
                     Log.e("RaghavAnime", "[AniSuge] FAILED: ${e.message}")
@@ -301,9 +327,9 @@ class RaghavAnime : MainAPI() {
                         }
                         if (matchedData != null) break
                     }
-                    if (matchedData != null) {
-                        aniWaves.loadLinks(matchedData, false, subtitleCallback, callback)
+                    if (matchedData == null) {
                     } else {
+                        aniWaves.loadLinks(matchedData, false, subtitleCallback, callback)
                     }
                 } catch (e: Throwable) {
                     Log.e("RaghavAnime", "[AniWaves] FAILED: ${e.message}")
@@ -318,9 +344,9 @@ class RaghavAnime : MainAPI() {
                         doLoad = { anikai.load(it) as? com.lagradost.cloudstream3.AnimeLoadResponse },
                         sourceTag = "Anikai"
                     )
-                    if (epData != null) {
-                        anikai.loadLinks(epData, false, subtitleCallback, callback)
+                    if (epData == null) {
                     } else {
+                        anikai.loadLinks(epData, false, subtitleCallback, callback)
                     }
                 } catch (e: Throwable) {
                     Log.e("RaghavAnime", "[Anikai] FAILED: ${e.message}")
@@ -335,9 +361,9 @@ class RaghavAnime : MainAPI() {
                         doLoad = { aniDb.load(it) as? com.lagradost.cloudstream3.AnimeLoadResponse },
                         sourceTag = "AniDb"
                     )
-                    if (epData != null) {
-                        aniDb.loadLinks(epData, false, subtitleCallback, callback)
+                    if (epData == null) {
                     } else {
+                        aniDb.loadLinks(epData, false, subtitleCallback, callback)
                     }
                 } catch (e: Throwable) {
                     Log.e("RaghavAnime", "[AniDb] FAILED: ${e.message}")
@@ -360,9 +386,9 @@ class RaghavAnime : MainAPI() {
                         doLoad = { anineko.load(it) as? com.lagradost.cloudstream3.AnimeLoadResponse },
                         sourceTag = "Anineko"
                     )
-                    if (epData != null) {
-                        anineko.loadLinks(epData, false, subtitleCallback, callback)
+                    if (epData == null) {
                     } else {
+                        anineko.loadLinks(epData, false, subtitleCallback, callback)
                     }
                 } catch (e: Throwable) {
                     Log.e("RaghavAnime", "[Anineko] FAILED: ${e.message}")
@@ -379,9 +405,9 @@ class RaghavAnime : MainAPI() {
                         doLoad = { twoDHive.load(it) as? com.lagradost.cloudstream3.AnimeLoadResponse },
                         sourceTag = "2DHive"
                     )
-                    if (epData != null) {
-                        twoDHive.loadLinks(epData, false, subtitleCallback, callback)
+                    if (epData == null) {
                     } else {
+                        twoDHive.loadLinks(epData, false, subtitleCallback, callback)
                     }
                 } catch (e: Throwable) {
                     Log.e("RaghavAnime", "[2DHive] FAILED: ${e.message}")
@@ -396,9 +422,9 @@ class RaghavAnime : MainAPI() {
                         doLoad = { anikoto.load(it) as? com.lagradost.cloudstream3.AnimeLoadResponse },
                         sourceTag = "AniKoto"
                     )
-                    if (epData != null) {
-                        anikoto.loadLinks(epData, false, subtitleCallback, callback)
+                    if (epData == null) {
                     } else {
+                        anikoto.loadLinks(epData, false, subtitleCallback, callback)
                     }
                 } catch (e: Throwable) {
                     Log.e("RaghavAnime", "[AniKoto] FAILED: ${e.message}")
@@ -421,9 +447,9 @@ class RaghavAnime : MainAPI() {
                         doLoad = { animo.load(it) as? com.lagradost.cloudstream3.AnimeLoadResponse },
                         sourceTag = "Animo"
                     )
-                    if (epData != null) {
-                        animo.loadLinks(epData, false, subtitleCallback, callback)
+                    if (epData == null) {
                     } else {
+                        animo.loadLinks(epData, false, subtitleCallback, callback)
                     }
                 } catch (e: Throwable) {
                     Log.e("RaghavAnime", "[Animo] FAILED: ${e.message}")
@@ -446,9 +472,9 @@ class RaghavAnime : MainAPI() {
                         doLoad = { senshi.load(it) as? com.lagradost.cloudstream3.AnimeLoadResponse },
                         sourceTag = "Senshi"
                     )
-                    if (epData != null) {
-                        senshi.loadLinks(epData, false, subtitleCallback, callback)
+                    if (epData == null) {
                     } else {
+                        senshi.loadLinks(epData, false, subtitleCallback, callback)
                     }
                 } catch (e: Throwable) {
                     Log.e("RaghavAnime", "[Senshi] FAILED: ${e.message}")
@@ -480,9 +506,9 @@ class RaghavAnime : MainAPI() {
                         doLoad = { aniDao.load(it) as? com.lagradost.cloudstream3.AnimeLoadResponse },
                         sourceTag = "AniDao"
                     )
-                    if (epData != null) {
-                        aniDao.loadLinks(epData, false, subtitleCallback, callback)
+                    if (epData == null) {
                     } else {
+                        aniDao.loadLinks(epData, false, subtitleCallback, callback)
                     }
                 } catch (e: Throwable) {
                     Log.e("RaghavAnime", "[AniDao] FAILED: ${e.message}")
@@ -564,7 +590,6 @@ class RaghavAnime : MainAPI() {
         val cleanedTargets = targetTitles.map { cleanTitle(it) }
         val epKey = if (isDub) dubKey else subKey
 
-
         val targetSeasonNum = targetTitles.firstNotNullOfOrNull { extractSeasonNumber(it) }
 
         data class Candidate(val combinedScore: Int, val titleScore: Int, val result: SearchResponse)
@@ -595,7 +620,6 @@ class RaghavAnime : MainAPI() {
                 allCandidates.add(Candidate(combinedScore, titleScore, r))
             }
         }
-
 
         if (allCandidates.isEmpty()) {
             return null

@@ -106,7 +106,7 @@ class RaghavAnime : MainAPI() {
                 })
 
                 container.addView(TextView(ctx).apply {
-                    text = "RaghavAnime depends on the AniList API for anime metadata, search, and homepage content.\n\nThe AniList API has been temporarily disabled due to stability issues on their end.\n\nThis is not a plugin issue — everything will work again once AniList restores service.\n\nYou can still browse any cached content or use other providers in the meantime."
+                    text = "RaghavAnime depends on the AniList API for anime metadata, search, and homepage content.\n\nThis may be because the AniList API is disabled from their end, or something is wrong from our end. Whichever the case, it will soon be fixed.\n\nIf AniList is disabled from their end, everything will work again once AniList restores services.\n\nUse other providers in the meantime — there are many others in the raghav repo."
                     textSize = 13f
                     setTextColor(cTextSub)
                     setLineSpacing(1.4f, 1.0f)

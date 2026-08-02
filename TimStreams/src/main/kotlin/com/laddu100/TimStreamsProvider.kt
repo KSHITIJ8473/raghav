@@ -23,9 +23,13 @@ class TimStreamsProvider : MainAPI() {
     override val hasDownloadSupport = false
     override val supportedTypes = setOf(TvType.Live)
 
-    private val apiUrl = "https://api.vixnuvew.uk/api"
-    private val cdnBase = "https://pacquiao.inproviszon.st/"
+    private val fallbackApiBase = "https://api.timstreams.st"
     private val TAG = "TimStreams"
+
+    private suspend fun apiUrl(): String {
+        val domain = FirebaseDomainHelper.getDomain("timstreams_api")
+        return (domain ?: fallbackApiBase).removeSuffix("/") + "/api"
+    }
 
     @JsonIgnoreProperties(ignoreUnknown = true)
     data class TimStream(
@@ -73,18 +77,15 @@ class TimStreamsProvider : MainAPI() {
     )
 
     @JsonIgnoreProperties(ignoreUnknown = true)
-    data class SettingsResponse(
-        @JsonProperty("settings") val settings: Map<String, String>? = null,
-        @JsonProperty("genres") val genres: Map<String, String>? = null
-    )
-
-    // Load data passed from search → loadLinks
-    @JsonIgnoreProperties(ignoreUnknown = true)
     data class LoadData(
         val title: String,
         val streams: List<TimStream>,
         val posterUrl: String? = null,
         val isUpcoming: Boolean = false
+    )
+
+    override val mainPage = mainPageOf(
+        "live-upcoming" to "All"
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
@@ -95,7 +96,6 @@ class TimStreamsProvider : MainAPI() {
                 val liveDeferred = async { fetchLiveUpcoming() }
                 val channelsDeferred = async { fetchChannels() }
 
-                // Live Events (split into Live Now + Upcoming)
                 val liveData = liveDeferred.await()
                 if (liveData != null) {
                     val (live, upcoming) = liveData.partition { e ->
@@ -107,55 +107,46 @@ class TimStreamsProvider : MainAPI() {
                     }
                     if (live.isNotEmpty()) {
                         val items = live.mapNotNull { it.toSearchResponse() }
-                        lists.add(HomePageList("🔴 Live Now", items, isHorizontalImages = true))
+                        lists.add(HomePageList("Live Now", items, isHorizontalImages = true))
                     }
                     if (upcoming.isNotEmpty()) {
                         val items = upcoming.mapNotNull { it.toUpcomingSearchResponse() }
-                        lists.add(HomePageList("📅 Upcoming Events", items, isHorizontalImages = true))
+                        lists.add(HomePageList("Upcoming Events", items, isHorizontalImages = true))
                     }
                 }
 
-                // Live TV Channels
                 val channelsData = channelsDeferred.await()
                 if (channelsData != null && channelsData.isNotEmpty()) {
                     val items = channelsData.mapNotNull { it.toSearchResponse() }
-                    Log.d(TAG, "getMainPage: Live TV -> ${items.size} items")
-                    lists.add(HomePageList("📺 Live TV Channels", items, isHorizontalImages = true))
+                    lists.add(HomePageList("Live TV Channels", items, isHorizontalImages = true))
                 }
             }
         } catch (e: Exception) {
-            Log.e(TAG, "getMainPage FAILED: ${e.message}")
-            Log.e(TAG, "getMainPage error: ${e.stackTraceToString().take(400)}")
+            Log.e(TAG, "getMainPage: ${e.message}")
         }
 
-        Log.d(TAG, "getMainPage END: ${lists.size} sections, ${lists.sumOf { it.list.size }} total items")
         return newHomePageResponse(lists, hasNext = false)
     }
 
     private suspend fun fetchLiveUpcoming(): List<TimEvent>? {
         return try {
-            val res = app.get("$apiUrl/live-upcoming", timeout = 30_000L)
-            Log.d(TAG, "fetchLiveUpcoming: HTTP ${res.code}, size=${res.text.length}")
+            val res = app.get("${apiUrl()}/live-upcoming", timeout = 30_000L, referer = "$mainUrl/")
             parseJson<LiveUpcomingResponse>(res.text).events
         } catch (e: Exception) {
-            Log.e(TAG, "fetchLiveUpcoming FAILED: ${e.message}"); null
+            Log.e(TAG, "fetchLiveUpcoming: ${e.message}")
+            null
         }
     }
 
     private suspend fun fetchChannels(): List<TimChannel>? {
         return try {
-            val res = app.get("$apiUrl/channels", timeout = 30_000L)
-            Log.d(TAG, "fetchChannels: HTTP ${res.code}, size=${res.text.length}")
+            val res = app.get("${apiUrl()}/channels", timeout = 30_000L, referer = "$mainUrl/")
             parseJson<ChannelsResponse>(res.text).channels
         } catch (e: Exception) {
-            Log.e(TAG, "fetchChannels FAILED: ${e.message}"); null
+            Log.e(TAG, "fetchChannels: ${e.message}")
+            null
         }
     }
-
-    // mainPage — single section triggers getMainPage which returns ALL sections at once
-    override val mainPage = mainPageOf(
-        "$apiUrl/live-upcoming" to "All"
-    )
 
     private fun TimEvent.toSearchResponse(): SearchResponse? {
         val title = name ?: return null
@@ -172,7 +163,6 @@ class TimStreamsProvider : MainAPI() {
         val streams = streams ?: return null
         if (streams.isEmpty()) return null
         val displayTitle = "$title [Upcoming: ${time ?: date ?: "TBD"}]"
-        Log.d(TAG, "toUpcomingSearchResponse: '$displayTitle' streams=${streams.size}")
         val loadData = LoadData(title = title, streams = streams, posterUrl = logo, isUpcoming = true)
         return newLiveSearchResponse(displayTitle, loadData.toJson(), TvType.Live) {
             this.posterUrl = logo
@@ -183,7 +173,6 @@ class TimStreamsProvider : MainAPI() {
         val title = name ?: return null
         val streams = streams ?: return null
         if (streams.isEmpty()) return null
-        Log.d(TAG, "toSearchResponse: channel '$title' streams=${streams.size}")
         val loadData = LoadData(title = title, streams = streams, posterUrl = logo)
         return newLiveSearchResponse(title, loadData.toJson(), TvType.Live) {
             this.posterUrl = logo
@@ -191,13 +180,11 @@ class TimStreamsProvider : MainAPI() {
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
-        Log.d(TAG, "search START: query='$query'")
         if (query.isBlank()) return emptyList()
         val results = mutableListOf<SearchResponse>()
 
         try {
-            // Search events
-            val eventsRes = app.get("$apiUrl/live-upcoming", timeout = 30_000L)
+            val eventsRes = app.get("${apiUrl()}/live-upcoming", timeout = 30_000L, referer = "$mainUrl/")
             val eventsParsed = parseJson<LiveUpcomingResponse>(eventsRes.text)
             eventsParsed.events?.forEach { e ->
                 if (e.name?.contains(query, ignoreCase = true) == true) {
@@ -205,8 +192,7 @@ class TimStreamsProvider : MainAPI() {
                 }
             }
 
-            // Search channels
-            val channelsRes = app.get("$apiUrl/channels", timeout = 30_000L)
+            val channelsRes = app.get("${apiUrl()}/channels", timeout = 30_000L, referer = "$mainUrl/")
             val channelsParsed = parseJson<ChannelsResponse>(channelsRes.text)
             channelsParsed.channels?.forEach { c ->
                 if (c.name?.contains(query, ignoreCase = true) == true) {
@@ -214,26 +200,22 @@ class TimStreamsProvider : MainAPI() {
                 }
             }
         } catch (e: Exception) {
-            Log.e(TAG, "search FAILED: ${e.message}")
+            Log.e(TAG, "search: ${e.message}")
         }
 
-        Log.d(TAG, "search END: '$query' -> ${results.size} results")
         return results
     }
 
     override suspend fun load(url: String): LoadResponse? {
-        Log.d(TAG, "load START: url='$url'")
         return try {
             val loadData = parseJson<LoadData>(url)
-            Log.d(TAG, "load: title='${loadData.title}' streams=${loadData.streams.size} isUpcoming=${loadData.isUpcoming}")
-
             newLiveStreamLoadResponse(loadData.title, url, this.name) {
                 this.posterUrl = loadData.posterUrl
                 this.plot = "${loadData.streams.size} stream sources available"
                 this.dataUrl = loadData.toJson()
             }
         } catch (e: Exception) {
-            Log.e(TAG, "load FAILED: ${e.message}")
+            Log.e(TAG, "load: ${e.message}")
             null
         }
     }
@@ -248,14 +230,11 @@ class TimStreamsProvider : MainAPI() {
         val loadData = try {
             parseJson<LoadData>(data)
         } catch (e: Exception) {
-            Log.e(TAG, "loadLinks: failed to parse LoadData: ${e.message}")
+            Log.e(TAG, "loadLinks: parse error: ${e.message}")
             return false
         }
 
-        if (loadData.streams.isEmpty()) {
-            Log.e(TAG, "loadLinks: no streams in LoadData")
-            return false
-        }
+        if (loadData.streams.isEmpty()) return false
 
         var found = false
         for (stream in loadData.streams) {
@@ -276,31 +255,12 @@ class TimStreamsProvider : MainAPI() {
                             val resolvedUrl = app.get(streamUrl, referer = "$mainUrl/", interceptor = resolver).url
 
                             if (resolvedUrl.contains(".m3u8", ignoreCase = true) || resolvedUrl.contains(".mp4", ignoreCase = true)) {
-                                val embedHost = try {
-                                    val uri = android.net.Uri.parse(streamUrl)
-                                    "${uri.scheme}://${uri.host}"
-                                } catch (e: Exception) { null }
-
-                                val cookieStr = if (embedHost != null) {
-                                    try { android.webkit.CookieManager.getInstance().getCookie(embedHost) ?: "" } catch (e: Exception) { "" }
-                                } else { "" }
-
-                                val cdnHost = try {
-                                    val uri = android.net.Uri.parse(resolvedUrl)
-                                    "${uri.scheme}://${uri.host}"
-                                } catch (e: Exception) { null }
-
-                                val cdnCookies = if (cdnHost != null) {
-                                    try { android.webkit.CookieManager.getInstance().getCookie(cdnHost) ?: "" } catch (e: Exception) { "" }
-                                } else { "" }
-
-                                val allCookies = listOf(cookieStr, cdnCookies).filter { it.isNotBlank() }.joinToString("; ")
-
                                 val headers = mutableMapOf(
                                     "User-Agent" to "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36",
                                     "Referer" to streamUrl
                                 )
-                                if (allCookies.isNotBlank()) headers["Cookie"] = allCookies
+                                val cookies = getCookiesForUrl(streamUrl) + getCookiesForUrl(resolvedUrl)
+                                if (cookies.isNotBlank()) headers["Cookie"] = cookies
 
                                 val isM3u8 = resolvedUrl.contains(".m3u8", ignoreCase = true)
                                 callback.invoke(
@@ -317,7 +277,7 @@ class TimStreamsProvider : MainAPI() {
                                 found = true
                             }
                         } catch (e: Exception) {
-                            Log.e(TAG, "loadLinks: '$streamName' icelanders.st failed: ${e.message}")
+                            Log.e(TAG, "loadLinks: '$streamName' icelanders.st: ${e.message}")
                         }
                     }
 
@@ -333,42 +293,15 @@ class TimStreamsProvider : MainAPI() {
                             val resolvedUrl = app.get(streamUrl, referer = "$mainUrl/", interceptor = resolver).url
 
                             if (resolvedUrl.contains(".m3u8", ignoreCase = true)) {
-                                try {
-                                    android.webkit.CookieManager.getInstance().flush()
-                                } catch (e: Exception) { }
+                                try { android.webkit.CookieManager.getInstance().flush() } catch (_: Exception) {}
 
-                                // Extract CF cookies from CookieManager for the CDN domain
-                                // The WebView already solved the CF challenge, cookies are in CookieManager
-                                val cdnHost = try {
-                                    val uri = android.net.Uri.parse(resolvedUrl)
-                                    "${uri.scheme}://${uri.host}"
-                                } catch (e: Exception) { null }
-
-                                val cookieStr = if (cdnHost != null) {
-                                    try {
-                                        android.webkit.CookieManager.getInstance().getCookie(cdnHost) ?: ""
-                                    } catch (e: Exception) { "" }
-                                } else { "" }
-
-                                // Also extract cookies from the ritzembeds domain
-                                val ritzCookies = try {
-                                    android.webkit.CookieManager.getInstance().getCookie("https://ritzembeds.pages.dev") ?: ""
-                                } catch (e: Exception) { "" }
-
-                                // Combine all cookies (cdn + ritzembeds)
-                                val allCookies = listOf(cookieStr, ritzCookies)
-                                    .filter { it.isNotBlank() }
-                                    .joinToString("; ")
-
-                                // Build headers with cookies + Referer (matching what the WebView sent)
                                 val headers = mutableMapOf(
                                     "User-Agent" to "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36",
                                     "Referer" to streamUrl,
                                     "Origin" to "https://ritzembeds.pages.dev"
                                 )
-                                if (allCookies.isNotBlank()) {
-                                    headers["Cookie"] = allCookies
-                                }
+                                val cookies = getCookiesForUrl(resolvedUrl) + getCookiesForUrl("https://ritzembeds.pages.dev")
+                                if (cookies.isNotBlank()) headers["Cookie"] = cookies
 
                                 callback.invoke(
                                     newExtractorLink(
@@ -382,38 +315,21 @@ class TimStreamsProvider : MainAPI() {
                                     }
                                 )
                                 found = true
-                            } else {
-                                Log.e(TAG, "loadLinks: '$streamName' WebViewResolver did not intercept .m3u8 (got: $resolvedUrl)")
                             }
                         } catch (e: Exception) {
-                            Log.e(TAG, "loadLinks: '$streamName' WebViewResolver failed: ${e.message}")
+                            Log.e(TAG, "loadLinks: '$streamName' ritzembeds: ${e.message}")
                         }
                     }
 
-                    // luluvdo.com / luluvid.com → built-in extractor
                     streamUrl.contains("luluvdo.com") || streamUrl.contains("luluvid.com") -> {
                         val realUrl = streamUrl.replace("luluvid.com", "luluvdo.com")
-                        val loaded = loadExtractor(realUrl, "$mainUrl/", subtitleCallback, callback)
-                        if (loaded) {
-                            found = true
-                        } else {
-                            Log.e(TAG, "loadLinks: '$streamName' loadExtractor returned false")
-                        }
+                        if (loadExtractor(realUrl, "$mainUrl/", subtitleCallback, callback)) found = true
                     }
 
-                    // player.vimeo.com → built-in extractor
                     streamUrl.contains("player.vimeo.com") -> {
-                        val loaded = loadExtractor(streamUrl, "$mainUrl/", subtitleCallback, callback)
-                        if (loaded) {
-                            found = true
-                        } else {
-                            Log.e(TAG, "loadLinks: '$streamName' Vimeo loadExtractor returned false")
-                        }
+                        if (loadExtractor(streamUrl, "$mainUrl/", subtitleCallback, callback)) found = true
                     }
 
-                    // timstreams.upn.one → custom player with encrypted API
-                    // Use WebViewResolver to load the page, let the JS player init,
-                    // and intercept the .m3u8 or .mp4 URL it requests
                     streamUrl.contains("upn.one") -> {
                         try {
                             val resolver = WebViewResolver(
@@ -426,18 +342,12 @@ class TimStreamsProvider : MainAPI() {
                             val resolvedUrl = app.get(streamUrl, referer = "$mainUrl/", interceptor = resolver).url
 
                             if (resolvedUrl.contains(".m3u8", ignoreCase = true) || resolvedUrl.contains(".mp4", ignoreCase = true)) {
-                                // Extract cookies from the upn.one domain
-                                val upnCookies = try {
-                                    android.webkit.CookieManager.getInstance().getCookie("https://timstreams.upn.one") ?: ""
-                                } catch (e: Exception) { "" }
-
                                 val headers = mutableMapOf(
                                     "User-Agent" to "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36",
                                     "Referer" to "https://timstreams.upn.one/"
                                 )
-                                if (upnCookies.isNotBlank()) {
-                                    headers["Cookie"] = upnCookies
-                                }
+                                val cookies = getCookiesForUrl("https://timstreams.upn.one")
+                                if (cookies.isNotBlank()) headers["Cookie"] = cookies
 
                                 val isM3u8 = resolvedUrl.contains(".m3u8", ignoreCase = true)
                                 callback.invoke(
@@ -453,24 +363,14 @@ class TimStreamsProvider : MainAPI() {
                                 )
                                 found = true
                             } else {
-                                Log.e(TAG, "loadLinks: '$streamName' upn.one WebViewResolver did not intercept stream URL (got: $resolvedUrl)")
-                                // Fallback: try loadExtractor
-                                val loaded = loadExtractor(streamUrl, "$mainUrl/", subtitleCallback, callback)
-                                if (loaded) {
-                                    found = true
-                                }
+                                if (loadExtractor(streamUrl, "$mainUrl/", subtitleCallback, callback)) found = true
                             }
                         } catch (e: Exception) {
-                            Log.e(TAG, "loadLinks: '$streamName' upn.one WebViewResolver failed: ${e.message}")
-                            // Fallback: try loadExtractor
-                            val loaded = loadExtractor(streamUrl, "$mainUrl/", subtitleCallback, callback)
-                            if (loaded) {
-                                found = true
-                            }
+                            Log.e(TAG, "loadLinks: '$streamName' upn.one: ${e.message}")
+                            if (loadExtractor(streamUrl, "$mainUrl/", subtitleCallback, callback)) found = true
                         }
                     }
 
-                    // Direct m3u8/mp4 URLs
                     streamUrl.contains(".m3u8") -> {
                         callback.invoke(
                             newExtractorLink(
@@ -495,36 +395,25 @@ class TimStreamsProvider : MainAPI() {
                         found = true
                     }
 
-                    // Fallback: try loadExtractor for any other URL
                     else -> {
-                        val loaded = loadExtractor(streamUrl, "$mainUrl/", subtitleCallback, callback)
-                        if (loaded) {
-                            found = true
-                            Log.d(TAG, "loadLinks: '$streamName' resolved via loadExtractor fallback")
-                        } else {
-                            Log.e(TAG, "loadLinks: '$streamName' loadExtractor fallback failed")
-                        }
+                        if (loadExtractor(streamUrl, "$mainUrl/", subtitleCallback, callback)) found = true
                     }
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "loadLinks: FAILED for stream '$streamName': ${e.message}")
+                Log.e(TAG, "loadLinks: '$streamName': ${e.message}")
             }
         }
 
-        Log.d(TAG, "loadLinks END: found=$found for '${loadData.title}'")
         return found
     }
 
-    /**
-     * Extract the embed ID from a ritzembeds/vileembeds URL.
-     * "https://ritzembeds.pages.dev/embed/fox-usa" → "fox-usa"
-     */
-    private fun extractEmbedId(url: String): String? {
-        val embedIndex = url.indexOf("/embed/")
-        if (embedIndex < 0) return null
-        val afterEmbed = url.substring(embedIndex + 7) // after "/embed/"
-        // Take everything up to the next /, ?, #, or end
-        val id = afterEmbed.split("/", "?", "#").firstOrNull()
-        return id?.takeIf { it.isNotBlank() }
+    private fun getCookiesForUrl(url: String): String {
+        return try {
+            val host = try {
+                val uri = android.net.Uri.parse(url)
+                "${uri.scheme}://${uri.host}"
+            } catch (e: Exception) { return "" }
+            android.webkit.CookieManager.getInstance().getCookie(host) ?: ""
+        } catch (_: Exception) { "" }
     }
 }

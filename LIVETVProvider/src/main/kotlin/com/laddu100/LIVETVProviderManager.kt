@@ -1,14 +1,12 @@
 package com.laddu100
 
 import com.lagradost.api.Log
-
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
-import okhttp3.OkHttpClient
-import okhttp3.Request
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import okhttp3.OkHttpClient
+import okhttp3.Request
 import java.util.concurrent.TimeUnit
-
 
 data class LIVETVProviderEntry(
     val id: Int,
@@ -18,7 +16,7 @@ data class LIVETVProviderEntry(
 )
 
 data class LIVETVCategoryWrapper(
-    val cat: String   // inner JSON string
+    val cat: String
 )
 
 data class LIVETVCategoryData(
@@ -29,8 +27,21 @@ data class LIVETVCategoryData(
     val api: String
 )
 
+data class LIVETVChannelWrapper(
+    val channel: String = ""
+)
+
+data class LIVETVChannelData(
+    val name: String?,
+    val logo: String?,
+    val visible: Boolean?,
+    val links: String?,
+    val link_names: List<String>?,
+    val is_playlist: Boolean?
+)
+
 data class LIVETVEventWrapper(
-    val event: String   // inner JSON string
+    val event: String
 )
 
 data class LIVETVEventData(
@@ -50,7 +61,6 @@ data class LIVETVEventData(
     val visible: Boolean?,
     val priority: Int?
 )
-
 
 data class LIVELiveEventData(
     val id: Int,
@@ -82,10 +92,16 @@ data class LIVELiveEventFormat(
     val webLink: String?
 )
 
+data class LIVEStreamUrl(
+    val name: String?,
+    val link: String?,
+    val scheme: Int?,
+    val api: String?,
+    val tokenApi: String?
+)
 
 object LIVETVProviderManager {
 
-    /** Hardcoded fallback base URLs from the LIVE TV plugin.js */
     private val DEFAULT_BASE_URLS = listOf(
         "https://adsflw.xyz",
         "https://playztv2828.store"
@@ -98,19 +114,21 @@ object LIVETVProviderManager {
         .readTimeout(30, TimeUnit.SECONDS)
         .build()
 
-
     private fun parseDateTime(date: String?, time: String?): String? {
         if (date == null || time == null) return null
         return try {
             val parts = date.split("/")
             if (parts.size == 3) {
-                val day = parts[0]; val month = parts[1]; val year = parts[2]
+                val day = parts[0]
+                val month = parts[1]
+                val year = parts[2]
                 "$year/$month/$day $time +0000"
             } else null
-        } catch (_: Exception) { null }
+        } catch (_: Exception) {
+            null
+        }
     }
 
-    /** Returns an active base URL, trying Firebase first then defaults. */
     private suspend fun getBaseUrl(): String {
         cachedBaseUrl?.let { return it }
 
@@ -120,7 +138,6 @@ object LIVETVProviderManager {
             return firebaseUrl
         }
 
-        // Try each default URL until one responds
         for (url in DEFAULT_BASE_URLS) {
             try {
                 val req = Request.Builder()
@@ -133,7 +150,8 @@ object LIVETVProviderManager {
                     cachedBaseUrl = url
                     return url
                 }
-            } catch (_: Exception) { /* try next */ }
+            } catch (_: Exception) {
+            }
         }
 
         cachedBaseUrl = DEFAULT_BASE_URLS.first()
@@ -153,20 +171,15 @@ object LIVETVProviderManager {
                 val body = response.body.string()
                 if (body.isNotBlank()) LIVETVCryptoUtils.decryptLIVETV(body.trim()) else null
             } else {
-                Log.d("LIVETV", "LIVETV: HTTP ${response.code} fetching $url")
+                Log.d("LIVETV", "HTTP ${response.code} fetching $url")
                 null
             }
         } catch (e: Exception) {
-            Log.d("LIVETV", "LIVETV: Exception fetching $url – ${e.message}")
+            Log.d("LIVETV", "Exception fetching $url - ${e.message}")
             null
         }
     }
 
-
-    /**
-     * Fetches the provider/category list from `{baseUrl}/categories.txt`.
-     * Returns a list of maps compatible with SKTech's plugin registration.
-     */
     suspend fun fetchProviders(): List<Map<String, Any>> = withContext(Dispatchers.IO) {
         try {
             val decrypted = fetchDecrypted("categories.txt")
@@ -185,20 +198,17 @@ object LIVETVProviderManager {
                             )
                         } else null
                     } catch (e: Exception) {
-                        Log.d("LIVETV", "LIVETV: Failed to parse category at $index – ${e.message}")
+                        Log.d("LIVETV", "Failed to parse category at $index - ${e.message}")
                         null
                     }
                 }
             }
         } catch (e: Exception) {
-            Log.d("LIVETV", "LIVETV: fetchProviders exception – ${e.message}")
+            Log.d("LIVETV", "fetchProviders exception - ${e.message}")
         }
         emptyList()
     }
 
-    /**
-     * Fetches live events from `{baseUrl}/events.txt`.
-     */
     suspend fun fetchLiveEvents(): List<LIVELiveEventData> = withContext(Dispatchers.IO) {
         try {
             val decrypted = fetchDecrypted("events.txt")
@@ -232,22 +242,18 @@ object LIVETVProviderManager {
                             } ?: emptyList()
                         )
                     } catch (e: Exception) {
-                        Log.d("LIVETV", "LIVETV: Failed to parse event at $index – ${e.message}")
+                        Log.d("LIVETV", "Failed to parse event at $index - ${e.message}")
                         null
                     }
                 }
                 return@withContext events.filter { it.publish == 1 }
             }
         } catch (e: Exception) {
-            Log.d("LIVETV", "LIVETV: fetchLiveEvents exception – ${e.message}")
+            Log.d("LIVETV", "fetchLiveEvents exception - ${e.message}")
         }
         emptyList()
     }
 
-    /**
-     * Fetches custom live events from `{baseUrl}/{catLink}` (used for
-     * category entries whose `type` is "custom").
-     */
     suspend fun fetchCustomEvents(catLink: String): List<LIVELiveEventData> = withContext(Dispatchers.IO) {
         try {
             val decrypted = fetchDecrypted(catLink)
@@ -281,22 +287,18 @@ object LIVETVProviderManager {
                             } ?: emptyList()
                         )
                     } catch (e: Exception) {
-                        Log.d("LIVETV", "LIVETV: Failed to parse custom event at $index – ${e.message}")
+                        Log.d("LIVETV", "Failed to parse custom event at $index - ${e.message}")
                         null
                     }
                 }
                 return@withContext events.filter { it.publish == 1 }
             }
         } catch (e: Exception) {
-            Log.d("LIVETV", "LIVETV: fetchCustomEvents exception – ${e.message}")
+            Log.d("LIVETV", "fetchCustomEvents exception - ${e.message}")
         }
         emptyList()
     }
 
-    /**
-     * Fetches stream list from `{baseUrl}/{slug}.txt`.
-     * Returns a list of [LIVEStreamUrl] or null.
-     */
     suspend fun fetchChannelStreams(slug: String): List<LIVEStreamUrl>? = withContext(Dispatchers.IO) {
         try {
             val decrypted = fetchDecrypted("$slug.txt")
@@ -304,17 +306,8 @@ object LIVETVProviderManager {
                 return@withContext parseJson<List<LIVEStreamUrl>>(decrypted)
             }
         } catch (e: Exception) {
-            Log.d("LIVETV", "LIVETV: fetchChannelStreams exception for $slug – ${e.message}")
+            Log.d("LIVETV", "fetchChannelStreams exception for $slug - ${e.message}")
         }
         null
     }
 }
-
-
-data class LIVEStreamUrl(
-    val name: String?,
-    val link: String?,
-    val scheme: Int?,
-    val api: String?,
-    val tokenApi: String?
-)

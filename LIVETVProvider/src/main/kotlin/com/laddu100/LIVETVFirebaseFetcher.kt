@@ -1,17 +1,15 @@
 package com.laddu100
 
 import com.lagradost.api.Log
-
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 import java.util.UUID
 import java.util.concurrent.TimeUnit
-
 
 object LIVETVFirebaseFetcher {
 
@@ -33,10 +31,6 @@ object LIVETVFirebaseFetcher {
         val state: String? = null
     )
 
-    /**
-     * Fetches Firebase Remote Config entries.
-     * @return Map of config entries or null if the fetch fails.
-     */
     suspend fun fetchRemoteConfig(): Map<String, String>? = withContext(Dispatchers.IO) {
         try {
             val url = "https://firebaseremoteconfig.googleapis.com/v1/projects/$PROJECT_NUMBER/namespaces/firebase:fetch"
@@ -79,15 +73,11 @@ object LIVETVFirebaseFetcher {
             }
             null
         } catch (e: Exception) {
-            Log.d("LIVETV", "LIVETV: Firebase fetch failed – ${e.message}")
+            Log.d("LIVETV", "Firebase fetch failed - ${e.message}")
             null
         }
     }
 
-    /**
-     * Returns the `api_url` entry from Firebase Remote Config,
-     * or null if it cannot be retrieved.
-     */
     suspend fun getBaseApiUrl(): String? {
         return fetchRemoteConfig()?.get("api_url")?.trimEnd('/')
     }

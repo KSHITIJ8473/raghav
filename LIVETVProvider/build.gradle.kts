@@ -1,5 +1,5 @@
 // use an integer for version numbers
-version = 17
+version = 19
 
 android {
     namespace = "com.laddu100"
@@ -21,7 +21,7 @@ dependencies {
 cloudstream {
     language = "en"
     description = "Watch LIVE TV channels & sports via LIVE TV"
-    authors = listOf("raghav", "NivinCNC")
+    authors = listOf("raghav")
 
     /**
      * Status int as the following:

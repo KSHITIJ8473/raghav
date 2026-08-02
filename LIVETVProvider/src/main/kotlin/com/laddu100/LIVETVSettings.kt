@@ -20,12 +20,6 @@ import androidx.core.content.res.ResourcesCompat
 import com.google.android.material.bottomsheet.BottomSheetDialogFragment
 import com.lagradost.cloudstream3.CommonActivity.showToast
 
-/**
- * Settings bottom sheet for LIVE TV provider selection.
- *
- * Reuses the same layout resources (settings.xml, etc.) that are shared across
- * the Netmirror plugin suite via the `com.laddu100` namespace.
- */
 class LIVETVSettings(
     private val plugin: LIVETVPlugin,
     private val sharedPref: SharedPreferences?,
@@ -35,7 +29,6 @@ class LIVETVSettings(
     private val enabledPlaylists = playlistNames
         .filter { sharedPref?.getBoolean(it, false) ?: false }
         .toMutableList()
-
 
     @SuppressLint("DiscouragedApi")
     private fun getDrawable(name: String): Drawable? {
@@ -59,7 +52,6 @@ class LIVETVSettings(
         setPadding(paddingLeft + 10, paddingTop + 10, paddingRight + 10, paddingBottom + 10)
         background = getDrawable("outline")
     }
-
 
     @SuppressLint("DiscouragedApi")
     override fun onCreateView(
@@ -103,7 +95,6 @@ class LIVETVSettings(
                 .show()
         }
     }
-
 
     private fun restartApp() {
         val ctx = requireContext().applicationContext

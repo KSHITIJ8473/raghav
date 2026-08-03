@@ -268,9 +268,9 @@ class AnimeWorldProvider : MainAPI() {
 
             var found = false
             for (iframe in iframes) {
-                if (iframe.contains("zephyrflick")) {
+                if (iframe.contains("zephyrix") || iframe.contains("zephyrflick")) {
                     val videoId = Regex("/video/([a-f0-9]+)").find(iframe)?.groupValues?.get(1) ?: continue
-                    val resolved = resolveZephyrFlick(videoId, subtitleCallback, callback)
+                    val resolved = resolveZephyrix(videoId, subtitleCallback, callback)
                     if (resolved) found = true
                 }
             }
@@ -281,40 +281,43 @@ class AnimeWorldProvider : MainAPI() {
         }
     }
 
-    private suspend fun resolveZephyrFlick(
+    private suspend fun resolveZephyrix(
         videoId: String,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         return try {
-            val response = animeWorldGet("https://play.zephyrflick.top/video/$videoId", headers = mapOf(
+            val response = animeWorldGet("https://play.zephyrix.top/video/$videoId", headers = mapOf(
                 "Referer" to mainUrl
             ))
             val html = response.text
             val allHashes = Regex("[a-f0-9]{32}").findAll(html).map { it.value }.distinct().toList()
             val cdnHash = allHashes.firstOrNull { it != videoId } ?: return false
 
-            val m3u8Url = "https://s7.as-cdn13.top/cdn/down/$cdnHash/master.m3u8"
+            val cdnDomain = Regex("https?://(s\\d+\\.as-cdn\\d+\\.top)").find(html)?.groupValues?.get(1)
+                ?: "s7.as-cdn7.top"
 
-            val subtitleUrl = Regex("https?://[^\"'\\s]*Subtitle/[^\"'\\s]+\\.srt").find(html)?.value
+            val m3u8Url = "https://$cdnDomain/cdn/down/$cdnHash/master.m3u8"
+
+            val subtitleUrl = Regex("https?://[^\"'\\s]*Subtitle/[^\"'\\s]+\\.(srt|vtt)").find(html)?.value
             if (subtitleUrl != null) {
                 subtitleCallback.invoke(SubtitleFile("en", subtitleUrl))
             }
 
             val link = newExtractorLink(
                 "Anime World India",
-                "Anime World India - ZephyrFlick",
+                "Anime World India",
                 m3u8Url,
                 ExtractorLinkType.M3U8
             ) {
                 this.quality = Qualities.Unknown.value
-                this.referer = "https://play.zephyrflick.top/"
-                this.headers = mapOf("Referer" to "https://play.zephyrflick.top/")
+                this.referer = "https://play.zephyrix.top/"
+                this.headers = mapOf("Referer" to "https://play.zephyrix.top/")
             }
             callback.invoke(link)
             true
         } catch (e: Exception) {
-            Log.e(TAG, "resolveZephyrFlick: ${e.message}")
+            Log.e(TAG, "resolveZephyrix: ${e.message}")
             false
         }
     }

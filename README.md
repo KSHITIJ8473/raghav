@@ -1,33 +1,4 @@
-
-shortcode is raghav766
-
-Installation
-To add this repository to your Cloudstream app:
-
-Open Cloudstream and navigate to Settings (gear icon) -> Extensions.
-Tap Add Repository.
-Use the following details:
-Repository Name: raghavrepo
-Repository URL: https://raw.githubusercontent.com/KSHITIJ8473/raghav/builds/repo.json
-Tap Add.
-Select raghavrepo from your repository 
-
-
-
-
-
-
-
-
-
-
-VERY IMPORTANT BEFORE USING 
-
-for now miruro is working for dub and sub and aniwave is working for subbed anime all the other are in testing phase and some of them are cloudfare protected so USE MIRURO (sub and dub) and ANIWAVE FOR SUBBBED ANIME 
-
-
-
-
+Shortcode is raghav766
 
 
 ⚖️ DMCA Disclaimer
@@ -43,16 +14,12 @@ This project is created strictly for educational, research, and development purp
 
 For full legal compliance details, please read our DMCA & Disclaimer Notice.
 
-License
-This project is licensed under the GNU General Public License v3.0. 
+### License
+[![GNU GPLv3 Image](https://www.gnu.org/graphics/gplv3-127x51.png)](http://www.gnu.org/licenses/gpl-3.0.en.html)
+
+These extensions are Free: They can be redistributed and/or modified under the terms of the
+[GNU General Public License](https://www.gnu.org/licenses/gpl.html) version 3 or later published by the Free Software Foundation.
 
  
 
 
-
-
-
-## Attribution
-
-This template as well as the gradle plugin and the whole plugin system is **heavily** based on [Aliucord](https://github.com/Aliucord).
-*Go use it, it's a great mobile discord client mod!*

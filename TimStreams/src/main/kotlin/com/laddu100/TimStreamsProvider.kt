@@ -23,11 +23,11 @@ class TimStreamsProvider : MainAPI() {
     override val hasDownloadSupport = false
     override val supportedTypes = setOf(TvType.Live)
 
-    private val fallbackApiBase = "https://api.timstreams.st"
+    private val fallbackApiBase = "https://timstreams.st"
     private val TAG = "TimStreams"
 
     private suspend fun apiUrl(): String {
-        val domain = FirebaseDomainHelper.getDomain("timstreams_api")
+        val domain = FirebaseDomainHelper.getDomain("timstreams")
         return (domain ?: fallbackApiBase).removeSuffix("/") + "/api"
     }
 
@@ -67,13 +67,13 @@ class TimStreamsProvider : MainAPI() {
     @JsonIgnoreProperties(ignoreUnknown = true)
     data class LiveUpcomingResponse(
         @JsonProperty("events") val events: List<TimEvent>? = null,
-        @JsonProperty("genres") val genres: Map<String, String>? = null
+        @JsonProperty("genres") val genres: List<Map<String, Any>>? = null
     )
 
     @JsonIgnoreProperties(ignoreUnknown = true)
     data class ChannelsResponse(
         @JsonProperty("channels") val channels: List<TimChannel>? = null,
-        @JsonProperty("genres") val genres: Map<String, String>? = null
+        @JsonProperty("genres") val genres: List<Map<String, Any>>? = null
     )
 
     @JsonIgnoreProperties(ignoreUnknown = true)
@@ -226,11 +226,10 @@ class TimStreamsProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-
         val loadData = try {
             parseJson<LoadData>(data)
         } catch (e: Exception) {
-            Log.e(TAG, "loadLinks: parse error: ${e.message}")
+            Log.e(TAG, "loadLinks: ${e.message}")
             return false
         }
 
@@ -243,7 +242,7 @@ class TimStreamsProvider : MainAPI() {
 
             try {
                 when {
-                    streamUrl.contains("icelanders.st") -> {
+                    streamUrl.contains("icelanders.st") || streamUrl.contains("hux-giants.shop") || streamUrl.contains("hux-") -> {
                         try {
                             val resolver = WebViewResolver(
                                 interceptUrl = Regex("""(?i)\.(m3u8|mp4)(?:\?|$)"""),
@@ -277,7 +276,7 @@ class TimStreamsProvider : MainAPI() {
                                 found = true
                             }
                         } catch (e: Exception) {
-                            Log.e(TAG, "loadLinks: '$streamName' icelanders.st: ${e.message}")
+                            Log.e(TAG, "loadLinks: '$streamName': ${e.message}")
                         }
                     }
 
@@ -317,7 +316,7 @@ class TimStreamsProvider : MainAPI() {
                                 found = true
                             }
                         } catch (e: Exception) {
-                            Log.e(TAG, "loadLinks: '$streamName' ritzembeds: ${e.message}")
+                            Log.e(TAG, "loadLinks: '$streamName': ${e.message}")
                         }
                     }
 
@@ -366,7 +365,7 @@ class TimStreamsProvider : MainAPI() {
                                 if (loadExtractor(streamUrl, "$mainUrl/", subtitleCallback, callback)) found = true
                             }
                         } catch (e: Exception) {
-                            Log.e(TAG, "loadLinks: '$streamName' upn.one: ${e.message}")
+                            Log.e(TAG, "loadLinks: '$streamName': ${e.message}")
                             if (loadExtractor(streamUrl, "$mainUrl/", subtitleCallback, callback)) found = true
                         }
                     }

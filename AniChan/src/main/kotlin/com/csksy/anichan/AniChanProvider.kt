@@ -2,6 +2,7 @@ package com.csksy.anichan
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties
 import com.fasterxml.jackson.annotation.JsonProperty
+import com.fasterxml.jackson.databind.ObjectMapper
 import com.lagradost.api.Log
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
@@ -132,6 +133,8 @@ class AniChanProvider : MainAPI() {
             return null
         }
 
+        val epTitles = fetchEpisodeTitles(anilistId)
+
         var epCount = epData.episodes ?: 0
         if (epCount == 0 && meta?.statusStr == "RELEASING") {
             epCount = (meta?.nextAiringEpisode?.episode ?: 1) - 1
@@ -143,9 +146,10 @@ class AniChanProvider : MainAPI() {
         val isMovie = meta?.formatStr == "MOVIE" || epCount <= 1
 
         if (isMovie) {
+            val movieTitle = epTitles[1] ?: title
             if (dubAvailable) {
-                val subEp = newEpisode(EpisodeData(anilistId, 1, false).toJson()) { this.name = title }
-                val dubEp = newEpisode(EpisodeData(anilistId, 1, true).toJson()) { this.name = title }
+                val subEp = newEpisode(EpisodeData(anilistId, 1, false).toJson()) { this.name = movieTitle }
+                val dubEp = newEpisode(EpisodeData(anilistId, 1, true).toJson()) { this.name = movieTitle }
                 return newAnimeLoadResponse(title, url, TvType.Anime) {
                     this.posterUrl = poster
                     this.backgroundPosterUrl = banner
@@ -169,7 +173,7 @@ class AniChanProvider : MainAPI() {
         val subEpisodes = (1..epCount).map { epNum ->
             newEpisode(EpisodeData(anilistId, epNum, false).toJson()) {
                 this.episode = epNum
-                this.name = "Episode $epNum"
+                this.name = epTitles[epNum] ?: "Episode $epNum"
             }
         }
 
@@ -177,7 +181,7 @@ class AniChanProvider : MainAPI() {
             (1..epCount).map { epNum ->
                 newEpisode(EpisodeData(anilistId, epNum, true).toJson()) {
                     this.episode = epNum
-                    this.name = "Episode $epNum"
+                    this.name = epTitles[epNum] ?: "Episode $epNum"
                 }
             }
         } else emptyList()
@@ -259,6 +263,66 @@ class AniChanProvider : MainAPI() {
             Log.e("AniChan", "loadLinks: ${e.message}")
             false
         }
+    }
+
+    private suspend fun fetchEpisodeTitles(anilistId: Int): Map<Int, String> {
+        val titles = mutableMapOf<Int, String>()
+        try {
+            val html = app.get(
+                "$mainUrl/anime/$anilistId",
+                headers = mapOf("User-Agent" to browserUA),
+                timeout = 30_000L
+            ).text
+
+            // The page embeds episode metadata as escaped JSON inside a
+            // Next.js RSC stream. Quotes are escaped as \" so we search
+            // for the escaped form.
+            val marker = "\\\"epMeta\\\""
+            val epMetaIdx = html.indexOf(marker)
+            if (epMetaIdx < 0) return titles
+            val metaStart = html.indexOf('{', epMetaIdx)
+            if (metaStart < 0) return titles
+
+            var depth = 0
+            var inStr = false
+            var end = metaStart
+            var i = metaStart
+            while (i < html.length) {
+                val c = html[i]
+                if (c == '\\' && i + 1 < html.length) { i += 2; continue }
+                if (c == '"') { inStr = !inStr }
+                else if (!inStr) {
+                    when (c) {
+                        '{' -> depth++
+                        '}' -> { depth--; if (depth == 0) { end = i + 1; break } }
+                    }
+                }
+                i++
+            }
+
+            val raw = html.substring(metaStart, end)
+            // Literal quotes inside titles (\\\") must survive the unescape
+            // as escaped quotes (\") while structural quotes (\") become
+            // real delimiters.
+            val unescaped = raw
+                .replace("\\\\\\\"", "\u0000")
+                .replace("\\\"", "\"")
+                .replace("\u0000", "\\\"")
+                .replace("\\/", "/")
+
+            val mapper = ObjectMapper()
+            val node = mapper.readTree(unescaped)
+            val fields = node.fields()
+            while (fields.hasNext()) {
+                val entry = fields.next()
+                val epNum = entry.key.toIntOrNull() ?: continue
+                val title = entry.value.get("title")?.asText()
+                if (!title.isNullOrBlank()) titles[epNum] = title
+            }
+        } catch (e: Exception) {
+            Log.e("AniChan", "fetchEpisodeTitles: ${e.message}")
+        }
+        return titles
     }
 
     data class EpisodeData(val anilistId: Int, val episode: Int, val isDub: Boolean)

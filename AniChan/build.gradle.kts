@@ -1,4 +1,4 @@
-version = 8
+version = 1
 
 android {
     buildFeatures {

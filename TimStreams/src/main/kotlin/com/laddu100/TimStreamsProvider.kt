@@ -226,10 +226,11 @@ class TimStreamsProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
+
         val loadData = try {
             parseJson<LoadData>(data)
         } catch (e: Exception) {
-            Log.e(TAG, "loadLinks: ${e.message}")
+            Log.e(TAG, "loadLinks: parse error: ${e.message}")
             return false
         }
 
@@ -242,6 +243,54 @@ class TimStreamsProvider : MainAPI() {
 
             try {
                 when {
+                    Regex("cdx-\\d+\\.website").containsMatchIn(streamUrl) ||
+                        (streamUrl.contains(".website/embed/") && streamUrl.contains("cdx-")) -> {
+                        try {
+                            val embedHtml = app.get(
+                                streamUrl,
+                                referer = "$mainUrl/",
+                                headers = mapOf(
+                                    "User-Agent" to "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
+                                )
+                            ).text
+
+                            val signedUrl = decodeCdxSignedUrl(embedHtml)
+
+                            if (signedUrl != null && signedUrl.contains(".m3u8")) {
+                                val cdxOrigin = try {
+                                    val u = java.net.URL(streamUrl)
+                                    "${u.protocol}://${u.host}"
+                                } catch (_: Exception) {
+                                    "https://cdx-08192.website"
+                                }
+
+                                val headers = mutableMapOf(
+                                    "User-Agent" to "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36",
+                                    "Referer" to "$cdxOrigin/",
+                                    "Origin" to cdxOrigin
+                                )
+
+                                callback.invoke(
+                                    newExtractorLink(
+                                        source = "$name - $streamName",
+                                        name = "$name - $streamName",
+                                        url = signedUrl,
+                                        type = ExtractorLinkType.M3U8
+                                    ) {
+                                        this.quality = Qualities.Unknown.value
+                                        this.headers = headers
+                                    }
+                                )
+                                found = true
+                            } else {
+                                if (loadExtractor(streamUrl, "$mainUrl/", subtitleCallback, callback)) found = true
+                            }
+                        } catch (e: Exception) {
+                            Log.e(TAG, "loadLinks: '$streamName' cdx: ${e.message}")
+                            if (loadExtractor(streamUrl, "$mainUrl/", subtitleCallback, callback)) found = true
+                        }
+                    }
+
                     streamUrl.contains("icelanders.st") || streamUrl.contains("hux-giants.shop") || streamUrl.contains("hux-") -> {
                         try {
                             val resolver = WebViewResolver(
@@ -276,7 +325,7 @@ class TimStreamsProvider : MainAPI() {
                                 found = true
                             }
                         } catch (e: Exception) {
-                            Log.e(TAG, "loadLinks: '$streamName': ${e.message}")
+                            Log.e(TAG, "loadLinks: '$streamName' icelanders.st: ${e.message}")
                         }
                     }
 
@@ -316,7 +365,7 @@ class TimStreamsProvider : MainAPI() {
                                 found = true
                             }
                         } catch (e: Exception) {
-                            Log.e(TAG, "loadLinks: '$streamName': ${e.message}")
+                            Log.e(TAG, "loadLinks: '$streamName' ritzembeds: ${e.message}")
                         }
                     }
 
@@ -365,7 +414,7 @@ class TimStreamsProvider : MainAPI() {
                                 if (loadExtractor(streamUrl, "$mainUrl/", subtitleCallback, callback)) found = true
                             }
                         } catch (e: Exception) {
-                            Log.e(TAG, "loadLinks: '$streamName': ${e.message}")
+                            Log.e(TAG, "loadLinks: '$streamName' upn.one: ${e.message}")
                             if (loadExtractor(streamUrl, "$mainUrl/", subtitleCallback, callback)) found = true
                         }
                     }
@@ -414,5 +463,35 @@ class TimStreamsProvider : MainAPI() {
             } catch (e: Exception) { return "" }
             android.webkit.CookieManager.getInstance().getCookie(host) ?: ""
         } catch (_: Exception) { "" }
+    }
+
+    // The cdx embed obfuscates the signed m3u8 URL with a XOR + subtraction
+    // scheme where variable names and key values change per request.
+    private fun decodeCdxSignedUrl(html: String): String? {
+        return try {
+            val arrayMatch = Regex("""var\s+(_\w+)\s*=\s*\[([\d,]+)\]""").find(html) ?: return null
+            val byteArray = arrayMatch.groupValues[2].split(",").mapNotNull { it.trim().toIntOrNull() }
+            if (byteArray.isEmpty()) return null
+
+            val rest = html.substring(arrayMatch.range.last + 1, minOf(arrayMatch.range.last + 600, html.length))
+            val nums = Regex("""(_\w+)\s*=\s*(\d+)\s*[,;]""").findAll(rest).toList()
+            if (nums.size < 2) return null
+            val xorKey = nums[0].groupValues[2].toInt()
+            val subOffset = nums[1].groupValues[2].toInt()
+
+            val decoded = StringBuilder()
+            for (b in byteArray) {
+                val c = (((b xor xorKey) - subOffset) + 256) % 256
+                if (c in 0..255) decoded.append(c.toChar())
+            }
+            val decodedStr = decoded.toString()
+
+            val signedUrlMatch = Regex("""var\s+SIGNED_URL\s*=\s*"([^"]+)"""").find(decodedStr)
+                ?: return null
+            signedUrlMatch.groupValues[1].takeIf { it.startsWith("http") }
+        } catch (e: Exception) {
+            Log.e(TAG, "decodeCdxSignedUrl: ${e.message}")
+            null
+        }
     }
 }

@@ -1,8 +1,18 @@
-version = 15
+version = 16
+
+android {
+    buildFeatures {
+        buildConfig = true
+    }
+}
+
+dependencies {
+    implementation("com.google.android.material:material:1.12.0")
+}
 
 cloudstream {
     language = "en"
-    description = "( don't use cs beta ) Download and stream movies & TV series HINDI,ENGLISH - TheMoviesFlix Provider"
+    description = "stream movies & TV series HINDI,ENGLISH - TheMoviesFlix Provider"
     authors = listOf("raghav")
 
     status = 1
@@ -12,4 +22,3 @@ cloudstream {
     )
     iconUrl = "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcSj_C9WX4AwepepLyw_cF-EIJeRpqgI4wDiquYSoP9xDFFAKFtTVM-P_zo&s=10"
 }
-// Build trigger: Sat Jul 25 01:47:05 UTC 2026

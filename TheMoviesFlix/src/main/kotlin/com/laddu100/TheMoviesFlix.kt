@@ -57,7 +57,7 @@ class TheMoviesFlix : MainAPI() {
         } else {
             if (page > 1) "$mainUrl/$path/page/$page/" else "$mainUrl/$path/"
         }
-        val doc = app.get(url, headers = baseHeaders).document
+        val doc = tmfGet(url, headers = baseHeaders).document
         val items = doc.select("article.latestpost a[id=featured-thumbnail]").mapNotNull { it.toSearchResult() }
         val hasNext = doc.select("div.navigation a.nextpostslink, div.navigation li a:contains(Next)").isNotEmpty()
         return newHomePageResponse(request.name, items, hasNext = hasNext)
@@ -110,13 +110,13 @@ class TheMoviesFlix : MainAPI() {
     override suspend fun search(query: String): List<SearchResponse> {
         mainUrl = FirebaseDomainHelper.getDomain("themoviesflix") ?: mainUrl
         val url = "$mainUrl/?s=${URLEncoder.encode(query, "UTF-8")}"
-        val doc = app.get(url, headers = baseHeaders).document
+        val doc = tmfGet(url, headers = baseHeaders).document
         return doc.select("article.latestpost a[id=featured-thumbnail]").mapNotNull { it.toSearchResult() }
     }
 
     override suspend fun load(url: String): LoadResponse? {
         mainUrl = FirebaseDomainHelper.getDomain("themoviesflix") ?: mainUrl
-        val doc = app.get(url, headers = baseHeaders).document
+        val doc = tmfGet(url, headers = baseHeaders).document
         val entry = doc.selectFirst("div.entry-content") ?: return null
 
         val titleRaw = doc.selectFirst("h2.mfx-main-title")?.text()

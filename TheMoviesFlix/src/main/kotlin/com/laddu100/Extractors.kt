@@ -63,6 +63,7 @@ class VCloudExtractor : ExtractorApi() {
     override val mainUrl = "https://vcloud.zip"
     override val requiresReferer = true
 
+    private val cfKiller = CloudflareKiller()
     private val headers = mapOf(
         "User-Agent" to "Mozilla/5.0 (Linux; Android 11; Pixel 5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
         "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -76,13 +77,13 @@ class VCloudExtractor : ExtractorApi() {
         callback: (ExtractorLink) -> Unit
     ) {
         try {
-            val response = app.get(url, headers = headers)
+            val response = app.get(url, headers = headers, interceptor = cfKiller, timeout = 30L)
             val doc = response.document
 
             val downloadLink = doc.selectFirst("div.main h4 a")?.attr("href")
             if (downloadLink != null && downloadLink.isNotBlank()) {
                 val fullUrl = if (downloadLink.startsWith("http")) downloadLink else "$mainUrl$downloadLink"
-                val doc2 = app.get(fullUrl, headers = headers).document
+                val doc2 = app.get(fullUrl, headers = headers, interceptor = cfKiller, timeout = 30L).document
 
                 val scriptData = doc2.selectFirst("script:containsData(url)")?.data()
                 if (scriptData != null) {
@@ -112,26 +113,6 @@ class VCloudExtractor : ExtractorApi() {
                 }
             }
 
-            for (a in doc.select("a[href]")) {
-                val href = a.attr("href").trim()
-                if (href.isBlank() || !href.startsWith("http")) continue
-                if (href.contains("vcloud.zip") || href.contains("cloudflare") ||
-                    href.contains("googleapi") || href.contains("googletagmanager") ||
-                    href.contains("w.org") || href.contains("gmpg")) continue
-                emitLink(href, callback)
-            }
-
-            for (script in doc.select("script")) {
-                val data = script.data()
-                if (!data.contains("http")) continue
-                Regex("""(https?://[^"'\s<>]+)""").findAll(data).forEach { match ->
-                    val u = match.groupValues[1]
-                    if (!u.contains("vcloud") && !u.contains("cloudflare") &&
-                        !u.contains("google") && !u.contains("w.org")) {
-                        emitLink(u, callback)
-                    }
-                }
-            }
         } catch (e: Exception) {
             Log.d(TAG, "VCloud error: ${e.message}")
         }

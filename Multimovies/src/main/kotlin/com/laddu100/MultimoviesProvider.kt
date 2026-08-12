@@ -1,0 +1,526 @@
+package com.laddu100
+
+import android.util.Base64
+import com.lagradost.cloudstream3.Episode
+import com.lagradost.cloudstream3.HomePageResponse
+import com.lagradost.cloudstream3.LoadResponse
+import com.lagradost.cloudstream3.MainAPI
+import com.lagradost.cloudstream3.MainPageRequest
+import com.lagradost.cloudstream3.Score
+import com.lagradost.cloudstream3.SearchResponse
+import com.lagradost.cloudstream3.SubtitleFile
+import com.lagradost.cloudstream3.TvType
+import com.lagradost.cloudstream3.app
+import com.lagradost.cloudstream3.mainPageOf
+import com.lagradost.cloudstream3.newEpisode
+import com.lagradost.cloudstream3.newHomePageResponse
+import com.lagradost.cloudstream3.newMovieLoadResponse
+import com.lagradost.cloudstream3.newMovieSearchResponse
+import com.lagradost.cloudstream3.newSubtitleFile
+import com.lagradost.cloudstream3.newTvSeriesLoadResponse
+import com.lagradost.cloudstream3.utils.ExtractorLink
+import com.lagradost.cloudstream3.utils.ExtractorLinkType
+import com.lagradost.cloudstream3.utils.newExtractorLink
+import org.jsoup.nodes.Document
+import org.jsoup.nodes.Element
+import java.net.URI
+
+class MultimoviesProvider : MainAPI() {
+    override var mainUrl = "https://multimovies.motorcycles"
+    override var name = "Multimovies"
+    override var lang = "en"
+    override val hasMainPage = true
+    override val hasChromecastSupport = true
+    override val hasDownloadSupport = false
+    override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries, TvType.Anime)
+
+    private var modiplayBase: String? = null
+
+    private val headers = mapOf(
+        "User-Agent" to "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36",
+        "Accept-Language" to "en-US,en;q=0.9",
+    )
+
+    override val mainPage = mainPageOf(
+        "/trending/" to "Trending",
+        "/movies/" to "Latest Movies",
+        "/tvshows/" to "Latest TV Shows",
+        "/genre/anime-series/" to "Anime Series",
+        "/genre/anime-movies/" to "Anime Movies",
+        "/genre/bollywood-movies/" to "Bollywood",
+    )
+
+    private fun abs(base: String, url: String): String {
+        val u = url.trim()
+        if (u.startsWith("http://") || u.startsWith("https://")) return u
+        return if (u.startsWith("/")) base + u else base + "/" + u
+    }
+
+    private fun deEsc(s: String): String =
+        s.replace("\\/", "/").replace("\\\"", "\"").replace("&amp;", "&")
+
+    private fun hostOf(url: String): String = try {
+        URI(url).host?.lowercase() ?: ""
+    } catch (e: Exception) {
+        ""
+    }
+
+    private fun originOf(url: String): String = try {
+        val u = URI(url)
+        "${u.scheme}://${u.host}"
+    } catch (e: Exception) {
+        ""
+    }
+
+    private fun firstImg(el: Element): String {
+        val img = el.selectFirst("img") ?: return ""
+        return img.attr("src").ifBlank { img.attr("data-src") }
+    }
+
+    private data class CineServer(val embed: String, val platform: String, val name: String, val code: String)
+
+    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+        mainUrl = FirebaseDomainHelper.getDomain("multimovies") ?: mainUrl
+        val base = request.data.trimEnd('/')
+        val url = if (page <= 1) "$mainUrl$base/" else "$mainUrl$base/page/$page/"
+        return try {
+            val doc = app.get(url, headers = headers).document
+            val items = doc.select("article.item, .items article").mapNotNull { it.toSearchResult() }
+                .distinctBy { it.url }
+            val hasNext = doc.selectFirst("a[href*='/page/${page + 1}/'], a.next.page-numbers") != null
+            newHomePageResponse(request.name, items, hasNext = hasNext && items.isNotEmpty())
+        } catch (e: Exception) {
+            newHomePageResponse(request.name, emptyList(), hasNext = false)
+        }
+    }
+
+    override suspend fun search(query: String): List<SearchResponse> {
+        if (query.isBlank()) return emptyList()
+        mainUrl = FirebaseDomainHelper.getDomain("multimovies") ?: mainUrl
+        return try {
+            val doc = app.get("$mainUrl/?s=${query.trim().replace(" ", "+")}", headers = headers).document
+            doc.select(".result-item article").mapNotNull { it.toSearchResult() }
+                .distinctBy { it.url }
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+
+    private fun Element.toSearchResult(): SearchResponse? {
+        val titleA = selectFirst(".details .title a, .data h3 a")
+        val a = titleA
+            ?: selectFirst(".thumbnail a, a[href*='/movies/'], a[href*='/tvshows/']")
+            ?: return null
+        val href = a.attr("href").trim()
+        if (href.isBlank()) return null
+        var title = titleA?.text()?.trim() ?: ""
+        if (title.isBlank()) {
+            title = selectFirst("img")?.attr("alt")?.trim() ?: ""
+        }
+        if (title.isBlank()) return null
+
+        val poster = firstImg(this)
+        val isTv = href.contains("/tvshows/") || selectFirst(".tvshows, .item.tvshows, span.tvshows") != null
+        val year = Regex("(19|20)\\d{2}").find(text())?.value?.toIntOrNull()
+
+        return newMovieSearchResponse(title, href, if (isTv) TvType.TvSeries else TvType.Movie) {
+            this.posterUrl = poster
+            this.year = year
+        }
+    }
+
+    override suspend fun load(url: String): LoadResponse? {
+        mainUrl = FirebaseDomainHelper.getDomain("multimovies") ?: mainUrl
+        return try {
+            val doc = app.get(url, headers = headers).document
+            val title = doc.selectFirst("h1")?.text()?.trim() ?: return null
+            val poster = doc.selectFirst(".poster img")?.let {
+                it.attr("src").ifBlank { it.attr("data-src") }
+            } ?: ""
+            val background = doc.selectFirst("meta[property=og:image]")?.attr("content") ?: poster
+            val genres = doc.select("a[href*='/genre/']").map { it.text().trim() }
+                .filter { it.isNotBlank() }.distinct()
+            val plot = doc.selectFirst(".wp-content p, .wp-content, [itemprop=description]")?.text()
+                ?.trim()?.take(1000)
+            val year = Regex("\\b(19|20)\\d{2}\\b").find(doc.selectFirst("span.date")?.text() ?: "")?.value?.toIntOrNull()
+            val rating = doc.selectFirst(".dt_rating_vgs, .rating")?.text()?.trim()?.toDoubleOrNull()
+            val duration = doc.selectFirst(".runtime")?.text()?.trim()?.let {
+                Regex("(\\d+)").find(it)?.groupValues?.get(1)?.toIntOrNull()
+            }
+
+            val isTv = url.contains("/tvshows/") || doc.selectFirst("div.se-c") != null
+            val tvType = if (url.contains("anime") || genres.any { it.contains("anime", true) }) TvType.Anime else TvType.TvSeries
+
+            if (isTv) {
+                val episodes = parseEpisodes(doc)
+                return newTvSeriesLoadResponse(title, url, tvType, episodes) {
+                    this.posterUrl = poster
+                    this.backgroundPosterUrl = background
+                    this.plot = plot
+                    this.tags = genres
+                    this.year = year
+                    this.score = rating?.let { Score.from10(it) }
+                }
+            } else {
+                return newMovieLoadResponse(title, url, if (url.contains("anime")) TvType.Anime else TvType.Movie, url) {
+                    this.posterUrl = poster
+                    this.backgroundPosterUrl = background
+                    this.plot = plot
+                    this.tags = genres
+                    this.year = year
+                    this.score = rating?.let { Score.from10(it) }
+                    this.duration = duration
+                }
+            }
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    private fun parseEpisodes(doc: Document): List<Episode> {
+        val episodes = mutableListOf<Episode>()
+        for (block in doc.select("div.se-c")) {
+            val season = block.selectFirst(".se-t")?.text()?.trim()?.toIntOrNull() ?: continue
+            for (li in block.select("ul.episodios li")) {
+                val a = li.selectFirst(".episodiotitle a") ?: continue
+                val href = a.attr("href").trim()
+                val name = a.text().trim()
+                if (href.isBlank()) continue
+                val numerando = li.selectFirst(".numerando")?.text() ?: ""
+                val epNum = Regex("(\\d+)\\s*-\\s*(\\d+)").find(numerando)?.groupValues?.get(2)?.toIntOrNull()
+                    ?: Regex("(?:\\d+)x(\\d+)").find(href)?.groupValues?.get(1)?.toIntOrNull()
+                    ?: continue
+                episodes.add(newEpisode(href) {
+                    this.name = name
+                    this.season = season
+                    this.episode = epNum
+                    this.posterUrl = firstImg(li)
+                })
+            }
+        }
+        return episodes.sortedWith(compareBy({ it.season }, { it.episode }))
+    }
+
+    override suspend fun loadLinks(
+        data: String,
+        isCasting: Boolean,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit,
+    ): Boolean {
+        var any = false
+        try {
+            val doc = app.get(data, headers = headers).document
+            val options = doc.select("li.dooplay_player_option")
+                .filter { !it.attr("id").contains("trailer") }
+            if (options.isEmpty()) return false
+
+            for (opt in options) {
+                val postId = opt.attr("data-post").trim()
+                val type = opt.attr("data-type").trim().ifBlank { "movie" }
+                val nume = opt.attr("data-nume").trim()
+                val label = opt.selectFirst(".title")?.text()?.trim()?.replace(" - Recommended", "", ignoreCase = true)?.replace(" Recommended", "", ignoreCase = true) ?: "Source"
+                if (postId.isBlank() || nume.isBlank()) continue
+                try {
+                    val embed = fetchEmbedUrl(postId, nume, type, data)
+                    if (embed.isBlank()) continue
+                    any = resolveEmbed(embed, label, subtitleCallback, callback) || any
+                } catch (e: Exception) {
+                    continue
+                }
+            }
+        } catch (e: Exception) {
+            return false
+        }
+        return any
+    }
+
+    private suspend fun fetchEmbedUrl(postId: String, nume: String, type: String, pageUrl: String): String {
+        val body = app.post(
+            "$mainUrl/wp-admin/admin-ajax.php",
+            data = mapOf("action" to "doo_player_ajax", "post" to postId, "nume" to nume, "type" to type),
+            headers = mapOf("X-Requested-With" to "XMLHttpRequest"),
+            referer = pageUrl,
+        ).text
+        return Regex("\"embed_url\"\\s*:\\s*\"([^\"]+)\"").find(body)
+            ?.groupValues?.get(1)?.let { deEsc(it) } ?: ""
+    }
+
+    private suspend fun resolveEmbed(
+        embedUrl: String,
+        label: String,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit,
+    ): Boolean {
+        return try {
+            val host = hostOf(embedUrl)
+            when {
+                host.contains("modiplay") -> resolveModiplay(embedUrl, label, subtitleCallback, callback)
+                host.contains("iqsmartgames") -> resolveGdmirror(embedUrl, label, subtitleCallback, callback)
+                else -> {
+                    val html = app.get(embedUrl, headers = headers).text
+                    extractM3u8Links(html, originOf(embedUrl).ifBlank { embedUrl }, label, callback)
+                }
+            }
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    private suspend fun resolveModiplay(
+        embedUrl: String,
+        label: String,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit,
+    ): Boolean {
+        val base = originOf(embedUrl)
+        if (base.isBlank()) return false
+        modiplayBase = base
+        val html = app.get(embedUrl, headers = headers).text
+
+        val servers = Regex("switchServer\\('([^']+)','([^']+)','([^']+)','([^']+)','([^']*)'")
+            .findAll(html).map { m ->
+                CineServer(m.groupValues[1], m.groupValues[2], m.groupValues[3], m.groupValues[4])
+            }.distinctBy { it.code }.toList()
+
+        var any = false
+        if (servers.isEmpty()) {
+            if (extractM3u8Links(html, base, label, callback)) return true
+            val iframeCode = Regex("data-code=\"([^\"]+)\"").find(html)?.groupValues?.get(1)
+            if (iframeCode != null) {
+                return resolveProxyFile(base, iframeCode, "", label, subtitleCallback, callback)
+            }
+            return false
+        }
+
+        loadSubs(base, embedUrl, subtitleCallback)
+
+        for (server in servers) {
+            try {
+                any = resolveProxyFile(
+                    base, server.code, server.platform, "$label - ${server.name}", subtitleCallback, callback
+                ) || any
+            } catch (e: Exception) {
+                continue
+            }
+        }
+        return any
+    }
+
+    private suspend fun resolveProxyFile(
+        base: String,
+        fileCode: String,
+        platform: String,
+        linkLabel: String,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit,
+    ): Boolean {
+        val proxyUrl = "$base/proxy.php?p=$platform&c=$fileCode&title=&site_ref=&noredirect=1"
+        val page = app.get(proxyUrl, referer = base, headers = headers).text
+
+        val src = Regex("var\\s+src\\s*=\\s*\"([^\"]+)\"").find(page)?.groupValues?.get(1)?.let { deEsc(it) }
+        val segRef = Regex("var\\s+SEG_REF\\s*=\\s*\"([^\"]+)\"").find(page)?.groupValues?.get(1)?.let { deEsc(it) }
+        if (src.isNullOrBlank()) {
+            return extractM3u8Links(page, base, linkLabel, callback)
+        }
+        val masterUrl = abs(base, src)
+        val master = app.get(masterUrl, referer = base, headers = headers).text
+        if (!master.contains("#EXTM3U")) return extractM3u8Links(page, base, linkLabel, callback)
+
+        val audioTracks = Regex("#EXT-X-MEDIA:TYPE=AUDIO,[^\\n]*NAME=\"([^\"]+)\"[^\\n]*LANGUAGE=\"([^\"]+)\"[^\\n]*URI=\"([^\"]+)\"")
+            .findAll(master).map { m ->
+                Triple(m.groupValues[1], m.groupValues[2], m.groupValues[3])
+            }.toList()
+        val variants = Regex("#EXT-X-STREAM-INF:[^\\n]*RESOLUTION=(\\d+)x(\\d+)[^\\n]*\\n\\s*([^\\n]+)")
+            .findAll(master).map { m ->
+                Triple(m.groupValues[1].toInt(), m.groupValues[2].toInt(), m.groupValues[3].trim())
+            }.toList()
+
+        val refererMap = segRef?.let { mapOf("Referer" to it) } ?: mapOf("Referer" to base)
+
+        if (audioTracks.isNotEmpty()) {
+            val audioSpecific = variants.isNotEmpty() &&
+                audioTracks.indices.all { idx -> variants.any { it.third.contains("-a${idx + 1}") } }
+            if (audioSpecific) {
+                audioTracks.forEachIndexed { idx, (name, _lang, _uri) ->
+                    val best = variants.filter { it.third.contains("-a${idx + 1}") }.maxByOrNull { it.first }
+                    if (best != null) {
+                        callback(
+                            newExtractorLink(
+                                source = name,
+                                name = "$linkLabel - $name",
+                                url = abs(base, best.third),
+                                type = ExtractorLinkType.M3U8,
+                            ) {
+                                this.headers = refererMap
+                                this.quality = best.second
+                            }
+                        )
+                    }
+                }
+                return true
+            }
+            callback(
+                newExtractorLink(
+                    source = name,
+                    name = if (audioTracks.size > 1) "$linkLabel (Multi Audio)" else linkLabel,
+                    url = masterUrl,
+                    type = ExtractorLinkType.M3U8,
+                ) { this.headers = refererMap }
+            )
+            return true
+        }
+
+        val best = variants.maxByOrNull { it.first }
+        if (best != null) {
+            callback(
+                newExtractorLink(
+                    source = name,
+                    name = linkLabel,
+                    url = abs(base, best.third),
+                    type = ExtractorLinkType.M3U8,
+                ) {
+                    this.headers = refererMap
+                    this.quality = best.second
+                }
+            )
+        } else {
+            callback(
+                newExtractorLink(
+                    source = name,
+                    name = linkLabel,
+                    url = masterUrl,
+                    type = ExtractorLinkType.M3U8,
+                ) { this.headers = refererMap }
+            )
+        }
+        return true
+    }
+
+    private suspend fun loadSubs(base: String, embedUrl: String, subtitleCallback: (SubtitleFile) -> Unit) {
+        try {
+            val imdbId = Regex("[?&]id=(tt\\d+)").find(embedUrl)?.groupValues?.get(1) ?: ""
+            val tmdbId = Regex("[?&]id=(\\d+)").find(embedUrl)?.groupValues?.get(1) ?: ""
+            val season = Regex("[?&]s=(\\d+)").find(embedUrl)?.groupValues?.get(1) ?: ""
+            val ep = Regex("[?&]e=(\\d+)").find(embedUrl)?.groupValues?.get(1) ?: ""
+            if (imdbId.isBlank() && tmdbId.isBlank()) return
+            val seen = mutableSetOf<String>()
+            for (lang in listOf("en", "hi", "")) {
+                val resp = app.get(
+                    "$base/api/subtitle_fetch.php?tmdb_id=$tmdbId&imdb_id=$imdbId&season=$season&ep=$ep&lang=$lang",
+                    referer = base,
+                    headers = headers,
+                ).text
+                val m = Regex("\"url\"\\s*:\\s*\"([^\"]+)\"").find(resp) ?: continue
+                val url = m.groupValues[1].let { deEsc(it) }
+                val langName = Regex("\"lang\"\\s*:\\s*\"([^\"]+)\"").find(resp)
+                    ?.groupValues?.get(1)?.ifBlank { null } ?: "English"
+                val absUrl = abs(base, url)
+                if (seen.add(absUrl)) {
+                    subtitleCallback(newSubtitleFile(langName, absUrl))
+                }
+            }
+        } catch (e: Exception) {
+        }
+    }
+
+    private suspend fun resolveGdmirror(
+        embedUrl: String,
+        label: String,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit,
+    ): Boolean {
+        val html = app.get(embedUrl, headers = headers).text
+        val finalId = Regex("let\\s+FinalID\\s*=\\s*\"([^\"]+)\"").find(html)?.groupValues?.get(1) ?: return false
+        val idType = Regex("let\\s+idType\\s*=\\s*\"([^\"]+)\"").find(html)?.groupValues?.get(1) ?: "imdbid"
+        val myKey = Regex("let\\s+myKey\\s*=\\s*\"([^\"]+)\"").find(html)?.groupValues?.get(1) ?: ""
+        val apiBase = Regex("let\\s+api_url\\s*=\\s*\"([^\"]+)\"").find(html)?.groupValues?.get(1) ?: ""
+        val playerBase = Regex("let\\s+player_base\\s*=\\s*\"([^\"]+)\"").find(html)?.groupValues?.get(1) ?: ""
+        val season = Regex("let\\s+season\\s*=\\s*\"([^\"]+)\"").find(html)?.groupValues?.get(1)
+        val epname = Regex("let\\s+epname\\s*=\\s*\"([^\"]+)\"").find(html)?.groupValues?.get(1)
+        if (apiBase.isBlank() || myKey.isBlank()) return false
+
+        val apiUrl = if (season != null) {
+            "$apiBase/myseriesapi?$idType=$finalId&season=$season&epname=${epname ?: ""}&key=$myKey"
+        } else {
+            "$apiBase/mymovieapi?$idType=$finalId&key=$myKey"
+        }
+        val json = try {
+            app.get(apiUrl, referer = embedUrl, headers = headers).text
+        } catch (e: Exception) {
+            return false
+        }
+        if (!json.contains("\"success\"") || json.contains("\"success\":false") || json.contains("\"error\"")) {
+            return false
+        }
+
+        val slugs = Regex("\"fileslug\"\\s*:\\s*\"([^\"]+)\"").findAll(json).map { it.groupValues[1] }.toList()
+        val names = Regex("\"filename\"\\s*:\\s*\"([^\"]+)\"").findAll(json).map { it.groupValues[1] }.toList()
+        if (slugs.isEmpty() || playerBase.isBlank()) return false
+
+        val proxyBase = modiplayBase
+        val platformMap = mapOf(
+            "smwh" to "streamhg", "flls" to "earnvids", "rpmshre" to "rpmshare",
+            "upnshr" to "upnshare", "strmp2" to "streamp2p",
+        )
+
+        var any = false
+        slugs.forEachIndexed { i, slug ->
+            try {
+                val helper = app.post(
+                    "$playerBase/embedhelper2.php",
+                    data = mapOf("sid" to slug, "UserFavSite" to "", "currentDomain" to "[]"),
+                    referer = "$playerBase/evid/$slug",
+                    headers = mapOf("Content-Type" to "application/x-www-form-urlencoded"),
+                ).text
+                val mresult = Regex("\"mresult\"\\s*:\\s*\"([^\"]+)\"").find(helper)?.groupValues?.get(1)
+                    ?: return@forEachIndexed
+                val decoded = try {
+                    String(Base64.decode(mresult, Base64.DEFAULT))
+                } catch (e: Exception) {
+                    return@forEachIndexed
+                }
+                val namePart = names.getOrNull(i) ?: slug
+                val pairs = Regex("\"([a-z0-9]+)\"\\s*:\\s*\"([a-z0-9]+)\"").findAll(decoded).map { m ->
+                    platformMap[m.groupValues[1]] to m.groupValues[2]
+                }
+                for ((platform, code) in pairs) {
+                    if (platform == null || proxyBase == null) continue
+                    try {
+                        any = resolveProxyFile(
+                            proxyBase, code, platform,
+                            "$label - ${platform.replaceFirstChar { it.uppercase() }}",
+                            subtitleCallback, callback,
+                        ) || any
+                    } catch (e: Exception) {
+                    }
+                }
+            } catch (e: Exception) {
+            }
+        }
+        return any
+    }
+
+    private suspend fun extractM3u8Links(
+        html: String,
+        base: String,
+        linkLabel: String,
+        callback: (ExtractorLink) -> Unit,
+    ): Boolean {
+        val m3u8 = Regex("https?://[^\"'<>\\s\\\\]+\\.m3u8[^\"'<>\\s\\\\]*")
+            .findAll(html).map { it.value.replace("\\/", "/") }.toList()
+        val relM3u8 = Regex("[\"']([^\"']+\\.m3u8[^\"']*)[\"']").findAll(html)
+            .map { it.groupValues[1].replace("\\/", "/") }.toList()
+        val all = (m3u8 + relM3u8.map { abs(base, it) }).distinct()
+        for (u in all) {
+            callback(
+                newExtractorLink(
+                    source = name,
+                    name = linkLabel,
+                    url = u,
+                    type = ExtractorLinkType.M3U8,
+                ) { this.headers = mapOf("Referer" to base) }
+            )
+        }
+        return all.isNotEmpty()
+    }
+}

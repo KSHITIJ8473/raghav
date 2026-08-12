@@ -2,7 +2,7 @@ version = 1
 
 cloudstream {
     language = "en"
-    description = "Multimovies - Movies, TV Shows & Anime with Cineverse (StreamHG/EarnVids/SeekStreaming/RPMShare/UpnShare/StreamP2P...) + GDMIRROR sources, multi-audio & subtitles"
+    description = "Multimovies - Movies, TV Shows & Anime"
     authors = listOf("raghav")
     status = 1
     tvTypes = listOf("Movie", "TvSeries", "Anime")

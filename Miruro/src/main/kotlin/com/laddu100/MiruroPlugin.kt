@@ -7,7 +7,6 @@ import com.lagradost.cloudstream3.plugins.Plugin
 @CloudstreamPlugin
 class MiruroPlugin : Plugin() {
     override fun load(context: Context) {
-        // Store context for WebView-based Cloudflare bypass
         Miruro.context = context
         registerMainAPI(Miruro())
         registerExtractorAPI(MiruroMegaPlay())

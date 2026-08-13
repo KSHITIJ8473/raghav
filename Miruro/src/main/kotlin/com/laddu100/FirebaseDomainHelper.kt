@@ -7,7 +7,6 @@ import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 
 @JsonIgnoreProperties(ignoreUnknown = true)
 object FirebaseDomainHelper {
-    private const val TAG = "FirebaseDomainHelper"
     private const val URL = "https://cloudstreampluginhelper-default-rtdb.firebaseio.com/.json"
     private const val CACHE_TTL_MS = 5 * 60 * 1000L
 
@@ -38,16 +37,15 @@ object FirebaseDomainHelper {
             }.toMap()
             lastLoadTime = now
             everLoadedSuccessfully = true
-            Log.d(TAG, "load: success, ${domains.size} domains cached")
         } catch (e: Exception) {
-            Log.d(TAG, "load: failed - ${e.message}")
+            Log.d("FirebaseDomainHelper", "load failed: ${e.message}")
             lastLoadTime = now
         }
     }
 
     suspend fun getDomain(key: String): String? {
         load()
-        return domains[key] ?: domains["${'$'}{key}_url"] ?: domains["${'$'}{key}_domain"]
+        return domains[key] ?: domains["${key}_url"] ?: domains["${key}_domain"]
     }
 
     fun invalidate() {

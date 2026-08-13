@@ -12,8 +12,6 @@ import com.lagradost.cloudstream3.utils.INFER_TYPE
 import com.lagradost.cloudstream3.utils.M3u8Helper.Companion.generateM3u8
 import com.lagradost.cloudstream3.utils.getQualityFromName
 import com.lagradost.cloudstream3.utils.newExtractorLink
-import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.RequestBody.Companion.toRequestBody
 
 class MiruroVidWish(sourceName: String = "VidWish") : MiruroMegaPlay(sourceName) {
     override val mainUrl = "https://vidwish.live"
@@ -45,21 +43,19 @@ open class MiruroMegaPlay(private val sourceName: String = "MegaPlay") : Extract
                 ?: Regex("""data-realid=["'](\d+)""").find(document.html())?.groupValues?.get(1)
                 ?: Regex("""/stream/s-\d+/(\d+)""").find(url)?.groupValues?.get(1)
                 ?: return@runCatching
-            val response = app.get("$mainUrl/stream/getSources?id=$id", headers = headers).parsedSafe<Response>()
-                ?: return@runCatching
-            val m3u8 = response.sources?.file ?: return@runCatching
 
-            generateM3u8(name, m3u8, mainUrl, headers = headers).forEach(callback)
-            response.tracks.forEach { track ->
-                val file = track.file ?: return@forEach
-                if (track.kind == "captions" || track.kind == "subtitles") {
-                    subtitleCallback(newSubtitleFile(track.label ?: "Subtitle", file) {
-                        this.headers = mapOf("Referer" to "$mainUrl/")
-                    })
-                }
+            val rawText = app.get("$mainUrl/stream/getSources?id=$id", headers = headers).text
+            val m3u8Url = extractM3u8FromResponse(rawText) ?: return@runCatching
+
+            generateM3u8(name, m3u8Url, mainUrl, headers = headers).forEach(callback)
+
+            Regex(""""file"\s*:\s*"([^"]+\.vtt[^"]*)"""").findAll(rawText).forEach { m ->
+                subtitleCallback(newSubtitleFile("English", m.groupValues[1]) {
+                    this.headers = mapOf("Referer" to "$mainUrl/")
+                })
             }
         }.onFailure { error ->
-            Log.e(name, "API extraction failed, trying WebView: ${error.message}")
+            Log.e(name, "extraction failed: ${error.message}")
             val resolver = WebViewResolver(
                 interceptUrl = Regex("""\.m3u8"""),
                 additionalUrls = listOf(Regex("""\.m3u8""")),
@@ -72,6 +68,32 @@ open class MiruroMegaPlay(private val sourceName: String = "MegaPlay") : Extract
                 generateM3u8(name, m3u8, mainUrl, headers = headers).forEach(callback)
             }
         }
+    }
+
+    private fun extractM3u8FromResponse(raw: String): String? {
+        val parsed = try {
+            com.lagradost.cloudstream3.utils.AppUtils.parseJson<Response>(raw)
+        } catch (_: Exception) { null }
+
+        if (parsed?.sources?.file != null && parsed.sources.file!!.startsWith("http")) {
+            return parsed.sources.file
+        }
+
+        Regex(""""(links\.hls\d+)"""").findAll(raw).toList().reversed().forEach { m ->
+            val key = m.groupValues[1]
+            val parts = key.split(".")
+            if (parts.size == 2) {
+                val obj = parts[0]
+                val prop = parts[1]
+                val pattern = """"$obj"\s*:\s*\{[^}]*"$prop"\s*:\s*"([^"]+)""""
+                Regex(pattern).find(raw)?.let { return it.groupValues[1] }
+            }
+        }
+
+        Regex(""""file"\s*:\s*"(https?://[^"]+\.m3u8[^"]*)"""").find(raw)?.let { return it.groupValues[1] }
+        Regex("""(https?://[^\s"\\<>]+\.m3u8[^\s"\\<>]*)""").find(raw)?.let { return it.groupValues[1] }
+
+        return null
     }
 
     data class Response(
@@ -113,7 +135,7 @@ class MiruroWebView(private val sourceName: String, private val baseUrl: String)
                 resolved.contains(".m3u8", ignoreCase = true) -> {
                     generateM3u8(name, resolved, mainUrl, headers = headers).forEach(callback)
                 }
-                resolved.contains(".mp4", ignoreCase = true) -> {
+                resolved.contains(".mp4", ignoreCase = true) && !resolved.contains(".txt") -> {
                     callback(
                         newExtractorLink(
                             source = name,
@@ -128,7 +150,7 @@ class MiruroWebView(private val sourceName: String, private val baseUrl: String)
                 }
             }
         }.onFailure { error ->
-            Log.e(name, "WebView extraction failed: ${error.message}")
+            Log.e(name, "extraction failed: ${error.message}")
         }
     }
 }

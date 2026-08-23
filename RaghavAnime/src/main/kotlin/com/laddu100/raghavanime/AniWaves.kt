@@ -168,24 +168,31 @@ class AniWaves : MainAPI() {
         ).parsed<AjaxResponse>()
 
         val episodes = mutableListOf<Episode>()
+        val dubEpisodes = mutableListOf<Episode>()
+        val seenEp = mutableSetOf<Int>()
 
         if (epResponse.status?.toString() == "200" && epResponse.result != null) {
             val epDoc = Jsoup.parse(epResponse.result)
             val episodeElements = epDoc.select("li a[data-ids]")
 
-            val seenEp = mutableSetOf<Int>()
-
             for (ep in episodeElements) {
                 val epNum = ep.attr("data-num").toIntOrNull() ?: continue
-                val dataIds = "$animeId&eps=$epNum"
-                val hasSub = ep.attr("data-sub") == "1"
-                val hasDub = ep.attr("data-dub") == "1"
+                if (!seenEp.add(epNum)) continue
+                val dataIds = ep.attr("data-ids").ifBlank { "$animeId&eps=$epNum" }
+                val epName = ep.parent()?.attr("title")
+                    ?.substringAfter("GMT - ", "")
+                    ?.trim()
+                    ?.takeIf { it.isNotEmpty() }
 
-                val episodeData = "mix|$animeId|$epNum|$dataIds|$url"
-
-                if ((hasSub || hasDub) && seenEp.add(epNum)) {
-                    episodes.add(newEpisode(episodeData) {
-                        this.name = "Episode $epNum"
+                if (ep.attr("data-sub") == "1") {
+                    episodes.add(newEpisode("sub|$animeId|$epNum|$dataIds|$url") {
+                        this.name = epName ?: "Episode $epNum"
+                        this.episode = epNum
+                    })
+                }
+                if (ep.attr("data-dub") == "1") {
+                    dubEpisodes.add(newEpisode("dub|$animeId|$epNum|$dataIds|$url") {
+                        this.name = epName ?: "Episode $epNum"
                         this.episode = epNum
                     })
                 }
@@ -201,6 +208,7 @@ class AniWaves : MainAPI() {
             this.showStatus = showStatus
             if (jpTitle != null) this.japName = jpTitle
             if (episodes.isNotEmpty()) addEpisodes(DubStatus.Subbed, episodes)
+            if (dubEpisodes.isNotEmpty()) addEpisodes(DubStatus.Dubbed, dubEpisodes)
         }
     }
 

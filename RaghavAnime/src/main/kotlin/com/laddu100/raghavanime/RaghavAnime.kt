@@ -427,10 +427,14 @@ class RaghavAnime : MainAPI() {
                         for ((_, result) in candidates) {
                             try {
                                 val loadResult = aniWaves.load(result.url) as? com.lagradost.cloudstream3.AnimeLoadResponse ?: continue
-                                val ep = loadResult.episodes?.get(DubStatus.Subbed)?.find { it.episode == episode } ?: continue
-                                val parts = ep.data.split("|").toMutableList()
-                                parts[0] = if (isDub) "dub" else "sub"
-                                matchedData = parts.joinToString("|")
+                                val epList = if (isDub) {
+                                    loadResult.episodes?.get(DubStatus.Dubbed)?.takeIf { it.isNotEmpty() }
+                                        ?: loadResult.episodes?.get(DubStatus.Subbed)
+                                } else {
+                                    loadResult.episodes?.get(DubStatus.Subbed)
+                                }
+                                val ep = epList?.find { it.episode == episode } ?: continue
+                                matchedData = ep.data
                                 break
                             } catch (e: Throwable) {
                                 Log.e("RaghavAnime", "[AniWaves] load failed for '${result.name}': ${e.message}")

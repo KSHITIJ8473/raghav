@@ -84,7 +84,7 @@ class MultimoviesProvider : MainAPI() {
         val base = request.data.trimEnd('/')
         val url = if (page <= 1) "$mainUrl$base/" else "$mainUrl$base/page/$page/"
         return try {
-            val doc = app.get(url, headers = headers).document
+            val doc = mmGet(url, headers = headers).document
             val items = doc.select("article.item, .items article").mapNotNull { it.toSearchResult() }
                 .distinctBy { it.url }
             val hasNext = doc.selectFirst("a[href*='/page/${page + 1}/'], a.next.page-numbers") != null
@@ -98,7 +98,7 @@ class MultimoviesProvider : MainAPI() {
         if (query.isBlank()) return emptyList()
         mainUrl = FirebaseDomainHelper.getDomain("multimovies") ?: mainUrl
         return try {
-            val doc = app.get("$mainUrl/?s=${query.trim().replace(" ", "+")}", headers = headers).document
+            val doc = mmGet("$mainUrl/?s=${query.trim().replace(" ", "+")}", headers = headers).document
             doc.select(".result-item article").mapNotNull { it.toSearchResult() }
                 .distinctBy { it.url }
         } catch (e: Exception) {
@@ -132,7 +132,7 @@ class MultimoviesProvider : MainAPI() {
     override suspend fun load(url: String): LoadResponse? {
         mainUrl = FirebaseDomainHelper.getDomain("multimovies") ?: mainUrl
         return try {
-            val doc = app.get(url, headers = headers).document
+            val doc = mmGet(url, headers = headers).document
             val title = doc.selectFirst("h1")?.text()?.trim() ?: return null
             val poster = doc.selectFirst(".poster img")?.let {
                 it.attr("src").ifBlank { it.attr("data-src") }
@@ -209,7 +209,7 @@ class MultimoviesProvider : MainAPI() {
     ): Boolean {
         var any = false
         try {
-            val doc = app.get(data, headers = headers).document
+            val doc = mmGet(data, headers = headers).document
             val options = doc.select("li.dooplay_player_option")
                 .filter { !it.attr("id").contains("trailer") }
             if (options.isEmpty()) return false
@@ -235,7 +235,7 @@ class MultimoviesProvider : MainAPI() {
     }
 
     private suspend fun fetchEmbedUrl(postId: String, nume: String, type: String, pageUrl: String): String {
-        val body = app.post(
+        val body = mmPost(
             "$mainUrl/wp-admin/admin-ajax.php",
             data = mapOf("action" to "doo_player_ajax", "post" to postId, "nume" to nume, "type" to type),
             headers = mapOf("X-Requested-With" to "XMLHttpRequest"),
@@ -257,7 +257,7 @@ class MultimoviesProvider : MainAPI() {
                 host.contains("modiplay") -> resolveModiplay(embedUrl, label, subtitleCallback, callback)
                 host.contains("iqsmartgames") -> resolveGdmirror(embedUrl, label, subtitleCallback, callback)
                 else -> {
-                    val html = app.get(embedUrl, headers = headers).text
+                    val html = mmGet(embedUrl, headers = headers).text
                     extractM3u8Links(html, originOf(embedUrl).ifBlank { embedUrl }, label, callback)
                 }
             }
@@ -275,7 +275,7 @@ class MultimoviesProvider : MainAPI() {
         val base = originOf(embedUrl)
         if (base.isBlank()) return false
         modiplayBase = base
-        val html = app.get(embedUrl, headers = headers).text
+        val html = mmGet(embedUrl, headers = headers).text
 
         val servers = Regex("switchServer\\('([^']+)','([^']+)','([^']+)','([^']+)','([^']*)'")
             .findAll(html).map { m ->
@@ -315,7 +315,7 @@ class MultimoviesProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit,
     ): Boolean {
         val proxyUrl = "$base/proxy.php?p=$platform&c=$fileCode&title=&site_ref=&noredirect=1"
-        val page = app.get(proxyUrl, referer = base, headers = headers).text
+        val page = mmGet(proxyUrl, headers = headers).text
 
         val src = Regex("var\\s+src\\s*=\\s*\"([^\"]+)\"").find(page)?.groupValues?.get(1)?.let { deEsc(it) }
         val segRef = Regex("var\\s+SEG_REF\\s*=\\s*\"([^\"]+)\"").find(page)?.groupValues?.get(1)?.let { deEsc(it) }
@@ -323,7 +323,7 @@ class MultimoviesProvider : MainAPI() {
             return extractM3u8Links(page, base, linkLabel, callback)
         }
         val masterUrl = abs(base, src)
-        val master = app.get(masterUrl, referer = base, headers = headers).text
+        val master = mmGet(masterUrl, headers = headers).text
         if (!master.contains("#EXTM3U")) return extractM3u8Links(page, base, linkLabel, callback)
 
         val audioTracks = Regex("#EXT-X-MEDIA:TYPE=AUDIO,[^\\n]*NAME=\"([^\"]+)\"[^\\n]*LANGUAGE=\"([^\"]+)\"[^\\n]*URI=\"([^\"]+)\"")
@@ -405,9 +405,8 @@ class MultimoviesProvider : MainAPI() {
             if (imdbId.isBlank() && tmdbId.isBlank()) return
             val seen = mutableSetOf<String>()
             for (lang in listOf("en", "hi", "")) {
-                val resp = app.get(
+                val resp = mmGet(
                     "$base/api/subtitle_fetch.php?tmdb_id=$tmdbId&imdb_id=$imdbId&season=$season&ep=$ep&lang=$lang",
-                    referer = base,
                     headers = headers,
                 ).text
                 val m = Regex("\"url\"\\s*:\\s*\"([^\"]+)\"").find(resp) ?: continue
@@ -429,7 +428,7 @@ class MultimoviesProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit,
     ): Boolean {
-        val html = app.get(embedUrl, headers = headers).text
+        val html = mmGet(embedUrl, headers = headers).text
         val finalId = Regex("let\\s+FinalID\\s*=\\s*\"([^\"]+)\"").find(html)?.groupValues?.get(1) ?: return false
         val idType = Regex("let\\s+idType\\s*=\\s*\"([^\"]+)\"").find(html)?.groupValues?.get(1) ?: "imdbid"
         val myKey = Regex("let\\s+myKey\\s*=\\s*\"([^\"]+)\"").find(html)?.groupValues?.get(1) ?: ""
@@ -445,7 +444,7 @@ class MultimoviesProvider : MainAPI() {
             "$apiBase/mymovieapi?$idType=$finalId&key=$myKey"
         }
         val json = try {
-            app.get(apiUrl, referer = embedUrl, headers = headers).text
+            mmGet(apiUrl, headers = headers).text
         } catch (e: Exception) {
             return false
         }
@@ -466,11 +465,11 @@ class MultimoviesProvider : MainAPI() {
         var any = false
         slugs.forEachIndexed { i, slug ->
             try {
-                val helper = app.post(
+                val helper = mmPost(
                     "$playerBase/embedhelper2.php",
                     data = mapOf("sid" to slug, "UserFavSite" to "", "currentDomain" to "[]"),
-                    referer = "$playerBase/evid/$slug",
                     headers = mapOf("Content-Type" to "application/x-www-form-urlencoded"),
+                    referer = "$playerBase/evid/$slug",
                 ).text
                 val mresult = Regex("\"mresult\"\\s*:\\s*\"([^\"]+)\"").find(helper)?.groupValues?.get(1)
                     ?: return@forEachIndexed

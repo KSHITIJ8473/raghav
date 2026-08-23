@@ -462,11 +462,15 @@ private fun extractHost(url: String): String = try {
 private fun buildMMHeaders(original: Map<String, String>): Map<String, String> {
     val h = original.toMutableMap()
     if (!h.containsKey("Accept")) h["Accept"] = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
-    if (!h.containsKey("User-Agent")) {
+    val cookies = MMCFStore.getCookies()
+    if (cookies != null) {
+        // cf_clearance is bound to the user agent that solved the challenge,
+        // so the stored UA must win over whatever the caller passed
         MMCFStore.getUserAgent()?.let { h["User-Agent"] = it }
-            ?: run { h["User-Agent"] = "Mozilla/5.0 (Linux; Android 13; Pixel 5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36" }
+        h["Cookie"] = cookies
+    } else if (!h.containsKey("User-Agent")) {
+        h["User-Agent"] = "Mozilla/5.0 (Linux; Android 13; Pixel 5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
     }
-    MMCFStore.getCookies()?.let { h["Cookie"] = it }
     return h
 }
 
@@ -497,7 +501,7 @@ suspend fun mmGet(url: String, headers: Map<String, String> = emptyMap(), allowR
         }
 
         MMCFStore.clear()
-        val bypassHost = MMCFStore.getHost() ?: targetHost
+        val bypassHost = targetHost
         val bypassSuccess = showMMCFBypassDialogAndWait(bypassHost)
         if (!bypassSuccess) {
             MMCFStore.markBypassed()
@@ -507,6 +511,8 @@ suspend fun mmGet(url: String, headers: Map<String, String> = emptyMap(), allowR
             response = try { app.get(url, headers = buildMMHeaders(headers), timeout = 30_000L, allowRedirects = allowRedirects) } catch (e: Exception) { throw e }
             if (!isMMCloudflareBlocked(response)) return@withLock
         }
+        // cookie did not unblock the page, back off instead of hammering the dialog
+        MMCFStore.markBypassed()
     }
     return response
 }
@@ -517,12 +523,14 @@ suspend fun mmPost(url: String, data: Map<String, String>, headers: Map<String, 
     fun buildPostHeaders(): Map<String, String> {
         val h = headers.toMutableMap()
         if (!h.containsKey("Accept")) h["Accept"] = "*/*"
-        if (!h.containsKey("User-Agent")) {
+        val cookies = MMCFStore.getCookies()
+        if (cookies != null) {
             MMCFStore.getUserAgent()?.let { h["User-Agent"] = it }
-                ?: run { h["User-Agent"] = "Mozilla/5.0 (Linux; Android 13; Pixel 5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36" }
+            h["Cookie"] = cookies
+        } else if (!h.containsKey("User-Agent")) {
+            h["User-Agent"] = "Mozilla/5.0 (Linux; Android 13; Pixel 5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
         }
         if (referer != null) h["Referer"] = referer
-        MMCFStore.getCookies()?.let { h["Cookie"] = it }
         return h
     }
 
@@ -550,7 +558,7 @@ suspend fun mmPost(url: String, data: Map<String, String>, headers: Map<String, 
         }
 
         MMCFStore.clear()
-        val bypassHost = MMCFStore.getHost() ?: targetHost
+        val bypassHost = targetHost
         val bypassSuccess = showMMCFBypassDialogAndWait(bypassHost)
         if (!bypassSuccess) {
             MMCFStore.markBypassed()
@@ -560,6 +568,7 @@ suspend fun mmPost(url: String, data: Map<String, String>, headers: Map<String, 
             response = try { app.post(url, data = data, headers = buildPostHeaders(), timeout = 30_000L) } catch (e: Exception) { throw e }
             if (!isMMCloudflareBlocked(response)) return@withLock
         }
+        MMCFStore.markBypassed()
     }
     return response
 }

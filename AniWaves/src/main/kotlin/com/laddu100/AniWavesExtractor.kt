@@ -7,7 +7,6 @@ import com.lagradost.cloudstream3.utils.ExtractorApi
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.newExtractorLink
-import com.lagradost.cloudstream3.utils.M3u8Helper
 import com.lagradost.cloudstream3.utils.M3u8Helper.Companion.generateM3u8
 import com.lagradost.cloudstream3.utils.INFER_TYPE
 import com.lagradost.cloudstream3.utils.getQualityFromName
@@ -79,8 +78,6 @@ class AniWavesEchoVideo : ExtractorApi() {
 
         val html = response.text
 
-        // EchoVideo embeds typically contain HLS sources in the page
-        // Look for m3u8 URLs in the page source
         val m3u8Regex = Regex("""(?:file|src|source|url)\s*[:=]\s*['"](https?://[^'"]*\.m3u8[^'"]*)['""]""")
         val m3u8Matches = m3u8Regex.findAll(html)
 
@@ -101,7 +98,6 @@ class AniWavesEchoVideo : ExtractorApi() {
             )
         }
 
-        // Also look for MP4 direct links
         val mp4Regex = Regex("""(?:file|src|source|url)\s*[:=]\s*['"](https?://[^'"]*\.mp4[^'"]*)['""]""")
         val mp4Matches = mp4Regex.findAll(html)
 
@@ -121,7 +117,6 @@ class AniWavesEchoVideo : ExtractorApi() {
             )
         }
 
-        // Look for JSON-embedded sources (common in modern players)
         val jsonSourceRegex = Regex(""""sources"\s*:\s*\[([^\]]+)\]""")
         val jsonMatch = jsonSourceRegex.find(html)
         if (jsonMatch != null) {
@@ -162,12 +157,10 @@ class AniWavesFilemoon : ExtractorApi() {
         val response = app.get(url, referer = referer ?: "https://aniwaves.ru/")
         val html = response.text
 
-        // Look for eval(function(p,a,c,k,e,d) pattern
         val packedRegex = Regex("""eval\(function\(p,a,c,k,e,d\).*?\)\)""", RegexOption.DOT_MATCHES_ALL)
         val packed = packedRegex.find(html)?.value
 
         if (packed != null) {
-            // Try to find the m3u8 URL inside the packed content
             // The packed script usually contains file:"https://...m3u8"
             val unpackedUrls = Regex("""https?://[^\s"'\\]+\.m3u8[^\s"'\\]*""").findAll(packed)
             for (match in unpackedUrls) {
@@ -184,7 +177,6 @@ class AniWavesFilemoon : ExtractorApi() {
             }
         }
 
-        // Also look for direct m3u8 in the HTML itself
         val directM3u8 = Regex("""(?:file|src)\s*[:=]\s*["'](https?://[^"']*\.m3u8[^"']*)["']""").findAll(html)
         for (match in directM3u8) {
             callback.invoke(
@@ -215,7 +207,6 @@ class AniWavesMyVidPlay : ExtractorApi() {
         val response = app.get(url, referer = referer ?: "https://aniwaves.ru/")
         val html = response.text
 
-        // Similar to Filemoon, look for packed JS or direct sources
         val m3u8Regex = Regex("""(?:file|src|source)\s*[:=]\s*["'](https?://[^"']*\.m3u8[^"']*)["']""")
         for (match in m3u8Regex.findAll(html)) {
             callback.invoke(
@@ -230,7 +221,6 @@ class AniWavesMyVidPlay : ExtractorApi() {
             )
         }
 
-        // Look for JSON sources
         val jsonSourceRegex = Regex(""""sources"\s*:\s*\[([^\]]+)\]""")
         val jsonMatch = jsonSourceRegex.find(html)
         if (jsonMatch != null) {

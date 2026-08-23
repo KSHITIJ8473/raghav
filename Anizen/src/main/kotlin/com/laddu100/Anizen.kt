@@ -50,11 +50,13 @@ class Anizen : MainAPI() {
     override suspend fun load(url: String): LoadResponse {
         val document = app.get(url, headers = headers).document
         val html = document.html()
+        val rawTitle = document.title()
         val title = document.selectFirst("meta[property=og:title]")?.attr("content")
             ?.let { Regex("""Watch\s+(.+?)\s+Anime Online""").find(it)?.groupValues?.get(1) }
-            ?: document.title().let { Regex("""Watch\s+(.+?)\s+Anime Online""").find(it)?.groupValues?.get(1) ?: it.substringBefore(" | AniZen").removePrefix("Watch ") }
+            ?: Regex("""Watch\s+(.+?)\s+Anime Online""").find(rawTitle)?.groupValues?.get(1)
             ?: html.findJsonString("title")
             ?: Regex("""<title>Watch\s+(.+?)\s+Anime Online""").find(document.toString())?.groupValues?.get(1)
+            ?: rawTitle.substringBefore(" | AniZen").removePrefix("Watch ").takeIf { it.isNotBlank() }
             ?: throw ErrorLoadingException("Unable to find title")
 
         val poster = fixUrlNull(document.selectFirst("meta[property=og:image]")?.attr("content"))
@@ -83,11 +85,12 @@ class Anizen : MainAPI() {
             ?: 1
         val tvType = if (totalEpisodes <= 1 || url.contains("movie", ignoreCase = true)) TvType.AnimeMovie else TvType.Anime
 
-        val recommendations = emptyList<SearchResponse>()
-
+        // The site exposes no per-anime dub indicator (the watch page only
+        // carries "sub" stream types), so only a Subbed list is built instead
+        // of duplicating the episodes under a fake dub tab.
         val episodes = if (tvType == TvType.AnimeMovie) {
             listOf(
-                newEpisode(EpisodeData("movie", dataId, 1).toString()) {
+                newEpisode(EpisodeData("sub", dataId, 1).toString()) {
                     this.name = title
                     this.episode = 1
                 }
@@ -96,36 +99,12 @@ class Anizen : MainAPI() {
             fetchEpisodes(dataId, totalEpisodes)
         }
 
-        val subEpisodes = episodes.map { ep ->
-            val oldData = EpisodeData.fromString(ep.data)
-            val newData = EpisodeData("sub", oldData?.dataId ?: dataId, ep.episode ?: 1).toString()
-            newEpisode(newData) {
-                this.name = ep.name
-                this.episode = ep.episode
-                this.description = ep.description
-                this.posterUrl = ep.posterUrl
-            }
-        }
-
-        val dubEpisodes = episodes.map { ep ->
-            val oldData = EpisodeData.fromString(ep.data)
-            val newData = EpisodeData("dub", oldData?.dataId ?: dataId, ep.episode ?: 1).toString()
-            newEpisode(newData) {
-                this.name = ep.name
-                this.episode = ep.episode
-                this.description = ep.description
-                this.posterUrl = ep.posterUrl
-            }
-        }
-
         return newAnimeLoadResponse(title, url, tvType) {
             this.posterUrl = poster
             this.plot = description
             this.year = year
             this.tags = genres
-            this.recommendations = recommendations
-            if (subEpisodes.isNotEmpty()) addEpisodes(DubStatus.Subbed, subEpisodes)
-            if (dubEpisodes.isNotEmpty()) addEpisodes(DubStatus.Dubbed, dubEpisodes)
+            if (episodes.isNotEmpty()) addEpisodes(DubStatus.Subbed, episodes)
         }
     }
 
@@ -217,14 +196,14 @@ class Anizen : MainAPI() {
         val response = app.get("$mainUrl/ajax/episodes/$dataId", headers = headers).parsedSafe<EpisodeResponse>()
         val episodes = response?.episodes?.mapNotNull { ep ->
             val no = ep.no ?: return@mapNotNull null
-            newEpisode(EpisodeData("all", dataId, no).toString()) {
+            newEpisode(EpisodeData("sub", dataId, no).toString()) {
                 this.name = ep.title ?: "Episode $no"
                 this.episode = no
             }
         }.orEmpty()
         return episodes.ifEmpty {
             (1..fallbackCount).map { no ->
-                newEpisode(EpisodeData("all", dataId, no).toString()) {
+                newEpisode(EpisodeData("sub", dataId, no).toString()) {
                     this.name = "Episode $no"
                     this.episode = no
                 }
@@ -252,6 +231,8 @@ class Anizen : MainAPI() {
             fun fromString(data: String): EpisodeData? {
                 val split = data.split("|")
                 if (split.size < 3) {
+                    // Legacy/corrupted payloads may contain a bare URL instead
+                    // of the "type|id|ep" format; recover the trailing id.
                     val rawDataId = split.getOrNull(0)?.trim()?.takeIf { it.isNotBlank() } ?: return null
                     val cleanDataId = rawDataId
                         .substringBefore("?")
@@ -334,18 +315,9 @@ class Anizen : MainAPI() {
             ?: Regex(""""$key"\s*:\s*"([^"]*)"""").find(this)?.groupValues?.get(1)?.unescape()
     }
 
-    private fun String.findJsonInt(key: String): Int? {
-        return Regex("""\\"$key\\":(\d+)""").find(this)?.groupValues?.get(1)?.toIntOrNull()
-            ?: Regex("""\\"$key\\":\\"(\d+)"""").find(this)?.groupValues?.get(1)?.toIntOrNull()
-            ?: Regex(""""$key"\s*:\s*(\d+)""").find(this)?.groupValues?.get(1)?.toIntOrNull()
-            ?: Regex(""""$key"\s*:\s*"(\d+)"""").find(this)?.groupValues?.get(1)?.toIntOrNull()
-    }
-
     private val headers = mapOf(
         "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:140.0) Gecko/20100101 Firefox/140.0",
         "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Referer" to "$mainUrl/"
     )
-
-    class ErrorLoadingException(message: String) : RuntimeException(message)
 }

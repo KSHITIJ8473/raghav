@@ -22,15 +22,17 @@ import com.lagradost.cloudstream3.newHomePageResponse
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.loadExtractor
 import org.jsoup.Jsoup
+import org.jsoup.nodes.Element
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import java.net.URLEncoder
 
 class AniWaves : MainAPI() {
     override var mainUrl = "https://aniwaves.ru"
     override var name = "AniWaves"
-    override val hasMainPage = true
     override var lang = "en"
+    override val hasMainPage = true
     override val hasDownloadSupport = true
     override val supportedTypes = setOf(
         TvType.Anime,
@@ -42,87 +44,71 @@ class AniWaves : MainAPI() {
         "4" to "Vidplay",
         "1" to "BYFMS",
         "2" to "DGHG",
-        "12" to "MyCloud"
+        "12" to "MyCloud",
+        "14" to "DatSaV"
     )
 
+    // Browse paths verified on the live site. Path sections paginate via
+    // "/<path>/page/N", filter sections via "?lang=...&page=N".
     override val mainPage = mainPageOf(
-        "updated" to "Latest Episode",
-        "subbed" to "Latest Sub",
-        "dubbed" to "Latest Dub",
+        "updated" to "Recently Updated",
+        "trending" to "Trending",
+        "filter?lang=sub" to "Latest Sub",
+        "filter?lang=dub" to "Latest Dub",
         "newest" to "New Release",
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         mainUrl = FirebaseDomainHelper.getDomain("aniwaves") ?: mainUrl
-        val category = request.data
-        val url = "$mainUrl/home"
-        val doc = app.get(url).document
-
-        val home = mutableListOf<SearchResponse>()
-
-        val items = doc.select(".ani.items .item")
-        for (item in items) {
-            val aTag = item.selectFirst(".poster a") ?: continue
-            val href = fixUrl(aTag.attr("href"))
-            val img = item.selectFirst(".poster img")?.attr("src") ?: ""
-            val title = item.selectFirst(".info .name")?.text()
-                ?: item.selectFirst(".poster img")?.attr("alt")?.replace(Regex(" Japanese english subbed$"), "")
-                ?: continue
-
-            val subEps = item.selectFirst(".ep-status.sub span")?.text()?.trim()?.toIntOrNull()
-            val dubEps = item.selectFirst(".ep-status.dub span")?.text()?.trim()?.toIntOrNull()
-
-            home.add(newAnimeSearchResponse(title, href, TvType.Anime) {
-                this.posterUrl = img
-                addDubStatus(
-                    dubExist = dubEps != null && dubEps > 0,
-                    subExist = subEps != null && subEps > 0,
-                    dubEpisodes = dubEps,
-                    subEpisodes = subEps
-                )
-            })
+        val path = request.data
+        val url = if (path.startsWith("filter")) {
+            "$mainUrl/$path&page=$page"
+        } else {
+            "$mainUrl/$path/page/$page"
         }
 
-        return newHomePageResponse(request.name, home)
+        val doc = app.get(url).document
+        val home = doc.select(".ani.items .item").mapNotNull { it.toSearchResponse() }
+
+        // The pagination bar links to the final page with "»", so any link
+        // pointing past the current page means more pages exist.
+        val hasNext = doc.select("ul.pagination a.page-link").mapNotNull { link ->
+            pagePattern.find(link.attr("href"))?.groupValues?.get(1)?.toIntOrNull()
+        }.any { it > page }
+
+        return newHomePageResponse(request.name, home, hasNext = hasNext)
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
         mainUrl = FirebaseDomainHelper.getDomain("aniwaves") ?: mainUrl
-        val url = "$mainUrl/filter?keyword=$query"
+        val url = "$mainUrl/filter?keyword=${URLEncoder.encode(query, "UTF-8")}"
         val doc = app.get(url).document
-        val results = mutableListOf<SearchResponse>()
+        return doc.select(".ani.items .item").mapNotNull { it.toSearchResponse() }
+    }
 
-        val items = doc.select(".ani.items .item, .items .item")
-        for (item in items) {
-            val aTag = item.selectFirst(".poster a") ?: continue
-            val href = fixUrl(aTag.attr("href"))
-            val img = item.selectFirst(".poster img")?.attr("src") ?: ""
-            val title = item.selectFirst(".info .name")?.text()
-                ?: item.selectFirst(".poster img")?.attr("alt")?.replace(Regex(" Japanese english subbed$"), "")
-                ?: continue
-
-            val subEps = item.selectFirst(".ep-status.sub span")?.text()?.trim()?.toIntOrNull()
-            val dubEps = item.selectFirst(".ep-status.dub span")?.text()?.trim()?.toIntOrNull()
-            val typeStr = item.selectFirst(".meta .right")?.text()?.trim() ?: ""
-
-            val tvType = when (typeStr.lowercase()) {
-                "movie" -> TvType.AnimeMovie
-                "ova", "ona", "special" -> TvType.OVA
-                else -> TvType.Anime
-            }
-
-            results.add(newAnimeSearchResponse(title, href, tvType) {
-                this.posterUrl = img
-                addDubStatus(
-                    dubExist = dubEps != null && dubEps > 0,
-                    subExist = subEps != null && subEps > 0,
-                    dubEpisodes = dubEps,
-                    subEpisodes = subEps
-                )
-            })
+    private fun Element.toSearchResponse(): SearchResponse? {
+        val aTag = selectFirst(".poster a") ?: return null
+        val title = selectFirst(".info .name")?.text()
+            ?: selectFirst(".poster img")?.attr("alt")?.removeSuffix(" Japanese english subbed")
+            ?: return null
+        val typeStr = selectFirst(".meta .right")?.text()?.trim() ?: ""
+        val tvType = when (typeStr.lowercase()) {
+            "movie" -> TvType.AnimeMovie
+            "ova", "ona", "special" -> TvType.OVA
+            else -> TvType.Anime
         }
+        val subEps = selectFirst(".ep-status.sub span")?.text()?.trim()?.toIntOrNull()
+        val dubEps = selectFirst(".ep-status.dub span")?.text()?.trim()?.toIntOrNull()
 
-        return results
+        return newAnimeSearchResponse(title, fixUrl(aTag.attr("href")), tvType) {
+            posterUrl = selectFirst(".poster img")?.attr("src") ?: ""
+            addDubStatus(
+                dubExist = dubEps != null && dubEps > 0,
+                subExist = subEps != null && subEps > 0,
+                dubEpisodes = dubEps,
+                subEpisodes = subEps
+            )
+        }
     }
 
     override suspend fun load(url: String): LoadResponse? {
@@ -167,25 +153,37 @@ class AniWaves : MainAPI() {
             )
         ).parsed<AjaxResponse>()
 
-        val episodes = mutableListOf<Episode>()
+        val subEpisodes = mutableListOf<Episode>()
+        val dubEpisodes = mutableListOf<Episode>()
+        val seenEp = mutableSetOf<Int>()
 
         if (epResponse.status?.toString() == "200" && epResponse.result != null) {
             val epDoc = Jsoup.parse(epResponse.result)
-            val episodeElements = epDoc.select("li a[data-ids]")
 
-            val seenEp = mutableSetOf<Int>()
-
-            for (ep in episodeElements) {
+            for (ep in epDoc.select("li a[data-ids]")) {
                 val epNum = ep.attr("data-num").toIntOrNull() ?: continue
-                val dataIds = "$animeId&eps=$epNum"
-                val hasSub = ep.attr("data-sub") == "1"
-                val hasDub = ep.attr("data-dub") == "1"
+                if (!seenEp.add(epNum)) continue
 
-                val episodeData = "mix|$animeId|$epNum|$dataIds|$url"
+                // data-ids holds the raw "id&eps=n" pair; the server-list
+                // endpoint expects the & as a separate query param, so keep
+                // it unencoded.
+                val dataIds = ep.attr("data-ids").ifBlank { "$animeId&eps=$epNum" }
+                // The human-readable episode name sits on the parent
+                // <li title="Release: <date> GMT - <name>">.
+                val epName = ep.parent()?.attr("title")
+                    ?.substringAfter("GMT - ", "")
+                    ?.trim()
+                    ?.takeIf { it.isNotEmpty() }
 
-                if ((hasSub || hasDub) && seenEp.add(epNum)) {
-                    episodes.add(newEpisode(episodeData) {
-                        this.name = "Episode $epNum"
+                if (ep.attr("data-sub") == "1") {
+                    subEpisodes.add(newEpisode("sub|$animeId|$epNum|$dataIds|$url") {
+                        this.name = epName
+                        this.episode = epNum
+                    })
+                }
+                if (ep.attr("data-dub") == "1") {
+                    dubEpisodes.add(newEpisode("dub|$animeId|$epNum|$dataIds|$url") {
+                        this.name = epName
                         this.episode = epNum
                     })
                 }
@@ -200,7 +198,8 @@ class AniWaves : MainAPI() {
             this.tags = tags
             this.showStatus = showStatus
             if (jpTitle != null) this.japName = jpTitle
-            if (episodes.isNotEmpty()) addEpisodes(DubStatus.Subbed, episodes)
+            if (subEpisodes.isNotEmpty()) addEpisodes(DubStatus.Subbed, subEpisodes)
+            if (dubEpisodes.isNotEmpty()) addEpisodes(DubStatus.Dubbed, dubEpisodes)
         }
     }
 
@@ -214,8 +213,6 @@ class AniWaves : MainAPI() {
         if (parts.size < 4) return@coroutineScope false
 
         val dubOrSub = parts[0]
-        val animeId = parts[1]
-        val epNum = parts[2]
         val dataIds = parts[3]
         val watchUrl = parts.getOrNull(4) ?: "$mainUrl/watch/"
 
@@ -332,5 +329,9 @@ class AniWaves : MainAPI() {
 
     private fun String.baseUrl(): String {
         return Regex("""https?://[^/]+""").find(this)?.value ?: mainUrl
+    }
+
+    companion object {
+        private val pagePattern = Regex("""(?:/page/|[?&]page=)(\d+)""")
     }
 }

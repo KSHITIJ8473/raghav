@@ -214,18 +214,29 @@ class MultimoviesProvider : MainAPI() {
                 .filter { !it.attr("id").contains("trailer") }
             if (options.isEmpty()) return false
 
+            val embeds = mutableListOf<Pair<String, String>>()
             for (opt in options) {
                 val postId = opt.attr("data-post").trim()
                 val type = opt.attr("data-type").trim().ifBlank { "movie" }
                 val nume = opt.attr("data-nume").trim()
-                val label = opt.selectFirst(".title")?.text()?.trim()?.replace(" - Recommended", "", ignoreCase = true)?.replace(" Recommended", "", ignoreCase = true) ?: "Source"
+                val label = opt.selectFirst(".title")?.text()?.trim()
+                    ?.replace(" - Recommended", "", ignoreCase = true)
+                    ?.replace(" Recommended", "", ignoreCase = true) ?: "Source"
                 if (postId.isBlank() || nume.isBlank()) continue
                 try {
                     val embed = fetchEmbedUrl(postId, nume, type, data)
-                    if (embed.isBlank()) continue
-                    any = resolveEmbed(embed, label, subtitleCallback, callback) || any
+                    if (embed.isNotBlank()) embeds.add(embed to label)
                 } catch (e: Exception) {
                     continue
+                }
+            }
+
+            // gdmirror streams are proxied through the modiplay host, so resolve
+            // modiplay embeds first to learn that base url
+            embeds.sortedByDescending { hostOf(it.first).contains("modiplay") }.forEach { (embed, label) ->
+                try {
+                    any = resolveEmbed(embed, label, subtitleCallback, callback) || any
+                } catch (e: Exception) {
                 }
             }
         } catch (e: Exception) {

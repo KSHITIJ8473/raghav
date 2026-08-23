@@ -14,7 +14,6 @@ import com.lagradost.cloudstream3.utils.CLEARKEY_UUID
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.nio.charset.StandardCharsets
-import java.util.UUID
 import javax.crypto.Cipher
 import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.SecretKeySpec
@@ -380,38 +379,44 @@ class LIVETV(
             } else if (hasLicenseUrl) {
                 val mpdStr = getMpdStream(url = loadData.url, customHeaders = headers)
                 val regex = Regex("""cenc:default_KID=["']([0-9a-fA-F\-]{36})["']""")
-                val matchResult = regex.find(mpdStr)
-                val drmKid = matchResult?.groups?.get(1)?.value ?: UUID.randomUUID().toString()
+                val mpdKid = regex.find(mpdStr)?.groups?.get(1)?.value
+                val drmKidBase64 = mpdKid?.replace("-", "")
+                    ?.chunked(2)
+                    ?.map { it.toInt(16).toByte() }
+                    ?.toByteArray()
+                    ?.let { bytes ->
+                        Base64.encodeToString(
+                            bytes,
+                            Base64.URL_SAFE or Base64.NO_PADDING or Base64.NO_WRAP
+                        )
+                    }
 
-                val drmKidBytes = drmKid.replace("-", "").chunked(2)
-                    .map { it.toInt(16).toByte() }
-                    .toByteArray()
-                val drmKidBase64 = Base64.encodeToString(
-                    drmKidBytes,
-                    Base64.URL_SAFE or Base64.NO_PADDING or Base64.NO_WRAP
-                )
-
-                val keyBase64 = getDRMKeysFromLicenseServer(
-                    url = loadData.licenseUrl,
-                    kid = drmKidBase64
-                )
-                if (keyBase64.isNotEmpty()) {
-                    callback.invoke(
-                        newDrmExtractorLink(
-                            this.name, this.name, loadData.url,
-                            INFER_TYPE, CLEARKEY_UUID
-                        ) {
-                            this.quality = Qualities.Unknown.value
-                            if (headers.isNotEmpty()) {
-                                this.headers = headers
-                            }
-                            this.key = keyBase64.trim()
-                            this.kid = drmKidBase64.trim()
-                        }
+                if (drmKidBase64 != null) {
+                    val keyBase64 = getDRMKeysFromLicenseServer(
+                        url = loadData.licenseUrl,
+                        kid = drmKidBase64
                     )
-                    return true
+                    if (keyBase64.isNotEmpty()) {
+                        callback.invoke(
+                            newDrmExtractorLink(
+                                this.name, this.name, loadData.url,
+                                INFER_TYPE, CLEARKEY_UUID
+                            ) {
+                                this.quality = Qualities.Unknown.value
+                                if (headers.isNotEmpty()) {
+                                    this.headers = headers
+                                }
+                                this.key = keyBase64.trim()
+                                this.kid = drmKidBase64.trim()
+                            }
+                        )
+                        return true
+                    }
                 }
 
+                // No KID in the MPD or no key returned by the license server:
+                // pass the license URL through so the player runs the license
+                // exchange itself instead of guessing a key.
                 callback.invoke(
                     newDrmExtractorLink(
                         this.name, this.name, loadData.url,

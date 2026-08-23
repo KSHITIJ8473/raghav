@@ -107,9 +107,9 @@ private fun getQualityFromString(title: String?): Int {
     }
 }
 
-private fun getSeedersFromTitle(title: String?): Int {
-    if (title.isNullOrBlank()) return 0
-    return Regex("""[👤👥]\s*(\d+)""").find(title)?.groupValues?.get(1)?.toIntOrNull() ?: 0
+private fun getSeedersFromTitle(title: String?): Int? {
+    if (title.isNullOrBlank()) return null
+    return Regex("""[👤👥]\s*(\d+)""").find(title)?.groupValues?.get(1)?.toIntOrNull()
 }
 
 private fun simplifyTitle(title: String?): String {
@@ -135,6 +135,10 @@ private suspend fun tmdbGet(path: String): String {
 
 @JsonIgnoreProperties(ignoreUnknown = true)
 data class StremioStreamResponse(val streams: List<StremioStream>? = null)
+@JsonIgnoreProperties(ignoreUnknown = true)
+data class StremioSubtitleResponse(val subtitles: List<StremioSubtitle>? = null)
+@JsonIgnoreProperties(ignoreUnknown = true)
+data class StremioSubtitle(val url: String? = null, val lang: String? = null, val id: String? = null)
 @JsonIgnoreProperties(ignoreUnknown = true)
 data class StremioStream(
     val name: String? = null, val title: String? = null, val description: String? = null,
@@ -693,7 +697,7 @@ class TorrentsV1 : MainAPI() {
             val title = it.title ?: it.name ?: ""
             val seeders = it.seeders ?: 0
             callback.invoke(
-                newExtractorLink("Animetosho🧲", "Animetosho 🧲 | 👤 $seeders | $title", magnet, ExtractorLinkType.MAGNET) {
+                newExtractorLink("Animetosho", "Animetosho | $seeders | $title", magnet, ExtractorLinkType.MAGNET) {
                     this.quality = getQualityFromString(title)
                 }
             )
@@ -704,19 +708,31 @@ class TorrentsV1 : MainAPI() {
         addons: List<StremioAddon>, stremioId: String?, linkData: LinkData, isMovie: Boolean,
         subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit
     ) {
-        // For custom Stremio addons, prefer IMDB ID (most addons support it).
-        // Fall back to kitsu: ID only if IMDB is not available.
+        // Most addons accept the IMDB ID; fall back to the kitsu: ID.
         val id = linkData.imdbId ?: stremioId ?: return
         addons.amap { addon ->
             try {
                 val base = addon.url.trimEnd('/').replace("/manifest.json", "")
-                val url = if (isMovie) {
-                    "$base/stream/movie/$id.json"
+                val resourcePath = if (isMovie) {
+                    "movie/$id"
                 } else {
-                    "$base/stream/series/$id:${linkData.season ?: 1}:${linkData.episode}.json"
+                    "series/$id:${linkData.season ?: 1}:${linkData.episode}"
                 }
-                fetchStremioStreamsUniversal(addon.name, url, subtitleCallback, callback)
+                fetchStremioStreamsUniversal(addon.name, "$base/stream/$resourcePath.json", callback)
+                if (addon.type.contains("SUBTITLE", ignoreCase = true)) {
+                    fetchStremioSubtitles("$base/subtitles/$resourcePath.json", subtitleCallback)
+                }
             } catch (e: Throwable) { e.message?.let { Log.d("Plugin", it) } }
+        }
+    }
+
+    private suspend fun fetchStremioSubtitles(url: String, subtitleCallback: (SubtitleFile) -> Unit) {
+        val res = try { app.get(url, timeout = 30L).parsedSafe<StremioSubtitleResponse>() } catch (_: Throwable) { null } ?: return
+        res.subtitles?.forEach { sub ->
+            val subUrl = sub.url ?: return@forEach
+            if (subUrl.isNotBlank()) {
+                subtitleCallback.invoke(SubtitleFile(sub.lang ?: sub.id ?: "Subtitle", subUrl))
+            }
         }
     }
 
@@ -727,10 +743,10 @@ class TorrentsV1 : MainAPI() {
             val infoHash = stream.infoHash ?: continue
             val rawTitle = stream.title ?: stream.name ?: ""
             val seeders = getSeedersFromTitle(rawTitle)
-            if (seeders < 25 && seeders > 0) continue
+            if (seeders == 0) continue
             val magnet = buildMagnet(infoHash, stream.fileIdx, stream.sources) ?: continue
             callback.invoke(
-                newExtractorLink("$sourceName🧲", "$sourceName 🧲 | 👤 $seeders | ${simplifyTitle(rawTitle)}".trim(),
+                newExtractorLink(sourceName, "$sourceName | ${seeders ?: "?"} | ${simplifyTitle(rawTitle)}".trim(),
                     magnet, ExtractorLinkType.MAGNET) { this.quality = getQualityFromString(rawTitle) }
             )
         }
@@ -752,7 +768,6 @@ class TorrentsV1 : MainAPI() {
 
     private suspend fun fetchStremioStreamsUniversal(
         sourceName: String, url: String,
-        subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
         val res = try { app.get(url, timeout = 200L).parsedSafe<StremioStreamResponse>() } catch (_: Throwable) { null } ?: return
@@ -760,27 +775,25 @@ class TorrentsV1 : MainAPI() {
         for (stream in streams) {
             val rawTitle = stream.title ?: stream.description ?: stream.name ?: ""
 
-            // Magnet stream
             if (stream.infoHash != null && stream.infoHash.isNotBlank()) {
                 val magnet = buildMagnet(stream.infoHash, stream.fileIdx, stream.sources) ?: continue
                 callback.invoke(
-                    newExtractorLink("$sourceName 🧲", "$sourceName 🧲 | ${simplifyTitle(rawTitle)}", magnet, ExtractorLinkType.MAGNET) {
+                    newExtractorLink(sourceName, "$sourceName | ${simplifyTitle(rawTitle)}", magnet, ExtractorLinkType.MAGNET) {
                         this.quality = getQualityFromString(rawTitle)
                     }
                 )
             }
 
-            // Direct URL stream
             if (stream.url != null && stream.url.isNotBlank()) {
                 var streamUrl = stream.url
 
-                // Resolve redirect URLs (e.g. notorrent addon uses /redirect?p=...)
+                // Some addons (e.g. notorrent) wrap the real URL in a /redirect endpoint
                 if (streamUrl.contains("/redirect")) {
                     try {
                         val resp = app.get(streamUrl, allowRedirects = false)
                         val location = resp.headers?.get("location") ?: ""
                         if (location.isNotBlank()) {
-                            // The redirect target may contain the actual m3u8 URL in a query param
+                            // The redirect target may carry the m3u8 URL in a query param,
                             // e.g. https://host/vid1.php?url=/vid/movies/720p/tt123.m3u8
                             val urlParam = Regex("""[?&]url=([^&]+\.m3u8)""").find(location)?.groupValues?.get(1)
                             if (urlParam != null) {

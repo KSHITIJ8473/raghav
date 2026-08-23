@@ -47,7 +47,7 @@ object FirebaseDomainHelper {
 
     suspend fun getDomain(key: String): String? {
         load()
-        return domains[key] ?: domains["${'$'}{key}_url"] ?: domains["${'$'}{key}_domain"]
+        return domains[key] ?: domains["${key}_url"] ?: domains["${key}_domain"]
     }
 
     fun invalidate() {

@@ -27,26 +27,6 @@ class AnidapProvider : MainAPI() {
     private val TAG = "Anidap"
     private val baseHeaders = mapOf("Referer" to "$mainUrl/home")
 
-    // 
-    // ARCHITECTURE (v7 — rewritten from scratch):
-    //
-    // The #1 bug in v6 was that loadLinks() only passed `Referer` to ExtractorLink,
-    // ignoring the FULL headers map from the API. Different CDNs need different headers:
-    //   - beep/mimi/yuki/loli  → need Referer only
-    //   - uwu/kiwi             → need Origin: https://animex.one (NO Referer!)
-    //   - sora                 → need Referer: https://kaa.lt/ + Android User-Agent
-    //
-    // Fix: pass the EXACT headers map from the API response to each ExtractorLink.
-    // This makes ALL sources work because each CDN gets its required headers.
-    //
-    // Other fixes:
-    //   - Real episode titles from /rest/api/episodes endpoint (was "Episode N")
-    //   - Quality in source label for multi-quality providers (uwu 800p + 360p)
-    //   - Clear (Hardsub) marker in Subbed tab for hardsub providers
-    //   - (Sub) / (Dub) prefix in labels to prevent sub/dub confusion
-    //   - Subtitles (tracks) passed to subtitleCallback with correct labels
-    // 
-
     // ==================== DATA MODELS ====================
 
     @JsonIgnoreProperties(ignoreUnknown = true)
@@ -168,11 +148,6 @@ class AnidapProvider : MainAPI() {
         return image ?: cover
     }
 
-    /**
-     * Normalize the API tip for display.
-     * "Hard sub, Fast" -> "Hardsub, Fast"
-     * "Soft sub, Fastest, High quality" -> "Soft Sub, Fastest, High quality"
-     */
     private fun normalizeTip(tip: String?): String? {
         if (tip.isNullOrBlank()) return null
         return tip
@@ -180,18 +155,11 @@ class AnidapProvider : MainAPI() {
             .replace("Soft sub", "Soft Sub", ignoreCase = false)
     }
 
-    /**
-     * Returns true if the provider's tip indicates it's a hardsub provider.
-     */
     private fun isHardsubProvider(tip: String?): Boolean {
         if (tip.isNullOrBlank()) return false
         return tip.contains("Hard", ignoreCase = true)
     }
 
-    /**
-     * Parse a quality string like "800p", "360p", "1080p", "auto" into a quality Int.
-     * Maps to CloudStream's Qualities enum values.
-     */
     private fun parseQuality(qualityStr: String?): Int {
         if (qualityStr.isNullOrBlank() || qualityStr.equals("auto", ignoreCase = true)) {
             return Qualities.Unknown.value
@@ -212,16 +180,6 @@ class AnidapProvider : MainAPI() {
         }
     }
 
-    /**
-     * Build a minimal source label — just the provider name (+ quality for multi-quality).
-     *
-     *   "Anidap - beep"
-     *   "Anidap - uwu 800p"
-     *   "Anidap - uwu 360p"
-     *   "Anidap - mimi"
-     *
-     * The user already picked Sub or Dub tab, so no type/hardsub marker is needed.
-     */
     private fun buildSourceLabel(
         providerId: String,
         tip: String?,
@@ -239,7 +197,6 @@ class AnidapProvider : MainAPI() {
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         mainUrl = FirebaseDomainHelper.getDomain("anidap") ?: mainUrl
-        Log.d(TAG, "getMainPage START: section='${request.name}' page=$page")
         val lists = mutableListOf<HomePageList>()
 
         try {
@@ -262,7 +219,7 @@ class AnidapProvider : MainAPI() {
 
                         val recent = recentDeferred.await()
                         if (recent.isNotEmpty()) {
-                            lists.add(HomePageList("🆕 Recently Added", recent, isHorizontalImages = true))
+                            lists.add(HomePageList("Recently Added", recent, isHorizontalImages = true))
                         }
 
                         kotlinx.coroutines.delay(500)
@@ -272,17 +229,17 @@ class AnidapProvider : MainAPI() {
 
                         val action = actionDeferred.await()
                         if (action.isNotEmpty()) {
-                            lists.add(HomePageList("💥 Action", action, isHorizontalImages = true))
+                            lists.add(HomePageList("Action", action, isHorizontalImages = true))
                         }
 
                         val comedy = comedyDeferred.await()
                         if (comedy.isNotEmpty()) {
-                            lists.add(HomePageList("😂 Comedy", comedy, isHorizontalImages = true))
+                            lists.add(HomePageList("Comedy", comedy, isHorizontalImages = true))
                         }
 
                         val fantasy = fantasyDeferred.await()
                         if (fantasy.isNotEmpty()) {
-                            lists.add(HomePageList("🧙 Fantasy", fantasy, isHorizontalImages = true))
+                            lists.add(HomePageList("Fantasy", fantasy, isHorizontalImages = true))
                         }
                     }
                 }
@@ -291,7 +248,6 @@ class AnidapProvider : MainAPI() {
             Log.e(TAG, "getMainPage FAILED: ${e.message}")
         }
 
-        Log.d(TAG, "getMainPage END: ${lists.size} sections")
         return newHomePageResponse(lists, hasNext = false)
     }
 
@@ -303,7 +259,6 @@ class AnidapProvider : MainAPI() {
         return try {
             val encoded = java.net.URLEncoder.encode(query, "UTF-8")
             val url = "$mainUrl/api/anime/search?q=$encoded"
-            Log.d(TAG, "fetchSearch: $url")
             val res = app.get(url, headers = baseHeaders, timeout = 30_000L)
             val parsed = parseJson<SearchResponseData>(res.text)
             val results = parsed.results ?: emptyList()
@@ -355,7 +310,6 @@ class AnidapProvider : MainAPI() {
 
     override suspend fun search(query: String): List<SearchResponse> {
         mainUrl = FirebaseDomainHelper.getDomain("anidap") ?: mainUrl
-        Log.d(TAG, "search START: query='$query'")
         if (query.length < 2) return emptyList()
         return try {
             val encoded = java.net.URLEncoder.encode(query, "UTF-8")
@@ -363,7 +317,6 @@ class AnidapProvider : MainAPI() {
             val res = app.get(url, headers = baseHeaders, timeout = 30_000L)
             val parsed = parseJson<SearchResponseData>(res.text)
             val results = parsed.results ?: emptyList()
-            Log.d(TAG, "search END: ${results.size} results")
             results.mapNotNull { it.toSearchResponse() }
         } catch (e: Exception) {
             Log.e(TAG, "search FAILED: ${e.message}")
@@ -375,12 +328,11 @@ class AnidapProvider : MainAPI() {
 
     override suspend fun load(url: String): LoadResponse? {
         mainUrl = FirebaseDomainHelper.getDomain("anidap") ?: mainUrl
-        Log.d(TAG, "load START: url='$url'")
-        val animeId = url.removePrefix("$mainUrl/").removePrefix("$mainUrl|").trim()
-        Log.d(TAG, "load: animeId=$animeId")
+        // Data: "<mainUrl>|<id>" — extract the id positionally so a domain rotation can't break it
+        val animeId = url.substringAfterLast("|").substringAfterLast("/").trim()
 
         return try {
-            // 1. Fetch anime detail
+            // Fetch anime detail
             val detailUrl = "$mainUrl/api/anime/$animeId"
             val detailRes = app.get(detailUrl, headers = baseHeaders, timeout = 30_000L)
             val detailRoot = parseJson<com.fasterxml.jackson.databind.JsonNode>(detailRes.text)
@@ -399,13 +351,12 @@ class AnidapProvider : MainAPI() {
 
             Log.d(TAG, "load: title='$title' slug=$slug episodes=$totalEps format=${detail.format}")
 
-            // 2. Fetch servers via cfAppGet (handles _amx_id anti-bot bypass)
+            // Fetch servers via cfAppGet (handles _amx_id anti-bot bypass)
             val serversUrl = "$chadUrl/servers?id=$slug&epNum=1"
             val serversRes = cfAppGet(
                 serversUrl,
                 headers = mapOf("Referer" to "$mainUrl/", "Accept" to "application/json")
             )
-            Log.d(TAG, "load: servers code=${serversRes.code} size=${serversRes.text.length}")
 
             val servers = if (serversRes.code == 200 && !serversRes.text.contains("bot_detected") && !serversRes.text.contains("\"error\"")) {
                 try { parseJson<ServersResponse>(serversRes.text) } catch (e: Exception) {
@@ -420,10 +371,6 @@ class AnidapProvider : MainAPI() {
             val subProviders: List<Provider> = servers.subProviders?.filter { it.id.isNotBlank() } ?: emptyList()
             val dubProviders: List<Provider> = servers.dubProviders?.filter { it.id.isNotBlank() } ?: emptyList()
 
-            Log.d(TAG, "load: subProviders=${subProviders.size} dubProviders=${dubProviders.size}")
-            Log.d(TAG, "load: sub ids=${subProviders.map { it.id }}")
-            Log.d(TAG, "load: dub ids=${dubProviders.map { it.id }}")
-
             if (totalEps <= 0) {
                 return newAnimeLoadResponse(title, url, TvType.Anime) {
                     this.posterUrl = poster
@@ -434,15 +381,12 @@ class AnidapProvider : MainAPI() {
                 }
             }
 
-            // 3. Fetch REAL episode titles from the episodes endpoint
-            // This returns English/Japanese titles, filler status, images, descriptions
+            // Fetch real episode titles from the episodes endpoint
             val episodeInfos: Map<Int, EpisodeInfo> = try {
                 val epsUrl = "$chadUrl/episodes?id=$slug"
-                Log.d(TAG, "load: fetching episodes -> $epsUrl")
                 val epsRes = cfAppGet(epsUrl, headers = mapOf("Referer" to "$mainUrl/", "Accept" to "application/json"))
                 if (epsRes.code == 200) {
                     val epsList = parseJson<List<EpisodeInfo>>(epsRes.text)
-                    Log.d(TAG, "load: got ${epsList.size} episode titles")
                     epsList.associateBy { it.number }
                 } else {
                     Log.e(TAG, "load: episodes API code=${epsRes.code}")
@@ -462,8 +406,7 @@ class AnidapProvider : MainAPI() {
                 else -> TvType.Anime
             }
 
-            // 4. Build episode lists with REAL titles
-            // Data format: "$mainUrl|$slug|$epNum|$type|${providerIds}|${tips}"
+            // Data format: "<mainUrl>|<slug>|<epNum>|<type>|<ids>|<tips>"
             val subEpisodes = if (hasSub) (1..totalEps).map { epNum ->
                 val ids = subProviders.joinToString(",") { it.id }
                 val tips = subProviders.joinToString(";;") { it.id + "=" + (it.tip ?: "") }
@@ -473,7 +416,6 @@ class AnidapProvider : MainAPI() {
                     ?: epInfo?.titles?.get("ja")?.takeIf { it.isNotBlank() }
                 val fillerSuffix = if (epInfo?.isFiller == true) " (Filler)" else ""
                 newEpisode("$mainUrl|$slug|$epNum|sub|$ids|$tips") {
-                    this.episode = epNum
                     this.name = if (epTitle.isNullOrBlank()) {
                         "Episode $epNum$fillerSuffix"
                     } else {
@@ -494,7 +436,6 @@ class AnidapProvider : MainAPI() {
                     ?: epInfo?.titles?.get("ja")?.takeIf { it.isNotBlank() }
                 val fillerSuffix = if (epInfo?.isFiller == true) " (Filler)" else ""
                 newEpisode("$mainUrl|$slug|$epNum|dub|$ids|$tips") {
-                    this.episode = epNum
                     this.name = if (epTitle.isNullOrBlank()) {
                         "Episode $epNum$fillerSuffix"
                     } else {
@@ -505,8 +446,6 @@ class AnidapProvider : MainAPI() {
                     this.description = epInfo?.description?.takeIf { it.isNotBlank() }
                 }
             } else emptyList()
-
-            Log.d(TAG, "load: subEps=${subEpisodes.size} dubEps=${dubEpisodes.size}")
 
             return newAnimeLoadResponse(title, url, tvType) {
                 this.posterUrl = poster
@@ -523,16 +462,7 @@ class AnidapProvider : MainAPI() {
         }
     }
 
-    // ==================== loadLinks (REWRITTEN FROM SCRATCH) ====================
-    //
-    // The core fix: pass the EXACT headers map from the API response to each
-    // ExtractorLink. Different CDNs need different headers:
-    //   - beep/mimi/yuki/loli → Referer only
-    //   - uwu/kiwi            → Origin: https://animex.one
-    //   - sora                → Referer: https://kaa.lt/ + Android User-Agent
-    //
-    // The old code extracted only Referer and fell back to anidap.lol/ — that's
-    // why uwu/kiwi/sora always failed (403). Now we pass the FULL headers map.
+    // ==================== loadLinks ====================
 
     override suspend fun loadLinks(
         data: String,
@@ -540,11 +470,9 @@ class AnidapProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        Log.d(TAG, "loadLinks START: data='$data'")
-
-        // Parse: "$mainUrl|$slug|$epNum|$type|${ids}|${tips}"
-        val cleanData = data.removePrefix("$mainUrl/").removePrefix("$mainUrl|").trim()
-        val parts = cleanData.split("|")
+        // Data: "<mainUrl>|<slug>|<epNum>|<type>|<ids>|<tips>" (mainUrl may be stale after domain rotation)
+        val rawParts = data.trim().split("|")
+        val parts = if (rawParts.firstOrNull()?.startsWith("http") == true) rawParts.drop(1) else rawParts
         if (parts.size < 5) {
             Log.e(TAG, "loadLinks: invalid data format (parts=${parts.size})")
             return false
@@ -562,7 +490,6 @@ class AnidapProvider : MainAPI() {
             }.toMap()
         } else emptyMap()
 
-        Log.d(TAG, "loadLinks: slug=$slug epNum=$epNum type=$type providers=$providerIds")
         if (providerIds.isEmpty()) {
             Log.e(TAG, "loadLinks: no providers")
             return false
@@ -571,15 +498,13 @@ class AnidapProvider : MainAPI() {
         var found = false
         for (providerId in providerIds) {
             val tip = tipsMap[providerId]
-            Log.d(TAG, "loadLinks: provider=$providerId type=$type tip=$tip")
             try {
-                // 1. Fetch sources from the API with the correct type (sub/dub)
+                // Fetch sources for this provider (sub/dub)
                 val sourcesUrl = "$chadUrl/sources?id=$slug&epNum=$epNum&type=$type&providerId=$providerId"
                 val sourcesRes = cfAppGet(
                     sourcesUrl,
                     headers = mapOf("Referer" to "$mainUrl/", "Accept" to "application/json")
                 )
-                Log.d(TAG, "loadLinks: $providerId code=${sourcesRes.code} size=${sourcesRes.text.length}")
 
                 if (sourcesRes.code != 200 ||
                     sourcesRes.text.contains("bot_detected") ||
@@ -598,19 +523,16 @@ class AnidapProvider : MainAPI() {
 
                 val sources = sourcesData.sources ?: emptyList()
                 val tracks = sourcesData.tracks ?: emptyList()
-                //  use the EXACT headers map from the API response
-                // This contains Referer, Origin, User-Agent — whatever the CDN needs
                 val apiHeaders: Map<String, String> = sourcesData.headers ?: emptyMap()
 
-                Log.d(TAG, "loadLinks: $providerId sources=${sources.size} tracks=${tracks.size} headers=$apiHeaders")
+                Log.d(TAG, "loadLinks: $providerId sources=${sources.size} tracks=${tracks.size}")
 
                 if (sources.isEmpty()) {
                     Log.e(TAG, "loadLinks: $providerId no sources in response")
                     continue
                 }
 
-                // Subtitle files share the video CDN, so they need the same
-                // Referer/Origin headers to avoid empty/403 responses.
+                // Subtitles share the video CDN, so pass the same headers to avoid 403s
                 for (track in tracks) {
                     var trackUrl = track.url ?: continue
                     if (trackUrl.isBlank()) continue
@@ -628,11 +550,9 @@ class AnidapProvider : MainAPI() {
                         subtitleCallback.invoke(newSubtitleFile(label, trackUrl) {
                             this.headers = subHeaders
                         })
-                        Log.d(TAG, "loadLinks: $providerId subtitle '$label' added")
                     }
                 }
 
-                // 3. Process each source URL
                 // Some providers (uwu) return multiple sources at different qualities
                 for (source in sources) {
                     val sourceUrl = source.url ?: continue
@@ -641,9 +561,7 @@ class AnidapProvider : MainAPI() {
                     val quality = source.quality ?: "auto"
                     val qualityInt = parseQuality(quality)
 
-                    // Build a clear label with provider name, type, tip, and quality
                     val label = buildSourceLabel(providerId, tip, quality, type)
-                    Log.d(TAG, "loadLinks: $providerId source url=${sourceUrl.take(80)} type=$sourceType quality=$quality")
 
                     val isM3u8 = sourceUrl.contains(".m3u8") ||
                         sourceType.contains("mpegurl", ignoreCase = true) ||
@@ -654,14 +572,6 @@ class AnidapProvider : MainAPI() {
                     val isDASH = sourceUrl.contains(".mpd") || sourceType.contains("dash", ignoreCase = true)
 
                     when {
-                        // ── HLS m3u8 ──
-                        // ALWAYS use a direct ExtractorLink with ExtractorLinkType.M3U8 and
-                        // the FULL headers map from the API. Do NOT use M3u8Helper — it
-                        // fetches/parses the m3u8 internally and can silently return an empty
-                        // list (causing the source to not appear). ExoPlayer handles m3u8
-                        // natively and applies the headers to ALL requests (master playlist,
-                        // sub-playlist, AND segments on cross-domain CDNs like yuki's
-                        // ik234.ovexa.buzz segment host).
                         isM3u8 -> {
                             callback.invoke(
                                 newExtractorLink(label, label, sourceUrl, type = ExtractorLinkType.M3U8) {
@@ -670,13 +580,9 @@ class AnidapProvider : MainAPI() {
                                 }
                             )
                             found = true
-                            Log.d(TAG, "loadLinks: $providerId m3u8 (direct, headers=${apiHeaders.keys}) added")
                         }
 
-                        // ── DASH mpd ── (ExoPlayer supports DASH but CloudStream's
-                        // ExtractorLink doesn't have a DASH type. Skip for now.)
                         isDASH -> {
-                            Log.d(TAG, "loadLinks: $providerId DASH (mpd) — adding as direct link")
                             callback.invoke(
                                 newExtractorLink(label, label, sourceUrl, type = ExtractorLinkType.VIDEO) {
                                     this.headers = apiHeaders
@@ -686,7 +592,6 @@ class AnidapProvider : MainAPI() {
                             found = true
                         }
 
-                        // ── Direct mp4/webm ──
                         isMp4 -> {
                             callback.invoke(
                                 newExtractorLink(label, label, sourceUrl, type = ExtractorLinkType.VIDEO) {
@@ -695,12 +600,9 @@ class AnidapProvider : MainAPI() {
                                 }
                             )
                             found = true
-                            Log.d(TAG, "loadLinks: $providerId mp4 added")
                         }
 
-                        // ── Unknown URL type ──
-                        // Try CloudStream's built-in extractors first (kwik.cx, etc.)
-                        // If that fails, add as direct link with the full headers
+                        // Unknown URL type — try built-in extractors, fall back to a direct link
                         else -> {
                             val referer = apiHeaders["Referer"] ?: apiHeaders["referer"] ?: "$mainUrl/"
                             val loaded = try {
@@ -711,7 +613,6 @@ class AnidapProvider : MainAPI() {
                             }
                             if (loaded) {
                                 found = true
-                                Log.d(TAG, "loadLinks: $providerId resolved via loadExtractor")
                             } else {
                                 // Last resort — direct link with full headers
                                 callback.invoke(
@@ -721,7 +622,6 @@ class AnidapProvider : MainAPI() {
                                     }
                                 )
                                 found = true
-                                Log.d(TAG, "loadLinks: $providerId direct fallback added")
                             }
                         }
                     }
@@ -731,7 +631,6 @@ class AnidapProvider : MainAPI() {
             }
         }
 
-        Log.d(TAG, "loadLinks END: found=$found")
         return found
     }
 }

@@ -8,6 +8,7 @@ import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.AppUtils.toJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
+import com.lagradost.cloudstream3.utils.INFER_TYPE
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.newExtractorLink
 
@@ -118,12 +119,14 @@ class HDGharTVProvider : MainAPI() {
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val lists = mutableListOf<HomePageList>()
         val base = apiBase()
+        var hasNext = false
 
         try {
             when (request.data) {
                 "movies" -> {
                     val res = app.get("$base/api/movies/public?page=$page&limit=20", referer = "$base/")
                     val parsed = parseJson<MediaListResponse>(res.text)
+                    parsed.totalPages?.let { hasNext = page < it }
                     val items = parsed.data?.mapNotNull { it.toSearchResponse("movie") } ?: emptyList()
                     if (items.isNotEmpty()) {
                         lists.add(HomePageList("Movies", items, isHorizontalImages = true))
@@ -132,6 +135,7 @@ class HDGharTVProvider : MainAPI() {
                 "series" -> {
                     val res = app.get("$base/api/series/public?page=$page&limit=20", referer = "$base/")
                     val parsed = parseJson<MediaListResponse>(res.text)
+                    parsed.totalPages?.let { hasNext = page < it }
                     val items = parsed.data?.mapNotNull { it.toSearchResponse("series") } ?: emptyList()
                     if (items.isNotEmpty()) {
                         lists.add(HomePageList("Series", items, isHorizontalImages = true))
@@ -158,7 +162,7 @@ class HDGharTVProvider : MainAPI() {
             Log.e(TAG, "getMainPage: ${e.message}")
         }
 
-        return newHomePageResponse(lists, hasNext = false)
+        return newHomePageResponse(lists, hasNext = hasNext)
     }
 
     private fun MediaItem.toSearchResponse(type: String): SearchResponse? {
@@ -276,6 +280,10 @@ class HDGharTVProvider : MainAPI() {
             val url = stream.url ?: continue
             if (url.isBlank()) continue
 
+            val qualityName = stream.quality ?: "Unknown"
+            val language = stream.language?.trim()
+            val linkName = if (language.isNullOrEmpty()) qualityName else "$qualityName ($language)"
+
             val quality = when (stream.quality?.lowercase()) {
                 "4k", "2160p" -> Qualities.P2160.value
                 "1080p", "fhd" -> Qualities.P1080.value
@@ -287,8 +295,8 @@ class HDGharTVProvider : MainAPI() {
 
             val type = when {
                 url.contains(".m3u8", ignoreCase = true) -> ExtractorLinkType.M3U8
-                url.contains(".mp4", ignoreCase = true) -> ExtractorLinkType.VIDEO
-                else -> ExtractorLinkType.M3U8
+                url.contains(".mp4", ignoreCase = true) || url.contains(".mkv", ignoreCase = true) -> ExtractorLinkType.VIDEO
+                else -> INFER_TYPE
             }
 
             val headers = mutableMapOf(
@@ -308,7 +316,7 @@ class HDGharTVProvider : MainAPI() {
             callback.invoke(
                 newExtractorLink(
                     source = this.name,
-                    name = stream.quality ?: "Unknown",
+                    name = linkName,
                     url = url,
                     type = type
                 ) {

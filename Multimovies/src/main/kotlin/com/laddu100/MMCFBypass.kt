@@ -52,6 +52,7 @@ private const val COOKIE_TTL_MS = 15L * 60 * 60 * 1000
 private const val SOLVER_TIMEOUT_MS = 120_000L
 private const val POLL_INTERVAL_MS = 1000L
 private const val CURSOR_STEP_DP = 10f
+private const val BYPASS_COOLDOWN_MS = 60_000L
 
 internal object MMCFStore {
     private const val KEY_CF_COOKIES = "MM_CF_COOKIES"
@@ -64,6 +65,7 @@ internal object MMCFStore {
     @Volatile private var cachedHost: String? = null
     @Volatile private var cachedTimestamp: Long = 0L
     @Volatile private var initialized = false
+    @Volatile private var lastBypassTime: Long = 0L
 
     fun init() {
         if (initialized) return
@@ -96,6 +98,7 @@ internal object MMCFStore {
         cachedUA = userAgent
         cachedHost = host
         cachedTimestamp = System.currentTimeMillis()
+        lastBypassTime = System.currentTimeMillis()
         try {
             CloudStreamApp.setKey(KEY_CF_COOKIES, cookies)
             CloudStreamApp.setKey(KEY_CF_UA, userAgent)
@@ -117,6 +120,14 @@ internal object MMCFStore {
             CloudStreamApp.setKey(KEY_CF_HOST, "")
             CloudStreamApp.setKey(KEY_CF_TIMESTAMP, "")
         } catch (e: Exception) {}
+    }
+
+    fun isRecentlyBypassed(): Boolean {
+        return System.currentTimeMillis() - lastBypassTime < BYPASS_COOLDOWN_MS
+    }
+
+    fun markBypassed() {
+        lastBypassTime = System.currentTimeMillis()
     }
 }
 
@@ -173,6 +184,19 @@ private class MMCFDialog(
             val cookieStr = CookieManager.getInstance().getCookie(targetHost) ?: ""
             if (cookieStr.contains("cf_clearance")) {
                 finishSuccess(cookieStr)
+                return
+            }
+            val currentUrl = webView?.url
+            if (currentUrl != null && currentUrl != targetUrl) {
+                try {
+                    val uri = Uri.parse(currentUrl)
+                    val altHost = "${uri.scheme}://${uri.host}"
+                    val altCookies = CookieManager.getInstance().getCookie(altHost) ?: ""
+                    if (altCookies.contains("cf_clearance")) {
+                        finishSuccessForHost(altCookies, altHost)
+                        return
+                    }
+                } catch (e: Exception) {}
             }
         } catch (e: Exception) {
             Log.e(TAG, "extract: ${e.message}")
@@ -180,10 +204,14 @@ private class MMCFDialog(
     }
 
     private fun finishSuccess(cookieStr: String) {
+        finishSuccessForHost(cookieStr, targetHost)
+    }
+
+    private fun finishSuccessForHost(cookieStr: String, host: String) {
         if (!resolved.compareAndSet(false, true)) return
         handler.removeCallbacksAndMessages(null)
         val ua = webView?.settings?.userAgentString ?: ""
-        MMCFStore.save(cookieStr, ua, targetHost)
+        MMCFStore.save(cookieStr, ua, host)
         try { webView?.destroy() } catch (e: Exception) {}
         try { (webView?.getTag() as? Dialog)?.dismiss() } catch (e: Exception) {}
         try { onFinished?.invoke(true) } catch (e: Exception) {}
@@ -426,42 +454,57 @@ suspend fun showMMCFBypassDialogAndWait(url: String): Boolean = withContext(Disp
     }
 }
 
-suspend fun mmGet(url: String, headers: Map<String, String> = emptyMap(), allowRedirects: Boolean = true): NiceResponse {
-    val targetHost = try {
-        val uri = Uri.parse(url)
-        "${uri.scheme}://${uri.host}"
-    } catch (e: Exception) { url }
+private fun extractHost(url: String): String = try {
+    val uri = Uri.parse(url)
+    "${uri.scheme}://${uri.host}"
+} catch (e: Exception) { url }
 
-    fun buildHeaders(): Map<String, String> {
-        val h = headers.toMutableMap()
-        if (!h.containsKey("Accept")) h["Accept"] = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
-        if (!h.containsKey("User-Agent")) {
-            MMCFStore.getUserAgent()?.let { h["User-Agent"] = it }
-                ?: run { h["User-Agent"] = "Mozilla/5.0 (Linux; Android 13; Pixel 5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36" }
-        }
-        MMCFStore.getCookies()?.let { h["Cookie"] = it }
-        return h
+private fun buildMMHeaders(original: Map<String, String>): Map<String, String> {
+    val h = original.toMutableMap()
+    if (!h.containsKey("Accept")) h["Accept"] = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+    if (!h.containsKey("User-Agent")) {
+        MMCFStore.getUserAgent()?.let { h["User-Agent"] = it }
+            ?: run { h["User-Agent"] = "Mozilla/5.0 (Linux; Android 13; Pixel 5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36" }
     }
+    MMCFStore.getCookies()?.let { h["Cookie"] = it }
+    return h
+}
+
+suspend fun mmGet(url: String, headers: Map<String, String> = emptyMap(), allowRedirects: Boolean = true): NiceResponse {
+    val targetHost = extractHost(url)
 
     var response = try {
-        app.get(url, headers = buildHeaders(), timeout = 30_000L, allowRedirects = allowRedirects)
-    } catch (e: Exception) {
-        throw e
-    }
+        app.get(url, headers = buildMMHeaders(headers), timeout = 30_000L, allowRedirects = allowRedirects)
+    } catch (e: Exception) { throw e }
 
     if (!isMMCloudflareBlocked(response)) return response
 
+    if (MMCFStore.isRecentlyBypassed()) {
+        return response
+    }
+
     cfBypassMutex.withLock {
+        if (MMCFStore.isRecentlyBypassed()) {
+            response = try { app.get(url, headers = buildMMHeaders(headers), timeout = 30_000L, allowRedirects = allowRedirects) } catch (e: Exception) { throw e }
+            if (!isMMCloudflareBlocked(response)) return response
+            if (MMCFStore.getCookies() == null) return response
+        }
+
         val cachedCookies = MMCFStore.getCookies()
         if (cachedCookies != null) {
-            response = try { app.get(url, headers = buildHeaders(), timeout = 30_000L, allowRedirects = allowRedirects) } catch (e: Exception) { throw e }
+            response = try { app.get(url, headers = buildMMHeaders(headers), timeout = 30_000L, allowRedirects = allowRedirects) } catch (e: Exception) { throw e }
             if (!isMMCloudflareBlocked(response)) return response
         }
+
         MMCFStore.clear()
-        val bypassSuccess = showMMCFBypassDialogAndWait(targetHost)
-        if (!bypassSuccess) return@withLock
+        val bypassHost = MMCFStore.getHost() ?: targetHost
+        val bypassSuccess = showMMCFBypassDialogAndWait(bypassHost)
+        if (!bypassSuccess) {
+            MMCFStore.markBypassed()
+            return@withLock
+        }
         for (attempt in 1..2) {
-            response = try { app.get(url, headers = buildHeaders(), timeout = 30_000L, allowRedirects = allowRedirects) } catch (e: Exception) { throw e }
+            response = try { app.get(url, headers = buildMMHeaders(headers), timeout = 30_000L, allowRedirects = allowRedirects) } catch (e: Exception) { throw e }
             if (!isMMCloudflareBlocked(response)) return@withLock
         }
     }
@@ -469,12 +512,9 @@ suspend fun mmGet(url: String, headers: Map<String, String> = emptyMap(), allowR
 }
 
 suspend fun mmPost(url: String, data: Map<String, String>, headers: Map<String, String> = emptyMap(), referer: String? = null): NiceResponse {
-    val targetHost = try {
-        val uri = Uri.parse(url)
-        "${uri.scheme}://${uri.host}"
-    } catch (e: Exception) { url }
+    val targetHost = extractHost(url)
 
-    fun buildHeaders(): Map<String, String> {
+    fun buildPostHeaders(): Map<String, String> {
         val h = headers.toMutableMap()
         if (!h.containsKey("Accept")) h["Accept"] = "*/*"
         if (!h.containsKey("User-Agent")) {
@@ -487,24 +527,37 @@ suspend fun mmPost(url: String, data: Map<String, String>, headers: Map<String, 
     }
 
     var response = try {
-        app.post(url, data = data, headers = buildHeaders(), timeout = 30_000L)
-    } catch (e: Exception) {
-        throw e
-    }
+        app.post(url, data = data, headers = buildPostHeaders(), timeout = 30_000L)
+    } catch (e: Exception) { throw e }
 
     if (!isMMCloudflareBlocked(response)) return response
 
+    if (MMCFStore.isRecentlyBypassed()) {
+        return response
+    }
+
     cfBypassMutex.withLock {
+        if (MMCFStore.isRecentlyBypassed()) {
+            response = try { app.post(url, data = data, headers = buildPostHeaders(), timeout = 30_000L) } catch (e: Exception) { throw e }
+            if (!isMMCloudflareBlocked(response)) return response
+            if (MMCFStore.getCookies() == null) return response
+        }
+
         val cachedCookies = MMCFStore.getCookies()
         if (cachedCookies != null) {
-            response = try { app.post(url, data = data, headers = buildHeaders(), timeout = 30_000L) } catch (e: Exception) { throw e }
+            response = try { app.post(url, data = data, headers = buildPostHeaders(), timeout = 30_000L) } catch (e: Exception) { throw e }
             if (!isMMCloudflareBlocked(response)) return response
         }
+
         MMCFStore.clear()
-        val bypassSuccess = showMMCFBypassDialogAndWait(targetHost)
-        if (!bypassSuccess) return@withLock
+        val bypassHost = MMCFStore.getHost() ?: targetHost
+        val bypassSuccess = showMMCFBypassDialogAndWait(bypassHost)
+        if (!bypassSuccess) {
+            MMCFStore.markBypassed()
+            return@withLock
+        }
         for (attempt in 1..2) {
-            response = try { app.post(url, data = data, headers = buildHeaders(), timeout = 30_000L) } catch (e: Exception) { throw e }
+            response = try { app.post(url, data = data, headers = buildPostHeaders(), timeout = 30_000L) } catch (e: Exception) { throw e }
             if (!isMMCloudflareBlocked(response)) return@withLock
         }
     }

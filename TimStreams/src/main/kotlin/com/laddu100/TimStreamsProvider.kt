@@ -246,17 +246,16 @@ class TimStreamsProvider : MainAPI() {
                     Regex("cdx-\\d+\\.website").containsMatchIn(streamUrl) ||
                         (streamUrl.contains(".website/embed/") && streamUrl.contains("cdx-")) -> {
                         try {
-                            val embedHtml = app.get(
-                                streamUrl,
-                                referer = "$mainUrl/",
-                                headers = mapOf(
-                                    "User-Agent" to "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
-                                )
-                            ).text
+                            val resolver = WebViewResolver(
+                                interceptUrl = Regex("""\.m3u8"""),
+                                additionalUrls = listOf(Regex("""\.m3u8""")),
+                                script = """document.querySelector('video,[role="button"],.jw-icon-display,button')?.click();""",
+                                useOkhttp = false,
+                                timeout = 30_000L
+                            )
+                            val resolvedUrl = app.get(streamUrl, referer = "$mainUrl/", interceptor = resolver).url
 
-                            val signedUrl = decodeCdxSignedUrl(embedHtml)
-
-                            if (signedUrl != null && signedUrl.contains(".m3u8")) {
+                            if (resolvedUrl.contains(".m3u8", ignoreCase = true)) {
                                 val cdxOrigin = try {
                                     val u = java.net.URL(streamUrl)
                                     "${u.protocol}://${u.host}"
@@ -274,7 +273,7 @@ class TimStreamsProvider : MainAPI() {
                                     newExtractorLink(
                                         source = "$name - $streamName",
                                         name = "$name - $streamName",
-                                        url = signedUrl,
+                                        url = resolvedUrl,
                                         type = ExtractorLinkType.M3U8
                                     ) {
                                         this.quality = Qualities.Unknown.value
@@ -465,8 +464,6 @@ class TimStreamsProvider : MainAPI() {
         } catch (_: Exception) { "" }
     }
 
-    // The cdx embed obfuscates the signed m3u8 URL with a XOR + subtraction
-    // scheme where variable names and key values change per request.
     private fun decodeCdxSignedUrl(html: String): String? {
         return try {
             val arrayMatch = Regex("""var\s+(_\w+)\s*=\s*\[([\d,]+)\]""").find(html) ?: return null

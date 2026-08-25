@@ -1,5 +1,4 @@
-// use an integer for version numbers
-version = 20
+version = 35
 
 android {
     namespace = "com.laddu100"
@@ -22,14 +21,6 @@ cloudstream {
     language = "en"
     description = "Watch LIVE TV channels & sports via LIVE TV"
     authors = listOf("raghav,cnc")
-
-    /**
-     * Status int as the following:
-     * 0: Down
-     * 1: Ok
-     * 2: Slow
-     * 3: Beta only
-     * */
     status = 1
     tvTypes = listOf(
         "Live",

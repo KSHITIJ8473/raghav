@@ -103,38 +103,29 @@ object LIVETVCryptoUtils {
                 return null
             }
 
-            if (raw.startsWith("\u007B") || raw.startsWith("[") || raw.startsWith("<")) {
+            if (raw.startsWith("{") || raw.startsWith("[") || raw.startsWith("<")) {
                 return raw
             }
 
-            try {
-                val primaryPayload = decodeSubstitutionPayload(
-                    raw.replace("\\s".toRegex(), "")
-                )
-                val primary = decryptAes(primaryPayload, PRIMARY_KEY)
-                if (!primary.isNullOrBlank()) {
-                    return primary
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "Primary decrypt failed: ${e.message}")
+            val cleaned = raw.replace("\\s".toRegex(), "")
+
+            val primary = runCatching {
+                decryptAes(decodeSubstitutionPayload(cleaned), PRIMARY_KEY)
+            }.getOrNull()
+            if (!primary.isNullOrBlank()) {
+                return primary
             }
 
-            try {
-                val fallback = decryptAes(
-                    raw.replace("\\s".toRegex(), ""),
-                    FALLBACK_KEY
-                )
-                if (!fallback.isNullOrBlank()) {
-                    return fallback
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "Fallback decrypt failed: ${e.message}")
+            val fallback = runCatching {
+                decryptAes(cleaned, FALLBACK_KEY)
+            }.getOrNull()
+            if (!fallback.isNullOrBlank()) {
+                return fallback
             }
 
-            Log.e(TAG, "All decryption strategies failed")
             null
         } catch (e: Exception) {
-            Log.e(TAG, "Decrypt error: ${e.message}", e)
+            Log.e(TAG, "Decrypt error: ${e.message}")
             null
         }
     }

@@ -64,7 +64,7 @@ class IptvPlaylistParser {
 
     private fun parseLicenseKeysMap(licenseKey: String): Map<String, String> {
         val trimmedKey = licenseKey.trim()
-        if (!trimmedKey.startsWith("\u007B")) return emptyMap()
+        if (!trimmedKey.startsWith("{")) return emptyMap()
 
         return try {
             val json = JSONObject(trimmedKey)
@@ -91,7 +91,7 @@ class IptvPlaylistParser {
         val trimmedKey = licenseKey.trim()
         if (trimmedKey.isEmpty()) return null
 
-        if (trimmedKey.startsWith("\u007B")) {
+        if (trimmedKey.startsWith("{")) {
             return try {
                 val json = JSONObject(trimmedKey)
                 val keys = json.optJSONArray("keys") ?: return null
@@ -194,7 +194,7 @@ class IptvPlaylistParser {
                         if (licenseKey.startsWith("http://") || licenseKey.startsWith("https://")) {
                             bufferedLicenseUrl = licenseKey
                         } else {
-                            if (licenseKey.startsWith("\u007B")) {
+                            if (licenseKey.startsWith("{")) {
                                 val parsedKeys = parseLicenseKeysMap(licenseKey)
                                 if (parsedKeys.isNotEmpty()) {
                                     bufferedDrmKeys = parsedKeys

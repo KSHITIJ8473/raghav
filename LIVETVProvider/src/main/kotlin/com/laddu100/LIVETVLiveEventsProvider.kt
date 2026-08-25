@@ -1,6 +1,7 @@
 package com.laddu100
 
 import android.util.Base64
+import android.util.Log
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.AppUtils.toJson
@@ -18,7 +19,7 @@ import kotlin.Pair
 import okhttp3.OkHttpClient
 
 class LIVETVLiveEventsProvider(
-    private val customName: String = "LIVE TV Live Events",
+    private val customName: String = "⚡LIVE TV Live Events",
     private val customCatLink: String? = null
 ) : MainAPI() {
 
@@ -54,9 +55,9 @@ class LIVETVLiveEventsProvider(
             val start = info.startTime?.let { fmt.parse(it)?.time }
             val end = info.endTime?.let { fmt.parse(it)?.time }
             when {
-                end != null && now >= end -> "\u2705"
-                start != null && now >= start -> "\uD83D\uDD34"
-                start != null && now < start -> "\uD83D\uDD51"
+                end != null && now >= end -> "✅"
+                start != null && now >= start -> "🔴"
+                start != null && now < start -> "🔜"
                 else -> ""
             }
         } catch (_: Exception) {
@@ -147,14 +148,14 @@ class LIVETVLiveEventsProvider(
         val pages = grouped
             .map { (category, catEvents) ->
                 val icon = when (category.lowercase()) {
-                    "cricket" -> "\uD83C\uDFCF"
-                    "football" -> "\u26BD"
-                    "basketball" -> "\uD83C\uDFC0"
-                    "ice hockey" -> "\uD83C\uDFD2"
-                    "boxing" -> "\uD83E\uDD4A"
-                    "motorsport" -> "\uD83C\uDFCE"
-                    "tennis" -> "\uD83C\uDFBE"
-                    else -> "\uD83D\uDCFA"
+                    "cricket" -> "🏏"
+                    "football" -> "⚽"
+                    "basketball" -> "🏀"
+                    "ice hockey" -> "🏒"
+                    "boxing" -> "🥊"
+                    "motorsport" -> "🏎️"
+                    "tennis" -> "🎾"
+                    else -> "📺"
                 }
                 val items = catEvents
                     .sortedByDescending { isEventLive(it) }
@@ -229,19 +230,19 @@ class LIVETVLiveEventsProvider(
         val info = data.eventInfo
         val plot = buildString {
             info?.let { i ->
-                i.eventType?.let { append("\uD83C\uDFC6 $it\n") }
-                i.eventName?.let { append("\uD83C\uDFAF $it\n") }
+                i.eventType?.let { append("📌 $it\n") }
+                i.eventName?.let { append("🏆 $it\n") }
                 i.startTime?.let {
                     try {
                         val df = SimpleDateFormat("yyyy/MM/dd HH:mm:ss Z", Locale.US)
                         val disp = SimpleDateFormat("MMM dd, yyyy HH:mm", Locale.US)
-                        df.parse(it)?.let { d -> append("\uD83D\uDD52 ${disp.format(d)}\n") }
+                        df.parse(it)?.let { d -> append("🕐 ${disp.format(d)}\n") }
                     } catch (_: Exception) {
-                        append("\uD83D\uDD52 $it\n")
+                        append("🕐 $it\n")
                     }
                 }
             }
-            append("\n\uD83D\uDCE1 Available Servers: ${data.formats.size}")
+            append("\n📡 Available Servers: ${data.formats.size}")
         }
         return newLiveStreamLoadResponse(data.title, url, url) {
             this.posterUrl = data.poster
@@ -314,7 +315,7 @@ class LIVETVLiveEventsProvider(
                     }
                 }
             } catch (e: Exception) {
-                e.printStackTrace()
+                Log.e("LIVETV", "stream: ${e.message}")
             }
         }
         return true

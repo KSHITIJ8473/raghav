@@ -197,7 +197,6 @@ class LIVETV(
                     )
                 )
             )
-            .addInterceptor(LoggingInterceptor())
             .build()
 
         val json = "{\"kids\":[\"$kid\"],\"type\":\"temporary\"}"
@@ -414,9 +413,6 @@ class LIVETV(
                     }
                 }
 
-                // No KID in the MPD or no key returned by the license server:
-                // pass the license URL through so the player runs the license
-                // exchange itself instead of guessing a key.
                 callback.invoke(
                     newDrmExtractorLink(
                         this.name, this.name, loadData.url,

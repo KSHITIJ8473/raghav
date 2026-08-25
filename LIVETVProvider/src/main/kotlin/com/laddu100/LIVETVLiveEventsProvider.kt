@@ -16,7 +16,9 @@ import java.text.SimpleDateFormat
 import java.util.Locale
 import java.util.concurrent.TimeUnit
 import kotlin.Pair
+import okhttp3.Interceptor
 import okhttp3.OkHttpClient
+import okhttp3.Response
 
 class LIVETVLiveEventsProvider(
     private val customName: String = "⚡LIVE TV Live Events",
@@ -322,12 +324,13 @@ class LIVETVLiveEventsProvider(
     }
 
     private fun parseStreamLink(link: String): Pair<String, Map<String, String>> {
-        val headers = linkedMapOf<String, String>()
         if (!link.contains("|")) {
-            return Pair(link, headers)
+            val url = link.replace("%2F", "/")
+            return Pair(url, emptyMap())
         }
         val parts = link.split("|", limit = 2)
-        val url = parts[0]
+        var url = parts[0].trim().replace("%2F", "/")
+        val headers = linkedMapOf<String, String>()
         if (parts.size > 1) {
             val headerPart = parts[1]
             headerPart.split("&").forEach { headerPair ->
@@ -353,5 +356,24 @@ class LIVETVLiveEventsProvider(
         val bytes = hex.replace("-", "").chunked(2)
             .map { it.toInt(16).toByte() }.toByteArray()
         return Base64.encodeToString(bytes, Base64.URL_SAFE or Base64.NO_PADDING or Base64.NO_WRAP)
+    }
+
+    @Suppress("ObjectLiteralToLambda")
+    override fun getVideoInterceptor(extractorLink: ExtractorLink): Interceptor? {
+        return object : Interceptor {
+            override fun intercept(chain: Interceptor.Chain): Response {
+                var request = chain.request()
+                val fixedUrl = request.url.toString()
+                    .replace(Regex("(?i)%2f"), "/")
+                request = request.newBuilder()
+                    .url(fixedUrl)
+                    .header(
+                        "User-Agent",
+                        "Mozilla/5.0 (Linux; Android 10; Pixel 3 XL) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36"
+                    )
+                    .build()
+                return chain.proceed(request)
+            }
+        }
     }
 }

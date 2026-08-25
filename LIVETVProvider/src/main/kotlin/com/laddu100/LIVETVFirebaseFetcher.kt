@@ -13,7 +13,7 @@ import java.util.concurrent.TimeUnit
 
 object LIVETVFirebaseFetcher {
 
-    private const val PACKAGE_NAME = "com.livetv.tv"
+    private const val PACKAGE_NAME = "com.playz.tv"
     private val API_KEY get() = BuildConfig.FB_API_KEY
     private val APP_ID get() = BuildConfig.FB_APP_ID
     private val PROJECT_NUMBER get() = BuildConfig.FB_PROJECT_NUMBER

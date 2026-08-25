@@ -130,10 +130,9 @@ object LIVETVProviderManager {
     }
 
     private suspend fun getBaseUrl(): String {
-        cachedBaseUrl?.let { Log.d("LIVETV", "getBaseUrl: cached=$it"); return it }
+        cachedBaseUrl?.let { return it }
 
         val firebaseUrl = LIVETVFirebaseFetcher.getBaseApiUrl()
-        Log.d("LIVETV", "getBaseUrl: firebase=$firebaseUrl")
         if (!firebaseUrl.isNullOrBlank()) {
             cachedBaseUrl = firebaseUrl
             return firebaseUrl
@@ -147,7 +146,6 @@ object LIVETVProviderManager {
                     .head()
                     .build()
                 val resp = client.newCall(req).execute()
-                Log.d("LIVETV", "getBaseUrl: HEAD $url -> ${resp.code}")
                 if (resp.code < 500) {
                     cachedBaseUrl = url
                     return url
@@ -157,7 +155,6 @@ object LIVETVProviderManager {
         }
 
         cachedBaseUrl = DEFAULT_BASE_URLS.first()
-        Log.d("LIVETV", "getBaseUrl: fallback to ${cachedBaseUrl!!}")
         return cachedBaseUrl!!
     }
 
@@ -172,14 +169,12 @@ object LIVETVProviderManager {
             val response = client.newCall(request).execute()
             if (response.isSuccessful) {
                 val body = response.body.string()
-                Log.d("LIVETV", "fetchDecrypted: $url bodyLen=${body.length}")
                 if (body.isNotBlank()) LIVETVCryptoUtils.decryptLIVETV(body.trim()) else null
             } else {
-                Log.d("LIVETV", "fetchDecrypted: HTTP ${response.code} for $url")
                 null
             }
         } catch (e: Exception) {
-            Log.d("LIVETV", "fetchDecrypted: exception for $url - ${e.message}")
+            Log.e("LIVETV", "fetchDecrypted error for $url: ${e.message}")
             null
         }
     }
@@ -187,10 +182,8 @@ object LIVETVProviderManager {
     suspend fun fetchProviders(): List<Map<String, Any>> = withContext(Dispatchers.IO) {
         try {
             val decrypted = fetchDecrypted("categories.txt")
-            Log.d("LIVETV", "fetchProviders: decryptedLen=${decrypted?.length}")
             if (!decrypted.isNullOrBlank()) {
                 val wrappers = parseJson<List<LIVETVCategoryWrapper>>(decrypted)
-                Log.d("LIVETV", "fetchProviders: parsed ${wrappers.size} category wrappers")
                 return@withContext wrappers.mapIndexedNotNull { index, wrapper ->
                     try {
                         val cat = parseJson<LIVETVCategoryData>(wrapper.cat)
@@ -204,13 +197,13 @@ object LIVETVProviderManager {
                             )
                         } else null
                     } catch (e: Exception) {
-                        Log.d("LIVETV", "Failed to parse category at $index - ${e.message}")
+                        Log.e("LIVETV", "category parse failed at $index: ${e.message}")
                         null
                     }
                 }
             }
         } catch (e: Exception) {
-            Log.d("LIVETV", "fetchProviders exception - ${e.message}")
+            Log.e("LIVETV", "fetchProviders failed: ${e.message}")
         }
         emptyList()
     }
@@ -248,14 +241,14 @@ object LIVETVProviderManager {
                             } ?: emptyList()
                         )
                     } catch (e: Exception) {
-                        Log.d("LIVETV", "Failed to parse event at $index - ${e.message}")
+                        Log.e("LIVETV", "event parse failed at $index: ${e.message}")
                         null
                     }
                 }
                 return@withContext events.filter { it.publish == 1 }
             }
         } catch (e: Exception) {
-            Log.d("LIVETV", "fetchLiveEvents exception - ${e.message}")
+            Log.e("LIVETV", "fetchLiveEvents failed: ${e.message}")
         }
         emptyList()
     }
@@ -295,14 +288,14 @@ object LIVETVProviderManager {
                                 }
                             )
                         } catch (e: Exception) {
-                            Log.d("LIVETV", "Failed to parse custom event at $index - ${e.message}")
+                            Log.e("LIVETV", "custom event parse failed at $index: ${e.message}")
                             null
                         }
                     }
                     return@withContext events.filter { it.publish == 1 }
                 }
             } catch (e: Exception) {
-                Log.d("LIVETV", "fetchCustomEvents exception - ${e.message}")
+                Log.e("LIVETV", "fetchCustomEvents failed: ${e.message}")
             }
             emptyList()
         }
@@ -315,7 +308,7 @@ object LIVETVProviderManager {
                 return@withContext parseJson<List<LIVEStreamUrl>>(decrypted)
             }
         } catch (e: Exception) {
-            Log.d("LIVETV", "fetchChannelStreams exception for $slug - ${e.message}")
+            Log.e("LIVETV", "fetchChannelStreams failed for $slug: ${e.message}")
         }
         null
     }

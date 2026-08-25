@@ -140,13 +140,11 @@ class LIVETVLiveEventsProvider(
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        Log.d("LIVETV", "getMainPage: name=$name customCatLink=$customCatLink")
         val events = if (customCatLink != null) {
             LIVETVProviderManager.fetchCustomEvents(customCatLink)
         } else {
             LIVETVProviderManager.fetchLiveEvents()
         }
-        Log.d("LIVETV", "getMainPage: $name events=${events.size}")
         val grouped = events.groupBy { it.eventInfo?.eventCat ?: it.cat ?: "Other" }
 
         val pages = grouped

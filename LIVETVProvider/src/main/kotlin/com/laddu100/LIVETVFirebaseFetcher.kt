@@ -73,7 +73,7 @@ object LIVETVFirebaseFetcher {
             }
             null
         } catch (e: Exception) {
-            Log.d("LIVETV", "Firebase fetch failed - ${e.message}")
+            Log.e("LIVETV", "Firebase fetch failed: ${e.message}")
             null
         }
     }

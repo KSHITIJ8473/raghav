@@ -130,9 +130,10 @@ object LIVETVProviderManager {
     }
 
     private suspend fun getBaseUrl(): String {
-        cachedBaseUrl?.let { return it }
+        cachedBaseUrl?.let { Log.d("LIVETV", "getBaseUrl: cached=$it"); return it }
 
         val firebaseUrl = LIVETVFirebaseFetcher.getBaseApiUrl()
+        Log.d("LIVETV", "getBaseUrl: firebase=$firebaseUrl")
         if (!firebaseUrl.isNullOrBlank()) {
             cachedBaseUrl = firebaseUrl
             return firebaseUrl
@@ -146,6 +147,7 @@ object LIVETVProviderManager {
                     .head()
                     .build()
                 val resp = client.newCall(req).execute()
+                Log.d("LIVETV", "getBaseUrl: HEAD $url -> ${resp.code}")
                 if (resp.code < 500) {
                     cachedBaseUrl = url
                     return url
@@ -155,6 +157,7 @@ object LIVETVProviderManager {
         }
 
         cachedBaseUrl = DEFAULT_BASE_URLS.first()
+        Log.d("LIVETV", "getBaseUrl: fallback to ${cachedBaseUrl!!}")
         return cachedBaseUrl!!
     }
 
@@ -169,13 +172,14 @@ object LIVETVProviderManager {
             val response = client.newCall(request).execute()
             if (response.isSuccessful) {
                 val body = response.body.string()
+                Log.d("LIVETV", "fetchDecrypted: $url bodyLen=${body.length}")
                 if (body.isNotBlank()) LIVETVCryptoUtils.decryptLIVETV(body.trim()) else null
             } else {
-                Log.d("LIVETV", "HTTP ${response.code} fetching $url")
+                Log.d("LIVETV", "fetchDecrypted: HTTP ${response.code} for $url")
                 null
             }
         } catch (e: Exception) {
-            Log.d("LIVETV", "Exception fetching $url - ${e.message}")
+            Log.d("LIVETV", "fetchDecrypted: exception for $url - ${e.message}")
             null
         }
     }
@@ -183,8 +187,10 @@ object LIVETVProviderManager {
     suspend fun fetchProviders(): List<Map<String, Any>> = withContext(Dispatchers.IO) {
         try {
             val decrypted = fetchDecrypted("categories.txt")
+            Log.d("LIVETV", "fetchProviders: decryptedLen=${decrypted?.length}")
             if (!decrypted.isNullOrBlank()) {
                 val wrappers = parseJson<List<LIVETVCategoryWrapper>>(decrypted)
+                Log.d("LIVETV", "fetchProviders: parsed ${wrappers.size} category wrappers")
                 return@withContext wrappers.mapIndexedNotNull { index, wrapper ->
                     try {
                         val cat = parseJson<LIVETVCategoryData>(wrapper.cat)

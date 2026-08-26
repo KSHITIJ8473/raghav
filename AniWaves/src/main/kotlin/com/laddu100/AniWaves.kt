@@ -48,8 +48,6 @@ class AniWaves : MainAPI() {
         "14" to "DatSaV"
     )
 
-    // Browse paths verified on the live site. Path sections paginate via
-    // "/<path>/page/N", filter sections via "?lang=...&page=N".
     override val mainPage = mainPageOf(
         "updated" to "Recently Updated",
         "trending" to "Trending",
@@ -70,8 +68,6 @@ class AniWaves : MainAPI() {
         val doc = app.get(url).document
         val home = doc.select(".ani.items .item").mapNotNull { it.toSearchResponse() }
 
-        // The pagination bar links to the final page with "»", so any link
-        // pointing past the current page means more pages exist.
         val hasNext = doc.select("ul.pagination a.page-link").mapNotNull { link ->
             pagePattern.find(link.attr("href"))?.groupValues?.get(1)?.toIntOrNull()
         }.any { it > page }
@@ -164,25 +160,20 @@ class AniWaves : MainAPI() {
                 val epNum = ep.attr("data-num").toIntOrNull() ?: continue
                 if (!seenEp.add(epNum)) continue
 
-                // data-ids holds the raw "id&eps=n" pair; the server-list
-                // endpoint expects the & as a separate query param, so keep
-                // it unencoded.
                 val dataIds = ep.attr("data-ids").ifBlank { "$animeId&eps=$epNum" }
-                // The human-readable episode name sits on the parent
-                // <li title="Release: <date> GMT - <name>">.
                 val epName = ep.parent()?.attr("title")
                     ?.substringAfter("GMT - ", "")
                     ?.trim()
                     ?.takeIf { it.isNotEmpty() }
 
                 if (ep.attr("data-sub") == "1") {
-                    subEpisodes.add(newEpisode("sub|$animeId|$epNum|$dataIds|$url") {
+                    subEpisodes.add(newEpisode("$url|sub|$animeId|$epNum|$dataIds") {
                         this.name = epName
                         this.episode = epNum
                     })
                 }
                 if (ep.attr("data-dub") == "1") {
-                    dubEpisodes.add(newEpisode("dub|$animeId|$epNum|$dataIds|$url") {
+                    dubEpisodes.add(newEpisode("$url|dub|$animeId|$epNum|$dataIds") {
                         this.name = epName
                         this.episode = epNum
                     })
@@ -212,9 +203,11 @@ class AniWaves : MainAPI() {
         val parts = data.split("|")
         if (parts.size < 4) return@coroutineScope false
 
-        val dubOrSub = parts[0]
-        val dataIds = parts[3]
-        val watchUrl = parts.getOrNull(4) ?: "$mainUrl/watch/"
+        val dubOrSub = parts[1]
+        val animeId = parts[2]
+        val epNum = parts[3]
+        val dataIds = parts[4].replace("&amp;", "&")
+        val watchUrl = parts[0]
 
         val serverResponse = app.get(
             "$mainUrl/ajax/server/list?servers=$dataIds",

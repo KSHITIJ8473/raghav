@@ -185,13 +185,13 @@ class AniWaves : MainAPI() {
                     ?.takeIf { it.isNotEmpty() }
 
                 if (ep.attr("data-sub") == "1") {
-                    episodes.add(newEpisode("sub|$animeId|$epNum|$dataIds|$url") {
+                    episodes.add(newEpisode("$url|sub|$animeId|$epNum|$dataIds") {
                         this.name = epName ?: "Episode $epNum"
                         this.episode = epNum
                     })
                 }
                 if (ep.attr("data-dub") == "1") {
-                    dubEpisodes.add(newEpisode("dub|$animeId|$epNum|$dataIds|$url") {
+                    dubEpisodes.add(newEpisode("$url|dub|$animeId|$epNum|$dataIds") {
                         this.name = epName ?: "Episode $epNum"
                         this.episode = epNum
                     })
@@ -221,11 +221,11 @@ class AniWaves : MainAPI() {
         val parts = data.split("|")
         if (parts.size < 4) return@coroutineScope false
 
-        val dubOrSub = parts[0]
-        val animeId = parts[1]
-        val epNum = parts[2]
-        val dataIds = parts[3]
-        val watchUrl = parts.getOrNull(4) ?: "$mainUrl/watch/"
+        val dubOrSub = parts[1]
+        val animeId = parts[2]
+        val epNum = parts[3]
+        val dataIds = parts[4].replace("&amp;", "&")
+        val watchUrl = parts[0]
 
         val serverResponse = app.get(
             "$mainUrl/ajax/server/list?servers=$dataIds",

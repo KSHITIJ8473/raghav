@@ -1,5 +1,6 @@
 package com.laddu100.raghavanime
 
+import com.lagradost.api.Log
 import com.lagradost.cloudstream3.DubStatus
 import com.lagradost.cloudstream3.Episode
 import com.lagradost.cloudstream3.HomePageResponse
@@ -52,6 +53,7 @@ class Anineko : MainAPI() {
         request: MainPageRequest
     ): HomePageResponse {
         mainUrl = FirebaseDomainHelper.getDomain("anineko") ?: mainUrl
+        Log.d("RaghavAnime", "[Anineko] getMainPage '${request.name}' page $page on $mainUrl")
         val url = "$mainUrl${request.data}?page=$page"
         val doc = app.get(url).document
 
@@ -76,13 +78,17 @@ class Anineko : MainAPI() {
             }
         }
 
+        Log.d("RaghavAnime", "[Anineko] getMainPage '${request.name}' parsed ${list.size} items")
+
         return newHomePageResponse(request.name, list)
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
         mainUrl = FirebaseDomainHelper.getDomain("anineko") ?: mainUrl
+        Log.d("RaghavAnime", "[Anineko] search '$query' on $mainUrl")
         val url = "$mainUrl/browser?keyword=${query}"
         val doc = app.get(url).document
+        Log.d("RaghavAnime", "[Anineko] search '$query' found ${doc.select(".nv-anime-card").size} cards")
 
         return doc.select(".nv-anime-card").mapNotNull { element ->
             val href = element.selectFirst("a.nv-anime-thumb")?.attr("href") ?: return@mapNotNull null
@@ -108,9 +114,11 @@ class Anineko : MainAPI() {
 
     override suspend fun load(url: String): LoadResponse? {
         mainUrl = FirebaseDomainHelper.getDomain("anineko") ?: mainUrl
+        Log.d("RaghavAnime", "[Anineko] load '$url'")
         val doc = app.get(url).document
 
         val title = doc.selectFirst("h1")?.text() ?: return null
+        Log.d("RaghavAnime", "[Anineko] loaded page for '$title'")
         val altTitle = doc.selectFirst(".nv-info-alt-title")?.text()
         val poster = doc.selectFirst("aside.nv-info-poster img")?.attr("src")
 
@@ -138,12 +146,14 @@ class Anineko : MainAPI() {
 
         val searchTitle = altTitle ?: title
         val anilistId = getAnilistId(searchTitle)
+        Log.d("RaghavAnime", "[Anineko] anilist id for '$searchTitle': ${anilistId ?: "not found"}")
         var animeMetaData: MetaAnimeData? = null
         if (anilistId != null) {
             val aniZipUrl = "https://api.ani.zip/mappings?anilist_id=$anilistId"
             val aniZipResponse = app.get(aniZipUrl).text
             animeMetaData = parseAnimeData(aniZipResponse)
         }
+        Log.d("RaghavAnime", "[Anineko] ani.zip metadata parsed=${animeMetaData != null} (${animeMetaData?.episodes?.size ?: 0} meta episodes)")
 
         val subEpisodes = mutableListOf<Episode>()
         val dubEpisodes = mutableListOf<Episode>()
@@ -194,6 +204,7 @@ class Anineko : MainAPI() {
             }
         }
 
+        Log.d("RaghavAnime", "[Anineko] parsed ${subEpisodes.size} sub / ${dubEpisodes.size} dub episodes for '$title'")
         val fanartUrl = animeMetaData?.images?.firstOrNull { it.coverType == "Fanart" }?.url ?: background
 
         return newAnimeLoadResponse(title, url, tvType) {
@@ -217,9 +228,11 @@ class Anineko : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
+        Log.d("RaghavAnime", "[Anineko] loadLinks data '${data.take(80)}'")
         val parts = data.split("|")
         val url = parts[0]
         val audioType = parts.getOrNull(1) ?: "sub"
+        Log.d("RaghavAnime", "[Anineko] resolving '$audioType' episode at $url")
 
         val doc = app.get(url).document
 
@@ -232,12 +245,15 @@ class Anineko : MainAPI() {
         } else {
             listOf(doc)
         }
+        if (panels.isEmpty()) Log.d("RaghavAnime", "[Anineko] no server panels found in page, using whole document")
+        Log.d("RaghavAnime", "[Anineko] ${panels.size} panels total, ${targetPanels.size} matched audio '$audioType'")
 
         targetPanels.amap { panel ->
             panel.select(".server-video").amap { serverBtn ->
                 val videoUrl = serverBtn.attr("data-video")
                 val serverName = serverBtn.ownText().trim()
                 val typeName = serverBtn.selectFirst("span")?.text()
+                Log.d("RaghavAnime", "[Anineko] server '$serverName' video: ${videoUrl.take(80)}")
 
                 val subMatch = Regex("""(?:sub|caption_1|c1_file)=([^&]+)""").find(videoUrl)
                 if (subMatch != null) {
@@ -265,6 +281,7 @@ class Anineko : MainAPI() {
                 }
             }
 
+                Log.d("RaghavAnime", "[Anineko] server '$serverName' m3u8: ${m3u8Url?.take(80) ?: "none"} (embed html len ${embedDoc.length})")
                 if (m3u8Url != null) {
                     val sourceName = if (typeName != null) "$serverName - $typeName" else serverName
                     generateM3u8(
@@ -274,6 +291,7 @@ class Anineko : MainAPI() {
                     ).forEach(callback)
                 } else if (serverName.contains("HD-")) {
                     val host = Regex("""https?://([^/]+)""").find(finalUrl)?.groupValues?.get(1) ?: ""
+                    Log.d("RaghavAnime", "[Anineko] server '$serverName' m3u8 not found, trying StreamWish extractor (host $host)")
                     val extractor = object : StreamWishExtractor() {
                         override var mainUrl = "https://$host"
                         override var name = serverName
@@ -282,6 +300,7 @@ class Anineko : MainAPI() {
                     extractor.getUrl(finalUrl, "$mainUrl/", subtitleCallback) { link ->
                         links.add(link)
                     }
+                    Log.d("RaghavAnime", "[Anineko] StreamWish '$serverName' produced ${links.size} links")
                     links.forEach { link ->
                         val newLink = newExtractorLink(
                             source = link.source,
@@ -300,6 +319,7 @@ class Anineko : MainAPI() {
                     loadExtractor(finalUrl, "$mainUrl/", subtitleCallback) { link ->
                         links.add(link)
                     }
+                    Log.d("RaghavAnime", "[Anineko] loadExtractor for '$serverName' produced ${links.size} links")
                     links.forEach { link ->
                         val newLink = newExtractorLink(
                             source = link.source,
@@ -317,6 +337,7 @@ class Anineko : MainAPI() {
             }
         }
 
+        Log.d("RaghavAnime", "[Anineko] loadLinks done for '$audioType' episode")
         return true
     }
 }

@@ -47,12 +47,16 @@ class RaghavAnimo : MainAPI() {
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         mainUrl = FirebaseDomainHelper.getDomain("animo") ?: mainUrl
+        Log.d("RaghavAnime", "[Animo] getMainPage page=$page name=${request.name}")
         return try {
             val url = "$apiUrl/anime/${request.data}?page=$page&limit=20"
             val items = parseAnimeList(app.get(url, headers = apiHeaders).text)
+            Log.d("RaghavAnime", "[Animo] getMainPage ${request.name}: parsed ${items.size} items")
             val home = items.mapNotNull { it.toSearchResponse() }
+            Log.d("RaghavAnime", "[Animo] getMainPage ${request.name}: ${home.size} results")
             newHomePageResponse(request.name, home, hasNext = home.size == 20)
         } catch (e: Exception) {
+            Log.e("RaghavAnime", "[Animo] getMainPage ${request.name} failed: ${e.message}")
             newHomePageResponse(request.name, emptyList(), hasNext = false)
         }
     }
@@ -62,18 +66,22 @@ class RaghavAnimo : MainAPI() {
         if (trimmed.startsWith("[")) parseJson(text)
         else parseJson<SearchResponseData>(text).data ?: emptyList()
     } catch (e: Exception) {
+        Log.e("RaghavAnime", "[Animo] parseAnimeList failed (len=${text.length}): ${e.message}")
         emptyList()
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
         mainUrl = FirebaseDomainHelper.getDomain("animo") ?: mainUrl
         if (query.isBlank()) return emptyList()
+        Log.d("RaghavAnime", "[Animo] search: query='$query'")
         return try {
             val encoded = URLEncoder.encode(query, "UTF-8")
             val url = "$apiUrl/anime/search?keyword=$encoded&page=1&limit=20"
             val resp = parseJson<SearchResponseData>(app.get(url, headers = apiHeaders).text)
+            Log.d("RaghavAnime", "[Animo] search: ${resp.data?.size ?: 0} results")
             resp.data?.mapNotNull { it.toSearchResponse() } ?: emptyList()
         } catch (e: Exception) {
+            Log.e("RaghavAnime", "[Animo] search failed: ${e.message}")
             emptyList()
         }
     }
@@ -81,10 +89,12 @@ class RaghavAnimo : MainAPI() {
     override suspend fun load(url: String): LoadResponse? {
         mainUrl = FirebaseDomainHelper.getDomain("animo") ?: mainUrl
         val animeId = url.substringAfterLast("/").toIntOrNull() ?: return null
+        Log.d("RaghavAnime", "[Animo] load: animeId=$animeId")
 
         val anime = try {
             parseJson<AnimeDetails>(app.get("$apiUrl/anime/$animeId", headers = apiHeaders).text)
         } catch (e: Exception) {
+            Log.e("RaghavAnime", "[Animo] load: anime details fetch failed for $animeId: ${e.message}")
             return null
         }
         val title = anime.titles?.english ?: anime.titles?.romaji ?: return null
@@ -94,8 +104,10 @@ class RaghavAnimo : MainAPI() {
                 app.get("$apiUrl/anime/$animeId/episodes", headers = apiHeaders).text
             ).data ?: emptyList()
         } catch (e: Exception) {
+            Log.e("RaghavAnime", "[Animo] load: episodes fetch failed for $animeId: ${e.message}")
             emptyList()
         }
+        Log.d("RaghavAnime", "[Animo] load: '$title' episodes=${episodes.size}")
 
         val subEps = mutableListOf<Episode>()
         val dubEps = mutableListOf<Episode>()
@@ -129,6 +141,7 @@ class RaghavAnimo : MainAPI() {
         val year = anime.air?.start?.substringBefore("-")?.toIntOrNull()
         val finalType = if (tvType == TvType.AnimeMovie && dubEps.isNotEmpty()) TvType.Anime else tvType
 
+        Log.d("RaghavAnime", "[Animo] load done: '$title' sub=${subEps.size} dub=${dubEps.size}")
         return newAnimeLoadResponse(title, url, finalType) {
             this.posterUrl = anime.images?.poster
             this.plot = anime.synopsis
@@ -149,10 +162,12 @@ class RaghavAnimo : MainAPI() {
         val epData = try {
             parseJson<EpisodeData>(data)
         } catch (e: Exception) {
+            Log.e("RaghavAnime", "[Animo] loadLinks: failed to parse episode data: ${e.message}")
             return false
         }
 
         val type = epData.streamType
+        Log.d("RaghavAnime", "[Animo] loadLinks: animeId=${epData.animeId} ep=${epData.episodeId} type=$type ani='${epData.ani}'")
         val query = "?k=1&autoPlay=1&skipIntro=1&skipOutro=1"
 
         val embeds = mutableListOf(
@@ -163,15 +178,19 @@ class RaghavAnimo : MainAPI() {
             embeds.add("hd-1" to "$cdnUrl/embed/hd-1/ani/${epData.ani}/$type$query")
             embeds.add("hd-2" to "$cdnUrl/embed/hd-2/ani/${epData.ani}/$type$query")
         }
+        Log.d("RaghavAnime", "[Animo] loadLinks: ${embeds.size} embeds [${embeds.joinToString { it.first }}]")
 
         var found = false
         var subsAdded = false
 
         for ((key, embedUrl) in embeds) {
             try {
+                Log.d("RaghavAnime", "[Animo] trying embed $key: ${embedUrl.take(120)}")
                 if (!resolveSource(embedUrl, key, type, subsAdded, subtitleCallback, callback)) {
+                    Log.w("RaghavAnime", "[Animo] embed $key resolved no links")
                     continue
                 }
+                Log.d("RaghavAnime", "[Animo] embed $key OK")
                 found = true
                 subsAdded = true
             } catch (e: Exception) {
@@ -179,6 +198,7 @@ class RaghavAnimo : MainAPI() {
             }
         }
 
+        Log.d("RaghavAnime", "[Animo] loadLinks done: found=$found")
         return found
     }
 
@@ -195,10 +215,12 @@ class RaghavAnimo : MainAPI() {
             "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             "Accept-Language" to "en-US,en;q=0.7"
         ), timeout = 15_000L)
+        Log.d("RaghavAnime", "[Animo] resolveSource $key: embed code=${embedResp.code} len=${embedResp.text.length}")
         if (embedResp.code != 200) return false
 
         val token = Regex("getSources\\?t=([A-Za-z0-9_.-]+)")
             .find(embedResp.text)?.groupValues?.get(1) ?: return false
+        Log.d("RaghavAnime", "[Animo] resolveSource $key: token=${token.take(40)}")
 
         val reqHeaders = mapOf(
             "User-Agent" to ua,
@@ -210,16 +232,20 @@ class RaghavAnimo : MainAPI() {
         )
 
         val sourcesResp = app.get("$cdnUrl/stream/getSources?t=$token", headers = reqHeaders, timeout = 15_000L)
+        Log.d("RaghavAnime", "[Animo] resolveSource $key: sources code=${sourcesResp.code}")
         if (sourcesResp.code != 200) return false
 
         val sourcesText = sourcesResp.text
+        Log.d("RaghavAnime", "[Animo] resolveSource $key: sources len=${sourcesText.length}")
         if (sourcesText.contains("invalid token")) return false
 
         val sources = parseJson<GetSourcesResponse>(sourcesText)
         val masterFile = sources.sources?.firstOrNull()?.file ?: return false
         val masterUrl = if (masterFile.startsWith("http")) masterFile else "$cdnUrl/${masterFile.removePrefix("/")}"
+        Log.d("RaghavAnime", "[Animo] resolveSource $key: master=${masterUrl.take(120)} tracks=${sources.tracks?.size ?: 0}")
 
         val masterResp = app.get(masterUrl, headers = reqHeaders, timeout = 15_000L)
+        Log.d("RaghavAnime", "[Animo] resolveSource $key: master code=${masterResp.code} len=${masterResp.text.length}")
         if (masterResp.code != 200 || !masterResp.text.trim().startsWith("#EXTM3U")) return false
 
         val playHeaders = mapOf(
@@ -230,6 +256,7 @@ class RaghavAnimo : MainAPI() {
         )
 
         val label = "$name $key ($type)"
+        Log.d("RaghavAnime", "[Animo] link: $label ${masterUrl.take(120)}")
         callback.invoke(
             newExtractorLink(label, label, masterUrl, type = ExtractorLinkType.M3U8) {
                 this.referer = embedUrl
@@ -238,9 +265,11 @@ class RaghavAnimo : MainAPI() {
         )
 
         if (!subsAlreadyAdded) {
+            Log.d("RaghavAnime", "[Animo] resolveSource $key: adding ${sources.tracks?.size ?: 0} subtitle tracks")
             sources.tracks?.forEach { t ->
                 val file = t.file ?: return@forEach
                 val subUrl = if (file.startsWith("http")) file else "$cdnUrl/${file.removePrefix("/")}"
+                Log.d("RaghavAnime", "[Animo] subtitle: ${t.label ?: "English"} ${subUrl.take(120)}")
                 subtitleCallback.invoke(newSubtitleFile(t.label ?: "English", subUrl) {
                     this.headers = playHeaders
                 })

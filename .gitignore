@@ -8,6 +8,7 @@
 /captures
 .externalNativeBuild
 .cxx
+.kotlin
 local.properties
 .vscode
 damitv_monetization/build_log.txt

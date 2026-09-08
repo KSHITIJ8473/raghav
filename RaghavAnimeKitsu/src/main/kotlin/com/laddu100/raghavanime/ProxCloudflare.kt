@@ -9,11 +9,9 @@ import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
-import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
-import android.view.Window
 import android.webkit.CookieManager
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
@@ -25,11 +23,9 @@ import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
-import androidx.fragment.app.FragmentActivity
 import com.google.android.material.bottomsheet.BottomSheetBehavior
 import com.google.android.material.bottomsheet.BottomSheetDialog
 import com.google.android.material.bottomsheet.BottomSheetDialogFragment
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.CommonActivity
 import com.lagradost.cloudstream3.app
 import com.lagradost.nicehttp.NiceResponse
@@ -40,21 +36,25 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlin.coroutines.resume
 
-private const val TAG = "AniDB_CFBypass"
+// Cloudflare bypass for prox.anikage.cc, the resolver the site's player uses for the
+// token-only servers (kiwi/uwu/megg/dib/wave). A WebView solves the challenge once and
+// the cf_clearance cookie + matching UA are attached to every emitted prox link.
+private const val PROX_CF_TAG = "AniKage_ProxCF"
 
-private val CF_BLOCKER_PHRASES = listOf(
+private val PROX_CF_BLOCKER_PHRASES = listOf(
     "just a moment", "checking your browser", "ddos-guard",
     "attention required", "verify you are human", "cloudflare",
     "challenge-platform", "cf-ray", "enable javascript"
 )
 
-private val CF_CHALLENGE_TITLES = listOf(
+private val PROX_CF_CHALLENGE_TITLES = listOf(
     "just a moment", "just a moment...", "checking your browser",
-    "attention required", "ddos-guard", "one more step"
+    "attention required", "ddos-guard", "one more step",
+    "performing security verification"
 )
 
-private object AniDbCFStore {
-    private const val PREFS_NAME = "AniDbCFBypass"
+object ProxCFStore {
+    private const val PREFS_NAME = "AniKageProxCFBypass"
     private const val KEY_COOKIES = "cf_cookies"
     private const val KEY_UA = "cf_user_agent"
     private const val KEY_HOST = "cf_cookie_host"
@@ -113,20 +113,20 @@ private object AniDbCFStore {
     fun hasValidCookies(): Boolean = getCookies() != null
 }
 
-fun isCloudflareBlocked(response: NiceResponse): Boolean {
+fun isProxCloudflareBlocked(response: NiceResponse): Boolean {
     if (response.code != 403 && response.code != 503) return false
     val body = response.text.lowercase()
-    return CF_BLOCKER_PHRASES.any { body.contains(it) }
+    return PROX_CF_BLOCKER_PHRASES.any { body.contains(it) }
 }
 
-private fun isChallengeTitle(title: String): Boolean {
+private fun isProxChallengeTitle(title: String): Boolean {
     val lower = title.lowercase()
-    return CF_CHALLENGE_TITLES.any { lower.contains(it) }
+    return PROX_CF_CHALLENGE_TITLES.any { lower.contains(it) }
 }
 
-private val cfBypassMutex = Mutex()
+private val proxBypassMutex = Mutex()
 
-class AniDbCFDialog(
+class ProxCFDialog(
     private val targetUrl: String,
     private val onFinished: ((Boolean) -> Unit)? = null
 ) : BottomSheetDialogFragment() {
@@ -160,13 +160,8 @@ class AniDbCFDialog(
 
             when {
                 cookieStr.contains("cf_clearance") -> saveCookiesAndDismiss(cookieStr)
-                cookieStr.contains("__ddg2_") || cookieStr.contains("__ddg1_") -> {
-                    if (pollElapsedMs >= 60000) saveCookiesAndDismiss(cookieStr)
-                    else scheduleNextPoll()
-                }
                 pollElapsedMs >= POLL_TIMEOUT_MS -> {
-                    Log.w("RaghavAnime", "[AniDb] CF: cookie poll timed out after ${pollElapsedMs / 1000}s for $targetHost")
-                    updateStatus("Timed out. Try solving the CAPTCHA then tap Bypass again.")
+                    updateStatus("Timed out. Try again after solving the verification.")
                 }
                 else -> scheduleNextPoll()
             }
@@ -213,7 +208,7 @@ class AniDbCFDialog(
         }
 
         root.addView(TextView(requireContext()).apply {
-            text = "AniDB – Cloudflare Bypass"
+            text = "AniKage – One-time verification"
             textSize = 18f
             setTextColor(Color.WHITE)
             typeface = android.graphics.Typeface.DEFAULT_BOLD
@@ -221,14 +216,14 @@ class AniDbCFDialog(
         })
 
         TextView(requireContext()).apply {
-            text = "Loading challenge page…"
+            text = "Loading verification page…"
             textSize = 13f
             setTextColor(Color.parseColor("#A0A0B0"))
             setPadding(0, 0, 0, (4 * dp).toInt())
         }.also { statusText = it; root.addView(it) }
 
         root.addView(TextView(requireContext()).apply {
-            text = "Solve any CAPTCHA shown below. The dialog will close automatically once done."
+            text = "The Kiwi/Uwu/Megg/Dib/Wave servers need a one-time browser check. Wait for it to finish – the dialog closes automatically."
             textSize = 11f
             setTextColor(Color.parseColor("#707080"))
             setPadding(0, 0, 0, (12 * dp).toInt())
@@ -292,9 +287,8 @@ class AniDbCFDialog(
                     if (cookiesSaved) return
                     val title = view?.title ?: ""
 
-                    if (isChallengeTitle(title)) {
-                        Log.d("RaghavAnime", "[AniDb] CF: challenge page detected (title '${title.take(40)}')")
-                        updateStatus("🔄 Challenge active – solve the CAPTCHA above")
+                    if (isProxChallengeTitle(title)) {
+                        updateStatus("Verification active – please wait for it to complete")
                         return
                     }
 
@@ -330,8 +324,7 @@ class AniDbCFDialog(
         handler.removeCallbacks(cookiePollRunnable)
 
         val ua = webView?.settings?.userAgentString ?: ""
-        AniDbCFStore.save(cookieStr, ua, targetHost)
-        Log.d("RaghavAnime", "[AniDb] CF: cookies saved for $targetHost (len ${cookieStr.length})")
+        ProxCFStore.save(cookieStr, ua, targetHost)
 
         updateStatus("Done! Cookies saved.")
 
@@ -347,7 +340,6 @@ class AniDbCFDialog(
         super.onDismiss(dialog)
         if (!cookiesSaved) {
             handler.removeCallbacks(cookiePollRunnable)
-            Log.w("RaghavAnime", "[AniDb] CF: dialog dismissed without cookies (bypass failed)")
             onFinished?.invoke(false)
         }
     }
@@ -375,27 +367,27 @@ class AniDbCFDialog(
     }
 }
 
-private suspend fun showCFBypassDialogAndWait(url: String): Boolean = withContext(Dispatchers.Main) {
+private suspend fun showProxCBypassDialogAndWait(url: String): Boolean = withContext(Dispatchers.Main) {
     val activity = CommonActivity.activity as? AppCompatActivity
     if (activity == null || activity.isFinishing || activity.isDestroyed) {
-        Log.e("RaghavAnime", "[AniDb] CF: no valid activity to show bypass dialog")
         return@withContext false
     }
     suspendCancellableCoroutine { cont ->
-        val dialog = AniDbCFDialog(url) { success ->
+        val dialog = ProxCFDialog(url) { success ->
             if (cont.isActive) cont.resume(success)
         }
         try {
-            dialog.show(activity.supportFragmentManager, "AniDbCFDialog")
+            dialog.show(activity.supportFragmentManager, "ProxCFDialog")
         } catch (e: Exception) {
-            Log.e("RaghavAnime", "[AniDb] CF: failed to show bypass dialog: ${e.message}")
             if (cont.isActive) cont.resume(false)
         }
         cont.invokeOnCancellation { dialog.dismissAllowingStateLoss() }
     }
 }
 
-suspend fun cfAppGet(
+// GET with auto Cloudflare-bypass; returns the response either way
+// ("bad url"/"invalid payload" app responses are informational, not fatal)
+suspend fun proxGet(
     url: String,
     headers: Map<String, String> = emptyMap()
 ): NiceResponse {
@@ -413,16 +405,21 @@ suspend fun cfAppGet(
         if (!h.containsKey("Accept-Language")) {
             h["Accept-Language"] = "en-US,en;q=0.5"
         }
+        if (!h.containsKey("Referer")) {
+            h["Referer"] = "https://anikage.cc/"
+        }
+        if (!h.containsKey("Origin")) {
+            h["Origin"] = "https://anikage.cc"
+        }
         h["sec-ch-ua-mobile"] = "?1"
         h["sec-ch-ua-platform"] = "\"Android\""
 
-        AniDbCFStore.getCookies()?.let { cookies ->
+        ProxCFStore.getCookies()?.let { cookies ->
             h["Cookie"] = cookies
         }
-        AniDbCFStore.getUserAgent()?.let { ua ->
+        ProxCFStore.getUserAgent()?.let { ua ->
             h["User-Agent"] = ua
         } ?: run {
-
             if (!h.containsKey("User-Agent")) {
                 h["User-Agent"] = "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
             }
@@ -436,23 +433,17 @@ suspend fun cfAppGet(
         throw e
     }
 
-    if (!isCloudflareBlocked(response)) return response
+    if (!isProxCloudflareBlocked(response)) return response
 
-
-    Log.d("RaghavAnime", "[AniDb] CF: Cloudflare block detected (code=${response.code}) for ${url.take(80)}")
-    cfBypassMutex.withLock {
-
-        val cachedCookies = AniDbCFStore.getCookies()
-        if (cachedCookies != null && AniDbCFStore.getHost() == targetHost) {
-            Log.d("RaghavAnime", "[AniDb] CF: have cached cookies for $targetHost, retrying with them")
+    proxBypassMutex.withLock {
+        val cachedCookies = ProxCFStore.getCookies()
+        if (cachedCookies != null && ProxCFStore.getHost() == targetHost) {
             response = try { app.get(url, headers = buildCfHeaders()) } catch (e: Exception) { throw e }
-            if (!isCloudflareBlocked(response)) return response
-            Log.d("RaghavAnime", "[AniDb] CF: still blocked after cached-cookie retry for $targetHost")
+            if (!isProxCloudflareBlocked(response)) return response
         }
 
-        AniDbCFStore.clear()
-        val bypassSuccess = showCFBypassDialogAndWait(url)
-        Log.d("RaghavAnime", "[AniDb] CF: bypass dialog finished: success=$bypassSuccess for $targetHost")
+        ProxCFStore.clear()
+        val bypassSuccess = showProxCBypassDialogAndWait("https://prox.anikage.cc/")
 
         if (!bypassSuccess) {
             return@withLock
@@ -460,18 +451,23 @@ suspend fun cfAppGet(
 
         for (attempt in 1..2) {
             response = try { app.get(url, headers = buildCfHeaders()) } catch (e: Exception) { throw e }
-            if (!isCloudflareBlocked(response)) {
-                Log.d("RaghavAnime", "[AniDb] CF: retry succeeded on attempt $attempt for $targetHost")
+            if (!isProxCloudflareBlocked(response)) {
                 return@withLock
             }
         }
-        Log.e("RaghavAnime", "[AniDb] CF: still blocked for $targetHost after bypass retries, giving up")
     }
 
     return response
 }
 
-fun initAniDbCFBypass(context: Context) {
-    Log.d("RaghavAnime", "[AniDb] CF bypass init")
-    AniDbCFStore.init(context)
+// Cookie/UA headers for emitted prox playback links (empty before the first bypass)
+fun proxPlaybackHeaders(): Map<String, String> {
+    val h = LinkedHashMap<String, String>()
+    ProxCFStore.getCookies()?.let { h["Cookie"] = it }
+    ProxCFStore.getUserAgent()?.let { h["User-Agent"] = it }
+    return h
+}
+
+fun initProxCFBypass(context: Context) {
+    ProxCFStore.init(context)
 }

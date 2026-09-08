@@ -23,6 +23,7 @@ import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.loadExtractor
 import com.lagradost.cloudstream3.utils.newExtractorLink
+import kotlinx.coroutines.CancellationException
 import java.net.URLEncoder
 
 class RaghavAniKage : MainAPI() {
@@ -32,7 +33,7 @@ class RaghavAniKage : MainAPI() {
     override val hasDownloadSupport = true
     override val supportedTypes = setOf(TvType.Anime, TvType.AnimeMovie, TvType.OVA)
 
-    private val proxyUrl = "https://gg.akage.lol"
+    private val proxBaseUrl = "https://prox.anikage.cc"
 
     private val apiHeaders = mapOf("Accept" to "application/json")
     private val proxyHeaders get() = mapOf("Referer" to "$mainUrl/", "Origin" to mainUrl)
@@ -152,9 +153,9 @@ class RaghavAniKage : MainAPI() {
     private fun buildProxyUrl(path: String, type: String = "stream"): String {
         return when {
             path.startsWith("http://") || path.startsWith("https://") -> path
-            path.startsWith("/m3u8/") || path.startsWith("/stream/") || path.startsWith("/hls/") -> "$proxyUrl$path"
-            path.startsWith("m3u8/") || path.startsWith("stream/") || path.startsWith("hls/") -> "$proxyUrl/$path"
-            else -> "$proxyUrl/$type/$path"
+            path.startsWith("/m3u8/") || path.startsWith("/stream/") || path.startsWith("/hls/") -> "$proxBaseUrl$path"
+            path.startsWith("m3u8/") || path.startsWith("stream/") || path.startsWith("hls/") -> "$proxBaseUrl/$path"
+            else -> "$proxBaseUrl/$type/$path"
         }
     }
 
@@ -171,6 +172,7 @@ class RaghavAniKage : MainAPI() {
     // endregion
 
     override suspend fun search(query: String): List<SearchResponse> {
+        Log.d("RaghavAnime", "[AniKage] search: q='${query.take(40)}'")
         mainUrl = FirebaseDomainHelper.getDomain("anikage") ?: mainUrl
         if (query.isBlank()) return emptyList()
 
@@ -189,6 +191,7 @@ class RaghavAniKage : MainAPI() {
             return emptyList()
         }
 
+        Log.d("RaghavAnime", "[AniKage] search: ${parsed.data.size} results")
         return parsed.data.mapNotNull { item ->
             val title = item.title?.english ?: item.title?.romaji ?: return@mapNotNull null
             val poster = item.coverImage?.extraLarge ?: item.coverImage?.large
@@ -202,6 +205,7 @@ class RaghavAniKage : MainAPI() {
     override suspend fun load(url: String): LoadResponse? {
         mainUrl = FirebaseDomainHelper.getDomain("anikage") ?: mainUrl
         val slug = url.substringAfterLast("/")
+        Log.d("RaghavAnime", "[AniKage] load: slug=$slug")
 
         val detailResponse = try {
             app.get("${apiUrl()}/$slug", headers = apiHeaders).text
@@ -252,6 +256,7 @@ class RaghavAniKage : MainAPI() {
             return null
         }
 
+        Log.d("RaghavAnime", "[AniKage] load: ${episodes.size} episodes")
         val subEpisodes = mutableListOf<Episode>()
         val dubEpisodes = mutableListOf<Episode>()
 
@@ -273,6 +278,7 @@ class RaghavAniKage : MainAPI() {
             })
         }
 
+        Log.d("RaghavAnime", "[AniKage] load ok: ${subEpisodes.size} sub, ${dubEpisodes.size} dub episodes")
         return newAnimeLoadResponse(title, url, tvType) {
             this.posterUrl = poster
             this.backgroundPosterUrl = banner
@@ -298,6 +304,7 @@ class RaghavAniKage : MainAPI() {
         val epNum = parts[1]
         val type = parts[2]
 
+        Log.d("RaghavAnime", "[AniKage] loadLinks: slug=$slug ep=$epNum type=$type")
         return fetchSources(slug, epNum, type, subtitleCallback, callback)
     }
 
@@ -310,8 +317,10 @@ class RaghavAniKage : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
+        Log.d("RaghavAnime", "[AniKage] loadLinksByAnilistId: anilist=$anilistId ep=$episode dub=$isDub title='${title.take(40)}'")
         val searchQueries = listOfNotNull(title, jpTitle).filter { it.isNotBlank() }
         if (searchQueries.isEmpty()) {
+            Log.w("RaghavAnime", "[AniKage] no search queries for anilist=$anilistId")
             return false
         }
 
@@ -324,14 +333,17 @@ class RaghavAniKage : MainAPI() {
         }
 
         if (slug == null) {
+            Log.w("RaghavAnime", "[AniKage] no slug match for anilist=$anilistId")
             return false
         }
 
+        Log.d("RaghavAnime", "[AniKage] anilist=$anilistId matched slug=$slug")
         val type = if (isDub) "dub" else "sub"
         return fetchSources(slug, episode.toString(), type, subtitleCallback, callback)
     }
 
     private suspend fun findSlugByAnilistId(query: String, anilistId: Int): String? {
+        Log.d("RaghavAnime", "[AniKage] findSlug: query='${query.take(40)}' anilist=$anilistId")
         val url = "${apiUrl()}/browse?q=${URLEncoder.encode(query, "UTF-8")}&sort=popularity&page=1&limit=25&adult=true"
         val response = try {
             app.get(url, headers = apiHeaders).text
@@ -349,6 +361,7 @@ class RaghavAniKage : MainAPI() {
 
         val match = parsed.data.firstOrNull { it.anilistId == anilistId }
         if (match == null) {
+            Log.d("RaghavAnime", "[AniKage] no anilist match: ${parsed.data.size} results for '${query.take(40)}'")
         }
         return match?.slug?.takeIf { it.isNotBlank() }
     }
@@ -369,6 +382,12 @@ class RaghavAniKage : MainAPI() {
             return emptyList()
         }
 
+        Log.d(
+            "RaghavAnime",
+            "[AniKage] getServerList: ${parsed.servers.joinToString { s ->
+                s.id + (if (s.subTypes.isEmpty()) "" else "[${s.subTypes.joinToString("+")}]")
+            }}"
+        )
         return parsed.servers.filter { it.id.isNotBlank() }
     }
 
@@ -389,25 +408,48 @@ class RaghavAniKage : MainAPI() {
     ): Boolean {
         mainUrl = FirebaseDomainHelper.getDomain("anikage") ?: mainUrl
         val lang = if (type == "dub") "dub" else "sub"
+        Log.d("RaghavAnime", "[AniKage] fetchSources: slug=$slug ep=$epNum lang=$lang")
 
         val servers = getServerList(slug, epNum)
         if (servers.isEmpty()) {
+            Log.d("RaghavAnime", "[AniKage] no servers for slug=$slug ep=$epNum")
             return false
         }
 
         var found = false
+
+        // token urls resolve through the site's own player route
+        // prox.anikage.cc/{m3u8|stream}/{token} (Cloudflare-gated, see ProxCloudflare)
+        var proxProbed = false
+        var proxHeaders: Map<String, String> = emptyMap()
+
+        suspend fun ensureProxProbe(sampleUrl: String) {
+            if (proxProbed) return
+            proxProbed = true
+            try {
+                proxGet(sampleUrl, headers = mapOf("Accept" to "*/*"))
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.d("RaghavAnime", "[AniKage] prox probe failed: ${e.message}")
+            }
+            proxHeaders = proxPlaybackHeaders()
+        }
+
         for (server in servers) {
             val serverId = server.id
             if (serverId.isBlank()) continue
 
             // The API enforces subTypes server-side anyway; skipping early saves a request
             if (server.subTypes.isNotEmpty() && !server.subTypes.contains(lang)) {
+                Log.d("RaghavAnime", "[AniKage] skip server=$serverId: lang '$lang' not in subTypes=${server.subTypes.joinToString("+")}")
                 continue
             }
 
             val providerId = server.providerId?.takeIf { it.isNotBlank() } ?: serverId
             try {
                 val sourcesUrl = "${apiUrl()}/$slug/episodes/$epNum/sources?provider=$providerId&lang=$lang&server=$serverId"
+                Log.d("RaghavAnime", "[AniKage] fetching sources: server=$serverId provider=$providerId")
 
                 val responseText = app.get(sourcesUrl, headers = apiHeaders).text
                 var parsed = parseSourcesResponse(responseText)
@@ -419,10 +461,12 @@ class RaghavAniKage : MainAPI() {
                 // megg/dib can serve stale cached tokens that 401 on the proxy;
                 // a cache-busted re-request rotates them
                 if (parsed.stale == true) {
+                    Log.d("RaghavAnime", "[AniKage] server=$serverId stale cache, rotating tokens")
                     try {
                         val freshText = app.get("$sourcesUrl&_=${System.currentTimeMillis()}", headers = apiHeaders).text
                         parseSourcesResponse(freshText)?.let { parsed = it }
                     } catch (e: Exception) {
+                        Log.d("RaghavAnime", "[AniKage] token rotation failed for server=$serverId: ${e.message}")
                     }
                 }
 
@@ -430,14 +474,16 @@ class RaghavAniKage : MainAPI() {
                 val seenSubs = LinkedHashSet<String>()
                 for (sub in subtitles) {
                     if (sub.file.isBlank()) continue
-                    // encrypted token subtitles can only be served through the
-                    // (globally dead) proxy; only plaintext http subs are usable
+                    // encrypted token subtitles are prox-bound; only plaintext
+                    // http subs are emitted (embed tracks already carry subs)
                     if (!sub.file.startsWith("http")) {
+                        Log.d("RaghavAnime", "[AniKage] skip token subtitle: ${sub.file.take(40)}")
                         continue
                     }
                     val label = sub.label?.takeIf { it.isNotBlank() } ?: lang
                     val subUrl = buildProxyUrl(sub.file, "stream")
                     if (seenSubs.add(subUrl)) {
+                        Log.d("RaghavAnime", "[AniKage] subtitle: $label ${subUrl.take(80)}")
                         subtitleCallback.invoke(newSubtitleFile(label, subUrl) {
                             this.headers = proxyHeaders
                         })
@@ -452,25 +498,24 @@ class RaghavAniKage : MainAPI() {
                 val baseName = "AniKage ${serverId.replaceFirstChar { it.uppercase() }} $subType".trim()
 
                 val usedEmbedUrls = LinkedHashSet<String>()
+                val usedSourceUrls = LinkedHashSet<String>()
                 for (src in parsed.sources) {
                     if (src.url.isBlank() && src.embedUrl.isNullOrBlank()) continue
 
                     val embedUrl = src.embedUrl?.takeIf { it.isNotBlank() }
                     if (embedUrl != null && usedEmbedUrls.add(embedUrl)) {
                         try {
+                            Log.d("RaghavAnime", "[AniKage] embed via loadExtractor: ${embedUrl.take(100)}")
                             if (loadExtractor(embedUrl, "$mainUrl/", subtitleCallback, callback)) found = true
                         } catch (e: Exception) {
                             Log.e("RaghavAnime", "[AniKage] embed failed for server=$serverId: ${e.message}")
                         }
                     }
 
-                    if (src.url.isNotBlank()) {
-                        // sources[].url is an encrypted token playable only via
-                        // the dead proxy; embeds carry the real playable streams
-                        if (!src.url.startsWith("http")) {
-                        } else {
-                        val isM3u8 = src.isM3U8 == true
+                    if (src.url.isNotBlank() && usedSourceUrls.add(src.url)) {
+                        val isM3u8 = src.isM3U8 != false
                         val videoUrl = buildProxyUrl(src.url, if (isM3u8) "m3u8" else "stream")
+                        if (!src.url.startsWith("http")) ensureProxProbe(videoUrl)
                         val qualityClean = src.quality?.trim()
                             ?.replace(Regex("^dub\\s+", RegexOption.IGNORE_CASE), "")
                             ?.takeIf { it.isNotBlank() }
@@ -482,6 +527,7 @@ class RaghavAniKage : MainAPI() {
                             qualityClean?.replaceFirstChar { it.uppercase() }
                         ).joinToString(" ")
 
+                        Log.d("RaghavAnime", "[AniKage] link: $nameStr url=${videoUrl.take(100)}")
                         callback.invoke(
                             newExtractorLink(
                                 source = name,
@@ -490,11 +536,10 @@ class RaghavAniKage : MainAPI() {
                                 type = if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
                             ) {
                                 this.quality = getQualityFromName(src.quality)
-                                this.headers = proxyHeaders
+                                this.headers = if (proxHeaders.isNotEmpty()) proxHeaders else proxyHeaders
                             }
                         )
                         found = true
-                        }
                     }
                 }
 
@@ -502,6 +547,7 @@ class RaghavAniKage : MainAPI() {
                     val embedUrl = embed.url?.takeIf { it.isNotBlank() } ?: continue
                     if (usedEmbedUrls.add(embedUrl)) {
                         try {
+                            Log.d("RaghavAnime", "[AniKage] embeds[] via loadExtractor: ${embedUrl.take(100)}")
                             if (loadExtractor(embedUrl, "$mainUrl/", subtitleCallback, callback)) found = true
                         } catch (e: Exception) {
                             Log.e("RaghavAnime", "[AniKage] embeds[] failed for server=$serverId: ${e.message}")
@@ -509,11 +555,16 @@ class RaghavAniKage : MainAPI() {
                     }
                 }
 
+                Log.d(
+                    "RaghavAnime",
+                    "[AniKage] server=$serverId done: ${parsed.sources.size} sources, ${subtitles.size} subtitles, ${parsed.embeds?.size ?: 0} embeds"
+                )
             } catch (e: Exception) {
                 Log.e("RaghavAnime", "[AniKage] server=$serverId sources failed: ${e.message}")
             }
         }
 
+        Log.d("RaghavAnime", "[AniKage] fetchSources done: found=$found")
         return found
     }
 }

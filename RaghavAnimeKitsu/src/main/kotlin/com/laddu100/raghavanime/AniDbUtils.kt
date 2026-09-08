@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper
 import com.lagradost.api.Log
 
 fun parseAnimeData(jsonString: String): MetaAnimeData? {
+    Log.d("RaghavAnime", "[AniDb] parseAnimeData parsing mappings json (len ${jsonString.length})")
     return try {
         val objectMapper = ObjectMapper()
         objectMapper.readValue(jsonString, MetaAnimeData::class.java)

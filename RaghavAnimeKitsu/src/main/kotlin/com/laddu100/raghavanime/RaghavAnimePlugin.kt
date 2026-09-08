@@ -18,6 +18,8 @@ class RaghavAnimePlugin : Plugin() {
 
         initSenshiCFBypass(context)
 
+        initProxCFBypass(context)
+
         EnmaDecryptor.setContext(context)
         EnmaDecryptor.startInit()
 

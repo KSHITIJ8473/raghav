@@ -1,4 +1,4 @@
-version = 2
+version = 3
 
 android {
     buildFeatures {
@@ -12,7 +12,7 @@ dependencies {
 
 cloudstream {
     language = "en"
-    description = "ONE STOP SOLUTION FOR ANIME(SUB,DUB) - Kitsu Catalog - Raghav Aggregated Anime Plugin. 17 sources: Miruro, AniSuge, AniWaves, Anikai, AniDb, AniKage, Anineko, 2DHive, AniKoto, Enma, Animo, Anidap, Senshi, AniNami, AniDao, AniChan, Kyren"
+    description = "ONE STOP SOLUTION FOR ANIME(SUB,DUB) - Kitsu Catalog - Raghav Aggregated Anime Plugin. 17 sources: Miruro, AniSuge, AniWaves, Anikai, AniDb, AniKage, Anineko, 2DHive, AniKoto, Enma, Animo, Anidap, Senshi, AniNami, AniDao, AniChan, Kyren - with full source logging"
     authors = listOf("raghav")
 
     status = 1

@@ -20,6 +20,7 @@ data class AninekoAniListData(@param:JsonProperty("Media") val Media: AninekoAni
 data class AninekoAniListMedia(@param:JsonProperty("id") val id: Int? = null)
 
 suspend fun getAnilistId(title: String): Int? {
+    Log.d("RaghavAnime", "[Anineko] getAnilistId querying anilist graphql for '$title'")
     return try {
         val query = """
             query(${'$'}search: String) {
@@ -42,6 +43,7 @@ suspend fun getAnilistId(title: String): Int? {
             requestBody = requestData
         ).parsedSafe<AninekoAniListSearchResponse>()
 
+        Log.d("RaghavAnime", "[Anineko] anilist search for '$title' -> id ${res?.data?.Media?.id ?: "not found"}")
         res?.data?.Media?.id
     } catch (e: Exception) {
         Log.e("RaghavAnime", "[Anineko] getAnilistId failed for '$title': ${e.message}")

@@ -31,6 +31,7 @@ import java.util.zip.InflaterInputStream
 import kotlin.coroutines.resume
 
 fun encodePipeRequest(payload: Map<String, Any?>): String {
+    Log.d("RaghavAnime", "[Miruro] encodePipeRequest: path=${payload["path"]}")
     val json = payload.toJson()
     return Base64.encodeToString(
         json.toByteArray(Charsets.UTF_8),
@@ -39,6 +40,7 @@ fun encodePipeRequest(payload: Map<String, Any?>): String {
 }
 
 fun decodePipeResponse(responseBody: String): String {
+    Log.d("RaghavAnime", "[Miruro] decodePipeResponse: bodyLen=${responseBody.length}")
     val trimmed = responseBody.trim()
     val padded = trimmed + "=".repeat((4 - trimmed.length % 4) % 4)
     val compressed = Base64.decode(padded, Base64.URL_SAFE)
@@ -46,8 +48,10 @@ fun decodePipeResponse(responseBody: String): String {
 }
 
 private fun decompress(data: ByteArray): String {
+    Log.d("RaghavAnime", "[Miruro] decompress: inputLen=${data.size}")
 
     if (data.size > 2 && data[0] == 0x1f.toByte() && data[1] == 0x8b.toByte()) {
+        Log.d("RaghavAnime", "[Miruro] decompress: gzip mode")
         val bais = ByteArrayInputStream(data)
         val gzis = GZIPInputStream(bais)
         return gzis.use { it.readBytes().toString(Charsets.UTF_8) }
@@ -58,6 +62,7 @@ private fun decompress(data: ByteArray): String {
         (data[0].toInt() shr 4) <= 7 &&
         (((data[0].toInt() and 0xff) shl 8) or (data[1].toInt() and 0xff)) % 31 == 0
 
+    Log.d("RaghavAnime", "[Miruro] decompress: ${if (isZlib) "zlib" else "raw-inflate"} mode")
     val inflater = if (isZlib) Inflater() else Inflater(true)
     val bais = ByteArrayInputStream(data)
     val iis = InflaterInputStream(bais, inflater)
@@ -80,7 +85,9 @@ private fun xorDecrypt(data: ByteArray): ByteArray {
 }
 
 fun decodePipeResponseWithHeader(responseBody: String, obfuscatedHeader: String?): String {
+    Log.d("RaghavAnime", "[Miruro] decodeWithHeader: obfuscatedHeader=$obfuscatedHeader bodyLen=${responseBody.length}")
     if (obfuscatedHeader == null) {
+        Log.d("RaghavAnime", "[Miruro] decodeWithHeader: no obfuscation header, returning raw body")
 
         return responseBody.trim()
     }
@@ -90,6 +97,7 @@ fun decodePipeResponseWithHeader(responseBody: String, obfuscatedHeader: String?
     var decoded = Base64.decode(padded, Base64.URL_SAFE)
 
     if (obfuscatedHeader == "2") {
+        Log.d("RaghavAnime", "[Miruro] decodeWithHeader: XOR deobfuscation applied")
         decoded = xorDecrypt(decoded)
     }
 
@@ -97,9 +105,11 @@ fun decodePipeResponseWithHeader(responseBody: String, obfuscatedHeader: String?
 }
 
 fun decodePipeResponseAuto(responseBody: String): String {
+    Log.d("RaghavAnime", "[Miruro] decodeAuto: bodyLen=${responseBody.length}")
     val trimmed = responseBody.trim()
 
     if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+        Log.d("RaghavAnime", "[Miruro] decodeAuto: plain JSON body, returning as-is")
         return trimmed
     }
 
@@ -124,6 +134,7 @@ fun decodePipeResponseAuto(responseBody: String): String {
 }
 
 fun translateEpisodeId(encodedId: String): String {
+    Log.d("RaghavAnime", "[Miruro] translateEpisodeId: encodedId=$encodedId")
     return try {
         val padded = encodedId + "=".repeat((4 - encodedId.length % 4) % 4)
         val decoded = Base64.decode(padded, Base64.URL_SAFE).toString(Charsets.UTF_8)
@@ -154,6 +165,7 @@ object MiruroCloudflare {
     fun setCookies(baseUrl: String, cookies: String) { cookieCache[baseUrl] = cookies }
 
     fun isCloudflareBlock(text: String, code: Int): Boolean {
+        Log.d("RaghavAnime", "[Miruro] isCloudflareBlock: code=$code bodyLen=${text.length}")
         if (code == 403 || code == 503) {
             val lower = text.lowercase()
             return lower.contains("cloudflare") ||
@@ -175,6 +187,7 @@ object MiruroCloudflare {
         pipeUrl: String
     ): String? {
         if (context == null) return null
+        Log.d("RaghavAnime", "[Miruro] WebView session init: domain=$domain pipeUrl=${pipeUrl.take(120)}")
 
         return withContext(Dispatchers.Main) {
             suspendCancellableCoroutine { cont ->
@@ -185,9 +198,11 @@ object MiruroCloudflare {
 
                 fun finish(result: String?) {
                     if (done.compareAndSet(false, true)) {
+                        Log.d("RaghavAnime", "[Miruro] WebView session finish: result=${result?.length ?: "null"} chars")
                         try {
                             val cookies = CookieManager.getInstance().getCookie(domain) ?: ""
                             if (cookies.isNotEmpty()) {
+                                Log.d("RaghavAnime", "[Miruro] WebView: saved cookies for $domain (len=${cookies.length})")
                                 setCookies(domain, cookies)
                             }
                         } catch (e: Exception) { Log.e("RaghavAnime", "Miruro: ${e.message}") }
@@ -199,6 +214,7 @@ object MiruroCloudflare {
                 fun injectFetch(view: WebView?) {
                     if (done.get() || !fetchInjected.compareAndSet(false, true)) return
                     val relativeUrl = pipeUrl.substringAfter(domain)
+                    Log.d("RaghavAnime", "[Miruro] WebView: pipe fetch attempt (relativeUrl=$relativeUrl)")
 
                     val js = """
                         (function() {
@@ -242,6 +258,7 @@ object MiruroCloudflare {
                                         Log.e("RaghavAnime", "[Miruro] WebView: pipe fetch JS error: ${text.take(120)}")
                                         finish(null)
                                     } else if (text.isNotEmpty() && text.length > 10) {
+                                        Log.d("RaghavAnime", "[Miruro] WebView: pipe fetch success (len=${text.length})")
                                         finish(text)
                                     }
                                 }
@@ -262,6 +279,7 @@ object MiruroCloudflare {
                                           title.lowercase().contains("blocked") ||
                                           title.isBlank()
 
+                        Log.d("RaghavAnime", "[Miruro] WebView: page title='${title.take(40)}' isChallenge=$isChallenge")
                         if (!isChallenge) {
                             injectFetch(view)
                         }
@@ -281,6 +299,7 @@ object MiruroCloudflare {
                             override fun onPageFinished(view: WebView?, pageUrl: String?) {
                                 super.onPageFinished(view, pageUrl)
                                 loadCount[0]++
+                                Log.d("RaghavAnime", "[Miruro] WebView: onPageFinished #${loadCount[0]} url=${pageUrl?.take(120)}")
                                 Handler(Looper.getMainLooper()).postDelayed({
                                     checkAndInject(view)
                                 }, 500)
@@ -289,6 +308,7 @@ object MiruroCloudflare {
                     }
 
                     webView?.loadUrl(domain)
+                    Log.d("RaghavAnime", "[Miruro] WebView: warming up $domain (12 polls, 30s timeout)")
 
                     for (i in 1..12) {
                         val delay = (i * 1000).toLong()
@@ -298,6 +318,7 @@ object MiruroCloudflare {
                     }
 
                     Handler(Looper.getMainLooper()).postDelayed({
+                        Log.w("RaghavAnime", "[Miruro] WebView: 30s timeout reached without pipe result")
                         finish(null)
                     }, 30000)
                 } catch (e: Exception) {
@@ -310,6 +331,7 @@ object MiruroCloudflare {
 }
 
 suspend fun miruroPipeRequest(path: String, query: Map<String, Any>): String {
+    Log.d("RaghavAnime", "[Miruro] pipeRequest: /$path query=${query.keys.joinToString(",")}")
     val enrichedQuery = query.toMutableMap()
     enrichedQuery["live"] = "true"
     enrichedQuery["_t"] = (System.currentTimeMillis() / (600 * 1000)) * (600 * 1000)
@@ -330,11 +352,14 @@ suspend fun miruroPipeRequest(path: String, query: Map<String, Any>): String {
         }
     }
 
+    Log.d("RaghavAnime", "[Miruro] pipeRequest: workingDomain=$working domainsToTry=${domainsToTry.joinToString(", ")}")
     var lastError: Exception? = null
     for (domain in domainsToTry) {
         try {
+            Log.d("RaghavAnime", "[Miruro] pipeRequest: trying $domain for /$path")
             val result = miruroPipeRequestForDomain(domain, encoded, path)
             MiruroCloudflare.setWorkingDomain(domain)
+            Log.d("RaghavAnime", "[Miruro] pipeRequest: success on $domain for /$path (resultLen=${result.length})")
             return result
         } catch (e: Exception) {
             Log.e("RaghavAnime", "[Miruro] pipeRequest: $domain failed for /$path: ${e.message}")
@@ -358,12 +383,15 @@ private suspend fun miruroPipeRequestForDomain(
         "Accept" to "*/*"
     )
     MiruroCloudflare.getCookies(domain)?.let { headers["Cookie"] = it }
+    Log.d("RaghavAnime", "[Miruro] pipeForDomain: GET /$path on $domain (encodedLen=${encoded.length} hasCookies=${MiruroCloudflare.getCookies(domain) != null})")
 
     try {
         val response = app.get(pipeUrl, headers = headers, timeout = 30)
+        Log.d("RaghavAnime", "[Miruro] pipeForDomain: /$path on $domain -> HTTP ${response.code}")
         if (response.code == 200) {
             val body = response.text
             if (!MiruroCloudflare.isCloudflareBlock(body, 200)) {
+                Log.d("RaghavAnime", "[Miruro] pipeForDomain: 200 OK non-CF body (len=${body.length}), decoding")
                 val obfHeader = response.headers["x-obfuscated"]
                 try {
                     return decodePipeResponseWithHeader(body, obfHeader)
@@ -376,15 +404,19 @@ private suspend fun miruroPipeRequestForDomain(
         Log.e("RaghavAnime", "[Miruro] pipeForDomain: direct GET failed for /$path on $domain: ${e.message}")
     }
 
+    Log.d("RaghavAnime", "[Miruro] pipeForDomain: falling back to WebView for /$path on $domain")
     val webBody = MiruroCloudflare.fetchPipeViaWebView(
         Miruro.context, domain, pipeUrl
     )
     if (webBody != null && webBody.isNotEmpty()) {
+        Log.d("RaghavAnime", "[Miruro] pipeForDomain: WebView body obtained (len=${webBody.length}), decoding")
         try {
             return decodePipeResponseAuto(webBody)
         } catch (e: Exception) {
             Log.e("RaghavAnime", "[Miruro] pipeForDomain: WebView body decode failed for /$path: ${e.message}")
         }
+    } else {
+        Log.w("RaghavAnime", "[Miruro] pipeForDomain: WebView returned empty body for /$path on $domain")
     }
 
     Log.e("RaghavAnime", "[Miruro] pipeForDomain: FAILED on $domain for /$path")
@@ -531,9 +563,11 @@ private const val ANILIST_CACHE_TTL = 10 * 60 * 1000L
 private val anilistLocks = mutableMapOf<String, kotlinx.coroutines.sync.Mutex>()
 
 suspend fun anilistQuery(query: String, variables: Map<String, Any?>): String {
+    Log.d("RaghavAnime", "[Miruro] anilistQuery: variables=${variables.toJson().take(120)}")
     val cacheKey = "$query|${variables.toJson()}"
     val now = System.currentTimeMillis()
     anilistCache[cacheKey]?.let { (cached, time) ->
+        Log.d("RaghavAnime", "[Miruro] anilistQuery: cache entry present, age=${now - time}ms (ttl=${ANILIST_CACHE_TTL}ms)")
         if (now - time < ANILIST_CACHE_TTL) return cached
     }
 
@@ -542,6 +576,7 @@ suspend fun anilistQuery(query: String, variables: Map<String, Any?>): String {
     }
 
     if (lock.isLocked) {
+        Log.d("RaghavAnime", "[Miruro] anilistQuery: in-flight query detected, waiting for it")
         repeat(50) {
             kotlinx.coroutines.delay(100)
             anilistCache[cacheKey]?.let { (cached, time) ->
@@ -551,8 +586,10 @@ suspend fun anilistQuery(query: String, variables: Map<String, Any?>): String {
     }
 
     anilistCache[cacheKey]?.let { (cached, time) ->
+        Log.d("RaghavAnime", "[Miruro] anilistQuery: cache rechecked, age=${now - time}ms")
         if (now - time < ANILIST_CACHE_TTL) return cached
     }
+    Log.d("RaghavAnime", "[Miruro] anilistQuery: cache miss, querying AniList API")
 
     val requestData = mapOf(
         "query" to query,
@@ -572,14 +609,18 @@ suspend fun anilistQuery(query: String, variables: Map<String, Any?>): String {
             timeout = 15_000L
         )
         val text = response.text
+        Log.d("RaghavAnime", "[Miruro] anilistQuery: response len=${text.length}")
         if (text.isNotBlank() && !text.contains("\"errors\"")) {
             anilistCache[cacheKey] = text to now
+            Log.d("RaghavAnime", "[Miruro] anilistQuery: success, cached")
             return text
         }
+        Log.w("RaghavAnime", "[Miruro] anilistQuery: response blank or contained errors, discarding")
     } catch (e: Exception) {
         Log.e("RaghavAnime", "[Miruro] anilistQuery: request failed: ${e.message}")
     }
 
+    Log.d("RaghavAnime", "[Miruro] anilistQuery: no fresh response, trying stale cache")
     anilistCache[cacheKey]?.let { (cached, _) -> return cached }
     Log.e("RaghavAnime", "[Miruro] anilistQuery: failed with no cache available")
     throw Exception("AniList query failed")

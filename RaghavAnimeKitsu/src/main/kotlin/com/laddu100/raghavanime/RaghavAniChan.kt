@@ -56,16 +56,20 @@ class RaghavAniChan : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         val category = if (isDub) "dub" else "sub"
+        Log.d("RaghavAnime", "[AniChan] loadLinksByAnilistId: anilistId=$anilistId ep=$episode category=$category")
         return try {
             val resp = app.get(
                 "$mainUrl/api/watch/servers?anilistId=$anilistId&ep=$episode&category=$category",
                 headers = mapOf("User-Agent" to browserUA, "Referer" to "$mainUrl/anime/$anilistId"),
                 timeout = 15_000L
             ).text
+            Log.d("RaghavAnime", "[AniChan] servers response len=${resp.length}")
             val servers = parseJson<ServersResponse>(resp).servers ?: emptyList()
+            Log.d("RaghavAnime", "[AniChan] parsed ${servers.size} servers")
             var found = false
 
             for (server in servers) {
+                Log.d("RaghavAnime", "[AniChan] server: name=${server.name} label=${server.label} subType=${server.subType}")
                 val stream = server.stream ?: continue
                 val fullStream = if (stream.startsWith("/")) "$mainUrl$stream" else stream
                 val rawLabel = server.label ?: server.name ?: "AniChan"
@@ -79,6 +83,7 @@ class RaghavAniChan : MainAPI() {
                     else -> label
                 }
 
+                Log.d("RaghavAnime", "[AniChan] link: $displayLabel ${fullStream.take(120)}")
                 callback.invoke(newExtractorLink(
                     "AniChan",
                     displayLabel,
@@ -96,9 +101,11 @@ class RaghavAniChan : MainAPI() {
                 server.subtitles?.forEach { sub ->
                     val subUrl = sub.url ?: return@forEach
                     val fullSubUrl = if (subUrl.startsWith("/")) "$mainUrl$subUrl" else subUrl
+                    Log.d("RaghavAnime", "[AniChan] subtitle: ${sub.lang ?: "English"} ${fullSubUrl.take(120)}")
                     subtitleCallback.invoke(SubtitleFile(sub.lang ?: "English", fullSubUrl))
                 }
             }
+            Log.d("RaghavAnime", "[AniChan] loadLinksByAnilistId done: found=$found")
             found
         } catch (e: Exception) {
             Log.e("RaghavAnime", "[AniChan] FAILED: ${e.message}")

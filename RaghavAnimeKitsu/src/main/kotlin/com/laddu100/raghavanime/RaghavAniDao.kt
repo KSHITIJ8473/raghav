@@ -63,6 +63,7 @@ class RaghavAniDao : MainAPI() {
     private val m3u8Regex = Regex("""https?://[^\s"']+\.m3u8[^\s"']*""")
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+        Log.d("RaghavAnime", "[AniDao] getMainPage page=$page name=${request.name}")
         if (page > 1) return newHomePageResponse(request.name, emptyList())
 
         val doc = homeDocument()
@@ -96,6 +97,7 @@ class RaghavAniDao : MainAPI() {
                 addDubStatus(dubExist = true, subExist = true)
             })
         }
+        Log.d("RaghavAnime", "[AniDao] getMainPage ${request.name}: ${home.size} items")
         return newHomePageResponse(request.name, home)
     }
 
@@ -103,6 +105,7 @@ class RaghavAniDao : MainAPI() {
         val now = System.currentTimeMillis()
         val cached = homeCache
         if (cached != null && now - homeTime < homeTtl) return cached
+        Log.d("RaghavAnime", "[AniDao] homeDocument: cache miss, fetching $mainUrl")
         val doc = app.get(mainUrl, headers = baseHeaders).document
         homeCache = doc
         homeTime = now
@@ -110,6 +113,7 @@ class RaghavAniDao : MainAPI() {
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
+        Log.d("RaghavAnime", "[AniDao] search: query='$query'")
         val q = query.lowercase().trim()
         if (q.isEmpty()) return emptyList()
         return currentIndex().asSequence()
@@ -128,13 +132,16 @@ class RaghavAniDao : MainAPI() {
         val now = System.currentTimeMillis()
         val cached = indexCache
         if (cached != null && now - indexTime < indexTtl) return cached
+        Log.d("RaghavAnime", "[AniDao] currentIndex: cache miss (age=${now - indexTime}ms), building index")
         val built = buildIndex()
+        Log.d("RaghavAnime", "[AniDao] currentIndex: index built with ${built.size} entries")
         indexCache = built
         indexTime = now
         return built
     }
 
     private suspend fun buildIndex(): List<AnimeEntry> {
+        Log.d("RaghavAnime", "[AniDao] buildIndex: starting (batch=$listBatch maxPages=$maxListPages)")
         val results = mutableListOf<AnimeEntry>()
         val seen = mutableSetOf<String>()
         var start = 1
@@ -152,9 +159,11 @@ class RaghavAniDao : MainAPI() {
                     }
                 }
             }
+            Log.d("RaghavAnime", "[AniDao] buildIndex: pages $start-$end added $added entries (total ${results.size})")
             if (added == 0) break
             start = end + 1
         }
+        Log.d("RaghavAnime", "[AniDao] buildIndex: done, ${results.size} entries total")
         return results
     }
 
@@ -179,6 +188,7 @@ class RaghavAniDao : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse? {
+        Log.d("RaghavAnime", "[AniDao] load: ${url.take(120)}")
         val doc = app.get(url, headers = baseHeaders).document
 
         val titleEl = doc.selectFirst("h1.an-section__title")
@@ -239,6 +249,7 @@ class RaghavAniDao : MainAPI() {
             }
         }
 
+        Log.d("RaghavAnime", "[AniDao] load: '$title' sub=${subEpisodes.size} dub=${dubEpisodes.size} rows=${orderedRows.size}")
         return newAnimeLoadResponse(title, url, TvType.Anime) {
             this.posterUrl = posterUrl
             this.year = year
@@ -260,6 +271,7 @@ class RaghavAniDao : MainAPI() {
         val parts = data.split("|")
         val watchUrl = parts[0]
         val type = parts.getOrElse(1) { "sub" }
+        Log.d("RaghavAnime", "[AniDao] loadLinks: url=${watchUrl.take(120)} type=$type")
 
         val doc = fetchWatchDoc(watchUrl)
         var found = false
@@ -272,17 +284,21 @@ class RaghavAniDao : MainAPI() {
         }
 
         for ((panel, kind) in panels) {
+            Log.d("RaghavAnime", "[AniDao] loadLinks: panel=$panel (${kind.label})")
             val section = doc.selectFirst("""[data-an-panel="$panel"]""") ?: continue
             for (btn in section.select("button[data-an-video]")) {
                 val embed = btn.attr("data-an-video")
                 if (embed.isEmpty()) continue
                 val label = "AniDao - ${domainName(embed)} (${kind.label})"
+                Log.d("RaghavAnime", "[AniDao] resolving $label embed=${embed.take(120)}")
                 passSubtitle(embed, subtitleCallback)
                 if (resolveEmbed(embed, watchUrl, label, subtitleCallback, callback)) {
+                    Log.d("RaghavAnime", "[AniDao] $label resolved OK")
                     found = true
                 }
             }
         }
+        Log.d("RaghavAnime", "[AniDao] loadLinks done: found=$found")
         return found
     }
 
@@ -293,11 +309,14 @@ class RaghavAniDao : MainAPI() {
     // AniDao soft-404s episode-1 URLs of long anime (e.g. one-piece-100-episode-1);
     private suspend fun fetchWatchDoc(url: String): Document {
         val doc = app.get(url, headers = baseHeaders).document
+        Log.d("RaghavAnime", "[AniDao] fetchWatchDoc: primary hasPanels=${hasAnyPanel(doc)}")
         if (hasAnyPanel(doc)) return doc
 
         val altUrl = url.replace(Regex("-100-episode-"), "-episode-")
+        Log.d("RaghavAnime", "[AniDao] fetchWatchDoc: no panels, trying alt=${altUrl.take(120)}")
         if (altUrl != url) {
             val altDoc = app.get(altUrl, headers = baseHeaders).document
+            Log.d("RaghavAnime", "[AniDao] fetchWatchDoc: alt hasPanels=${hasAnyPanel(altDoc)}")
             if (hasAnyPanel(altDoc)) return altDoc
         }
         return doc
@@ -318,22 +337,28 @@ class RaghavAniDao : MainAPI() {
             when {
                 embedUrl.contains("vivibebe.site") || embedUrl.contains("bibiemb.xyz") -> {
                     val html = app.get(embedUrl, headers = baseHeaders).text
+                    Log.d("RaghavAnime", "[AniDao] resolveEmbed: vivibebe/bibiemb fast path for $label, html len=${html.length}, m3u8=${extractM3u8(html)?.take(120)}")
                     extractM3u8(html)?.let { callback(m3u8Link(label, it, embedUrl)); true } ?: false
                 }
                 embedUrl.contains("otakuhg.site") || embedUrl.contains("otakuvid.online") -> {
                     val html = app.get(embedUrl, headers = baseHeaders).text
+                    Log.d("RaghavAnime", "[AniDao] resolveEmbed: otaku fast path for $label, html len=${html.length}")
                     val m3u8 = extractM3u8(html)
                         ?: JsPacker.parseAndUnpack(html)?.let { extractM3u8(it) }
+                    Log.d("RaghavAnime", "[AniDao] resolveEmbed: otaku m3u8=${m3u8?.take(120)}")
                     m3u8?.let { callback(m3u8Link(label, it, embedUrl)); true } ?: false
                 }
                 embedUrl.contains("playmogo.com") -> {
+                    Log.d("RaghavAnime", "[AniDao] resolveEmbed: playmogo via loadExtractor: ${embedUrl.take(120)}")
                     loadExtractor(embedUrl, referer, subtitleCallback, callback)
                 }
                 else -> {
+                    Log.d("RaghavAnime", "[AniDao] resolveEmbed: generic embed for $label: ${embedUrl.take(120)}")
                     if (loadExtractor(embedUrl, referer, subtitleCallback, callback)) {
                         true
                     } else {
                         val html = app.get(embedUrl, headers = baseHeaders).text
+                        Log.d("RaghavAnime", "[AniDao] resolveEmbed: loadExtractor failed for $label, m3u8 scan html len=${html.length}, m3u8=${extractM3u8(html)?.take(120)}")
                         extractM3u8(html)?.let { callback(m3u8Link(label, it, embedUrl)); true } ?: false
                     }
                 }
@@ -363,6 +388,7 @@ class RaghavAniDao : MainAPI() {
             val decoded = URLDecoder.decode(sub, "UTF-8")
             val label = Regex("""(?:sub_1|c1_label)=([^&]+)""").find(query)?.groupValues?.get(1)
                 ?.let { URLDecoder.decode(it, "UTF-8") } ?: "English"
+            Log.d("RaghavAnime", "[AniDao] subtitle: $label ${decoded.take(120)}")
             subtitleCallback.invoke(SubtitleFile(label, decoded))
         } catch (e: Exception) {
             Log.e("RaghavAnime", "[AniDao] passSubtitle failed for ${embedUrl.take(120)}: ${e.message}")

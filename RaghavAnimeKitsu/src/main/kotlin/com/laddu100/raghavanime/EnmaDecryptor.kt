@@ -50,6 +50,7 @@ object EnmaDecryptor {
 
         @JavascriptInterface
         fun log(msg: String) {
+            Log.d(TAG, "JS: $msg")
         }
     }
 

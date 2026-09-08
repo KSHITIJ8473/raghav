@@ -24,6 +24,7 @@ class AniWavesWebView(private val sourceName: String, private val baseUrl: Strin
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
+        Log.d("RaghavAnime", "[AniWaves][AniWavesWebView] getUrl source=$sourceName url=${url.take(120)} referer=$referer")
         runCatching {
             val resolver = WebViewResolver(
                 interceptUrl = Regex("""(?i)\.(m3u8|mp4)(?:\?|$)"""),
@@ -32,13 +33,17 @@ class AniWavesWebView(private val sourceName: String, private val baseUrl: Strin
                 useOkhttp = false,
                 timeout = 30_000L
             )
+            Log.d("RaghavAnime", "[AniWaves][AniWavesWebView] WebView resolution attempt for ${url.take(120)}")
             val resolved = app.get(url, referer = referer ?: mainUrl, interceptor = resolver).url
+            Log.d("RaghavAnime", "[AniWaves][AniWavesWebView] resolved url=${resolved.take(120)}")
             val headers = mapOf("Referer" to url)
             when {
                 resolved.contains(".m3u8", ignoreCase = true) -> {
+                    Log.d("RaghavAnime", "[AniWaves][AniWavesWebView] emitting m3u8 links: ${resolved.take(120)}")
                     generateM3u8(name, resolved, mainUrl, headers = headers).forEach(callback)
                 }
                 resolved.contains(".mp4", ignoreCase = true) -> {
+                    Log.d("RaghavAnime", "[AniWaves][AniWavesWebView] emitting mp4 link: ${resolved.take(120)}")
                     callback(
                         newExtractorLink(
                             source = name,
@@ -69,6 +74,7 @@ class AniWavesEchoVideo : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
+        Log.d("RaghavAnime", "[AniWaves][EchoVideo] getUrl url=${url.take(120)} referer=$referer")
         val response = app.get(
             url,
             referer = referer ?: "https://aniwaves.ru/",
@@ -78,12 +84,14 @@ class AniWavesEchoVideo : ExtractorApi() {
         )
 
         val html = response.text
+        Log.d("RaghavAnime", "[AniWaves][EchoVideo] html length=${html.length}")
 
         val m3u8Regex = Regex("""(?:file|src|source|url)\s*[:=]\s*['"](https?://[^'"]*\.m3u8[^'"]*)['""]""")
         val m3u8Matches = m3u8Regex.findAll(html)
 
         for (match in m3u8Matches) {
             val m3u8Url = match.groupValues[1]
+            Log.d("RaghavAnime", "[AniWaves][EchoVideo] m3u8 link: ${m3u8Url.take(120)}")
             callback.invoke(
                 newExtractorLink(
                     source = name,
@@ -99,11 +107,13 @@ class AniWavesEchoVideo : ExtractorApi() {
             )
         }
 
+        Log.d("RaghavAnime", "[AniWaves][EchoVideo] m3u8 matches=${m3u8Regex.findAll(html).count()}")
         val mp4Regex = Regex("""(?:file|src|source|url)\s*[:=]\s*['"](https?://[^'"]*\.mp4[^'"]*)['""]""")
         val mp4Matches = mp4Regex.findAll(html)
 
         for (match in mp4Matches) {
             val mp4Url = match.groupValues[1]
+            Log.d("RaghavAnime", "[AniWaves][EchoVideo] mp4 link: ${mp4Url.take(120)}")
             callback.invoke(
                 newExtractorLink(
                     source = name,
@@ -118,13 +128,16 @@ class AniWavesEchoVideo : ExtractorApi() {
             )
         }
 
+        Log.d("RaghavAnime", "[AniWaves][EchoVideo] mp4 matches=${mp4Regex.findAll(html).count()}")
         val jsonSourceRegex = Regex(""""sources"\s*:\s*\[([^\]]+)\]""")
         val jsonMatch = jsonSourceRegex.find(html)
+        Log.d("RaghavAnime", "[AniWaves][EchoVideo] json sources block found=${jsonMatch != null}")
         if (jsonMatch != null) {
             val sourcesJson = jsonMatch.groupValues[1]
             val urlRegex = Regex(""""(?:file|url|src)"\s*:\s*"([^"]+)"""")
             for (urlMatch in urlRegex.findAll(sourcesJson)) {
                 val sourceUrl = urlMatch.groupValues[1].replace("\\/", "/")
+                Log.d("RaghavAnime", "[AniWaves][EchoVideo] json link: ${sourceUrl.take(120)}")
                 val type = if (sourceUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
                 callback.invoke(
                     newExtractorLink(
@@ -154,16 +167,20 @@ class AniWavesFilemoon : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
+        Log.d("RaghavAnime", "[AniWaves][Filemoon] getUrl url=${url.take(120)} referer=$referer")
         val response = app.get(url, referer = referer ?: "https://aniwaves.ru/")
         val html = response.text
+        Log.d("RaghavAnime", "[AniWaves][Filemoon] html length=${html.length}")
 
         val packedRegex = Regex("""eval\(function\(p,a,c,k,e,d\).*?\)\)""", RegexOption.DOT_MATCHES_ALL)
         val packed = packedRegex.find(html)?.value
+        Log.d("RaghavAnime", "[AniWaves][Filemoon] packed script found=${packed != null} len=${packed?.length}")
 
         if (packed != null) {
             // The packed script usually contains file:"https://...m3u8"
             val unpackedUrls = Regex("""https?://[^\s"'\\]+\.m3u8[^\s"'\\]*""").findAll(packed)
             for (match in unpackedUrls) {
+                Log.d("RaghavAnime", "[AniWaves][Filemoon] packed m3u8 link: ${match.value.take(120)}")
                 callback.invoke(
                     newExtractorLink(
                         source = name,
@@ -179,6 +196,7 @@ class AniWavesFilemoon : ExtractorApi() {
 
         val directM3u8 = Regex("""(?:file|src)\s*[:=]\s*["'](https?://[^"']*\.m3u8[^"']*)["']""").findAll(html)
         for (match in directM3u8) {
+            Log.d("RaghavAnime", "[AniWaves][Filemoon] direct m3u8 link: ${match.groupValues[1].take(120)}")
             callback.invoke(
                 newExtractorLink(
                     source = name,
@@ -204,11 +222,14 @@ class AniWavesMyVidPlay : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
+        Log.d("RaghavAnime", "[AniWaves][MyVidPlay] getUrl url=${url.take(120)} referer=$referer")
         val response = app.get(url, referer = referer ?: "https://aniwaves.ru/")
         val html = response.text
+        Log.d("RaghavAnime", "[AniWaves][MyVidPlay] html length=${html.length}")
 
         val m3u8Regex = Regex("""(?:file|src|source)\s*[:=]\s*["'](https?://[^"']*\.m3u8[^"']*)["']""")
         for (match in m3u8Regex.findAll(html)) {
+            Log.d("RaghavAnime", "[AniWaves][MyVidPlay] m3u8 link: ${match.groupValues[1].take(120)}")
             callback.invoke(
                 newExtractorLink(
                     source = name,
@@ -223,10 +244,12 @@ class AniWavesMyVidPlay : ExtractorApi() {
 
         val jsonSourceRegex = Regex(""""sources"\s*:\s*\[([^\]]+)\]""")
         val jsonMatch = jsonSourceRegex.find(html)
+        Log.d("RaghavAnime", "[AniWaves][MyVidPlay] json sources block found=${jsonMatch != null}")
         if (jsonMatch != null) {
             val urlRegex = Regex(""""(?:file|url)"\s*:\s*"([^"]+)"""")
             for (urlMatch in urlRegex.findAll(jsonMatch.groupValues[1])) {
                 val sourceUrl = urlMatch.groupValues[1].replace("\\/", "/")
+                Log.d("RaghavAnime", "[AniWaves][MyVidPlay] json link: ${sourceUrl.take(120)}")
                 val type = if (sourceUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
                 callback.invoke(
                     newExtractorLink(

@@ -23,7 +23,6 @@ import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.loadExtractor
 import com.lagradost.cloudstream3.utils.newExtractorLink
-import kotlinx.coroutines.CancellationException
 import java.net.URLEncoder
 
 class RaghavAniKage : MainAPI() {
@@ -33,7 +32,7 @@ class RaghavAniKage : MainAPI() {
     override val hasDownloadSupport = true
     override val supportedTypes = setOf(TvType.Anime, TvType.AnimeMovie, TvType.OVA)
 
-    private val proxBaseUrl = "https://prox.anikage.cc"
+    private val proxyUrl = "https://gg.akage.lol"
 
     private val apiHeaders = mapOf("Accept" to "application/json")
     private val proxyHeaders get() = mapOf("Referer" to "$mainUrl/", "Origin" to mainUrl)
@@ -153,9 +152,9 @@ class RaghavAniKage : MainAPI() {
     private fun buildProxyUrl(path: String, type: String = "stream"): String {
         return when {
             path.startsWith("http://") || path.startsWith("https://") -> path
-            path.startsWith("/m3u8/") || path.startsWith("/stream/") || path.startsWith("/hls/") -> "$proxBaseUrl$path"
-            path.startsWith("m3u8/") || path.startsWith("stream/") || path.startsWith("hls/") -> "$proxBaseUrl/$path"
-            else -> "$proxBaseUrl/$type/$path"
+            path.startsWith("/m3u8/") || path.startsWith("/stream/") || path.startsWith("/hls/") -> "$proxyUrl$path"
+            path.startsWith("m3u8/") || path.startsWith("stream/") || path.startsWith("hls/") -> "$proxyUrl/$path"
+            else -> "$proxyUrl/$type/$path"
         }
     }
 
@@ -417,25 +416,6 @@ class RaghavAniKage : MainAPI() {
         }
 
         var found = false
-
-        // token urls resolve through the site's own player route
-        // prox.anikage.cc/{m3u8|stream}/{token} (Cloudflare-gated, see ProxCloudflare)
-        var proxProbed = false
-        var proxHeaders: Map<String, String> = emptyMap()
-
-        suspend fun ensureProxProbe(sampleUrl: String) {
-            if (proxProbed) return
-            proxProbed = true
-            try {
-                proxGet(sampleUrl, headers = mapOf("Accept" to "*/*"))
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                Log.d("RaghavAnime", "[AniKage] prox probe failed: ${e.message}")
-            }
-            proxHeaders = proxPlaybackHeaders()
-        }
-
         for (server in servers) {
             val serverId = server.id
             if (serverId.isBlank()) continue
@@ -474,12 +454,6 @@ class RaghavAniKage : MainAPI() {
                 val seenSubs = LinkedHashSet<String>()
                 for (sub in subtitles) {
                     if (sub.file.isBlank()) continue
-                    // encrypted token subtitles are prox-bound; only plaintext
-                    // http subs are emitted (embed tracks already carry subs)
-                    if (!sub.file.startsWith("http")) {
-                        Log.d("RaghavAnime", "[AniKage] skip token subtitle: ${sub.file.take(40)}")
-                        continue
-                    }
                     val label = sub.label?.takeIf { it.isNotBlank() } ?: lang
                     val subUrl = buildProxyUrl(sub.file, "stream")
                     if (seenSubs.add(subUrl)) {
@@ -498,7 +472,6 @@ class RaghavAniKage : MainAPI() {
                 val baseName = "AniKage ${serverId.replaceFirstChar { it.uppercase() }} $subType".trim()
 
                 val usedEmbedUrls = LinkedHashSet<String>()
-                val usedSourceUrls = LinkedHashSet<String>()
                 for (src in parsed.sources) {
                     if (src.url.isBlank() && src.embedUrl.isNullOrBlank()) continue
 
@@ -512,10 +485,9 @@ class RaghavAniKage : MainAPI() {
                         }
                     }
 
-                    if (src.url.isNotBlank() && usedSourceUrls.add(src.url)) {
-                        val isM3u8 = src.isM3U8 != false
+                    if (src.url.isNotBlank()) {
+                        val isM3u8 = src.isM3U8 == true
                         val videoUrl = buildProxyUrl(src.url, if (isM3u8) "m3u8" else "stream")
-                        if (!src.url.startsWith("http")) ensureProxProbe(videoUrl)
                         val qualityClean = src.quality?.trim()
                             ?.replace(Regex("^dub\\s+", RegexOption.IGNORE_CASE), "")
                             ?.takeIf { it.isNotBlank() }
@@ -536,7 +508,7 @@ class RaghavAniKage : MainAPI() {
                                 type = if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
                             ) {
                                 this.quality = getQualityFromName(src.quality)
-                                this.headers = if (proxHeaders.isNotEmpty()) proxHeaders else proxyHeaders
+                                this.headers = proxyHeaders
                             }
                         )
                         found = true

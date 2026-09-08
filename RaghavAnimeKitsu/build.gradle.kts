@@ -12,7 +12,7 @@ dependencies {
 
 cloudstream {
     language = "en"
-    description = "ONE STOP SOLUTION FOR ANIME(SUB,DUB) - Kitsu Catalog - Raghav Aggregated Anime Plugin. 17 sources: Miruro, AniSuge, AniWaves, Anikai, AniDb, AniKage, Anineko, 2DHive, AniKoto, Enma, Animo, Anidap, Senshi, AniNami, AniDao, AniChan, Kyren - with full source logging"
+    description = "ONE STOP SOLUTION FOR ANIME(SUB,DUB) - Kitsu Catalog"
     authors = listOf("raghav")
 
     status = 1

@@ -219,6 +219,7 @@ class AnimeInWebProvider : MainAPI() {
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+        mainUrl = FirebaseDomainHelper.getDomain("animeinweb") ?: mainUrl
         return when {
             request.data == "views" -> explorePage(page, request)
             request.data == "schedule" -> {
@@ -254,6 +255,7 @@ class AnimeInWebProvider : MainAPI() {
     }
 
     override suspend fun search(query: String, page: Int): SearchResponseList? {
+        mainUrl = FirebaseDomainHelper.getDomain("animeinweb") ?: mainUrl
         if (query.isBlank()) return newSearchResponseList(emptyList(), false)
         val encoded = URLEncoder.encode(query, "UTF-8")
         // search api pages start at 0, cloudstream at 1
@@ -263,6 +265,7 @@ class AnimeInWebProvider : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse? {
+        mainUrl = FirebaseDomainHelper.getDomain("animeinweb") ?: mainUrl
         val id = url.substringAfterLast("/").takeIf { it.isNotBlank() } ?: return null
         val detail = fetchJson<DetailEnvelope>("${apiUrl("/movie/detail")}/$id").data
         val movie = detail.movie

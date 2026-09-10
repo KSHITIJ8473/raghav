@@ -175,7 +175,7 @@ class AniDbCFDialog(
 
     private fun scheduleNextPoll() {
         pollElapsedMs += POLL_INTERVAL_MS
-        updateStatus("Waiting for cookies… (${pollElapsedMs / 1000}s)")
+        updateStatus("Waiting for cookies... (${pollElapsedMs / 1000}s)")
         handler.postDelayed(cookiePollRunnable, POLL_INTERVAL_MS)
     }
 
@@ -213,7 +213,7 @@ class AniDbCFDialog(
         }
 
         root.addView(TextView(requireContext()).apply {
-            text = "AniDB – Cloudflare Bypass"
+            text = "AniDB - Cloudflare Bypass"
             textSize = 18f
             setTextColor(Color.WHITE)
             typeface = android.graphics.Typeface.DEFAULT_BOLD
@@ -221,7 +221,7 @@ class AniDbCFDialog(
         })
 
         TextView(requireContext()).apply {
-            text = "Loading challenge page…"
+            text = "Loading challenge page..."
             textSize = 13f
             setTextColor(Color.parseColor("#A0A0B0"))
             setPadding(0, 0, 0, (4 * dp).toInt())
@@ -282,7 +282,7 @@ class AniDbCFDialog(
             }
             webChromeClient = object : WebChromeClient() {
                 override fun onProgressChanged(view: WebView?, newProgress: Int) {
-                    if (!cookiesSaved) updateStatus("Loading… $newProgress%")
+                    if (!cookiesSaved) updateStatus("Loading... $newProgress%")
                 }
             }
             webViewClient = object : WebViewClient() {
@@ -293,12 +293,11 @@ class AniDbCFDialog(
                     val title = view?.title ?: ""
 
                     if (isChallengeTitle(title)) {
-                        Log.d("RaghavAnime", "[AniDb] CF: challenge page detected (title '${title.take(40)}')")
-                        updateStatus("🔄 Challenge active – solve the CAPTCHA above")
+                        updateStatus("Challenge active - solve the CAPTCHA above")
                         return
                     }
 
-                    updateStatus("Page loaded – checking cookies…")
+                    updateStatus("Page loaded - checking cookies...")
                     CookieManager.getInstance().flush()
 
                     val cookiesFromTarget = CookieManager.getInstance().getCookie(targetHost) ?: ""
@@ -331,7 +330,6 @@ class AniDbCFDialog(
 
         val ua = webView?.settings?.userAgentString ?: ""
         AniDbCFStore.save(cookieStr, ua, targetHost)
-        Log.d("RaghavAnime", "[AniDb] CF: cookies saved for $targetHost (len ${cookieStr.length})")
 
         updateStatus("Done! Cookies saved.")
 
@@ -438,21 +436,16 @@ suspend fun cfAppGet(
 
     if (!isCloudflareBlocked(response)) return response
 
-
-    Log.d("RaghavAnime", "[AniDb] CF: Cloudflare block detected (code=${response.code}) for ${url.take(80)}")
     cfBypassMutex.withLock {
 
         val cachedCookies = AniDbCFStore.getCookies()
         if (cachedCookies != null && AniDbCFStore.getHost() == targetHost) {
-            Log.d("RaghavAnime", "[AniDb] CF: have cached cookies for $targetHost, retrying with them")
             response = try { app.get(url, headers = buildCfHeaders()) } catch (e: Exception) { throw e }
             if (!isCloudflareBlocked(response)) return response
-            Log.d("RaghavAnime", "[AniDb] CF: still blocked after cached-cookie retry for $targetHost")
         }
 
         AniDbCFStore.clear()
         val bypassSuccess = showCFBypassDialogAndWait(url)
-        Log.d("RaghavAnime", "[AniDb] CF: bypass dialog finished: success=$bypassSuccess for $targetHost")
 
         if (!bypassSuccess) {
             return@withLock
@@ -461,7 +454,6 @@ suspend fun cfAppGet(
         for (attempt in 1..2) {
             response = try { app.get(url, headers = buildCfHeaders()) } catch (e: Exception) { throw e }
             if (!isCloudflareBlocked(response)) {
-                Log.d("RaghavAnime", "[AniDb] CF: retry succeeded on attempt $attempt for $targetHost")
                 return@withLock
             }
         }
@@ -472,6 +464,5 @@ suspend fun cfAppGet(
 }
 
 fun initAniDbCFBypass(context: Context) {
-    Log.d("RaghavAnime", "[AniDb] CF bypass init")
     AniDbCFStore.init(context)
 }

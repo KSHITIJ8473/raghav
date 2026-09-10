@@ -426,7 +426,6 @@ internal suspend fun cfGet(
 
     if (!isSenshiCloudflareBlocked(response)) return response
 
-
     senshiCfBypassMutex.withLock {
 
         val cachedCookies = SenshiCFStore.getCookies()
@@ -478,7 +477,6 @@ internal suspend fun cfPost(
     }
 
     if (!isSenshiCloudflareBlocked(response)) return response
-
 
     senshiCfBypassMutex.withLock {
         val cachedCookies = SenshiCFStore.getCookies()

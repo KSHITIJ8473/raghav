@@ -66,13 +66,11 @@ class AniDb : MainAPI() {
                 }
             }
         }
-        Log.d("RaghavAnime", "[AniDb] parsed ${results.size} anime-card results")
         return results
     }
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         mainUrl = FirebaseDomainHelper.getDomain("anidb") ?: mainUrl
-        Log.d("RaghavAnime", "[AniDb] getMainPage '${request.name}' page $page on $mainUrl")
         val url = request.data + page.toString()
         val res = cfAppGet(url).document
         val searchRes = searchResponseBuilder(res)
@@ -81,20 +79,17 @@ class AniDb : MainAPI() {
 
     override suspend fun search(query: String, page: Int): SearchResponseList {
         mainUrl = FirebaseDomainHelper.getDomain("anidb") ?: mainUrl
-        Log.d("RaghavAnime", "[AniDb] search '$query' on $mainUrl")
         val browseRes = cfAppGet("$mainUrl/browse?q=$query").document
         return searchResponseBuilder(browseRes).toNewSearchResponseList()
     }
 
     override suspend fun load(url: String): LoadResponse? {
         mainUrl = FirebaseDomainHelper.getDomain("anidb") ?: mainUrl
-        Log.d("RaghavAnime", "[AniDb] load '$url'")
         val slug = url.substringAfterLast("/")
         val siteId = slug.substringAfterLast("-").toIntOrNull() ?: return null
 
         val doc = cfAppGet(url).document
         val title = doc.selectFirst("h1")?.text() ?: ""
-        Log.d("RaghavAnime", "[AniDb] loaded '$title' (siteId $siteId)")
         val poster = doc.selectFirst("div.flex-shrink-0 img")?.attr("src")
             ?: doc.selectFirst("meta[property=og:image]")?.attr("content")
         val description = doc.selectFirst("meta[name=description]")?.attr("content")
@@ -109,7 +104,6 @@ class AniDb : MainAPI() {
         val epResponse = cfAppGet(episodesUrl, headers = mapOf("X-Requested-With" to "XMLHttpRequest", "Referer" to url, "Accept" to "application/json, text/plain, */*")).parsedSafe<EpisodesResponse>()
         if (epResponse == null) Log.d("RaghavAnime", "[AniDb] episodes api parse failed for $episodesUrl")
         val episodesList = epResponse?.episodes ?: emptyList()
-        Log.d("RaghavAnime", "[AniDb] episodes api returned ${episodesList.size} episodes")
 
         val firstEpId = episodesList.firstOrNull()?.id
         var hasSub = true
@@ -123,7 +117,6 @@ class AniDb : MainAPI() {
             if (langResponse == null) Log.d("RaghavAnime", "[AniDb] languages api parse failed for first episode")
             hasSub = langs.isEmpty() || langs.any { it.code?.lowercase() in listOf("jpn", "ja", "japanese") || it.name?.lowercase() in listOf("jpn", "ja", "japanese") }
             hasDub = langs.any { it.code?.lowercase() in listOf("eng", "en", "english") || it.name?.lowercase() in listOf("eng", "en", "english") }
-            Log.d("RaghavAnime", "[AniDb] first episode languages: ${langs.size} langs -> hasSub=$hasSub hasDub=$hasDub")
         }
 
         val subEpisodes = mutableListOf<Episode>()
@@ -139,7 +132,6 @@ class AniDb : MainAPI() {
         } else null
 
         val animeMetaData = syncMetaData?.let { parseAnimeData(it) }
-        Log.d("RaghavAnime", "[AniDb] metadata malId=$malId anilistId=$anilistId parsed=${animeMetaData != null} (${animeMetaData?.episodes?.size ?: 0} meta episodes)")
 
         val isMovie = doc.selectFirst("a[class*=badge-orange][href*=/browse?type=Movie]") != null
 
@@ -190,7 +182,6 @@ class AniDb : MainAPI() {
             }
         }
 
-        Log.d("RaghavAnime", "[AniDb] parsed ${subEpisodes.size} sub / ${dubEpisodes.size} dub episodes for '$title' (isMovie=$isMovie)")
         val tvType = if (isMovie) TvType.AnimeMovie else TvType.Anime
 
         val trailerUrl = doc.selectFirst("a[href*=youtube.com/watch]")?.attr("href")
@@ -243,13 +234,11 @@ class AniDb : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        Log.d("RaghavAnime", "[AniDb] loadLinks data '${data.take(80)}'")
         val parts = data.split("|")
         val episodeIdRaw = parts.getOrNull(0) ?: return false
         val episodeId = episodeIdRaw.substringAfterLast("/")
         val slug = parts.getOrNull(1) ?: return false
         val audio = parts.getOrNull(2) ?: "sub"
-        Log.d("RaghavAnime", "[AniDb] resolving episode $episodeId (audio '$audio', slug '$slug')")
 
         val langUrl = "$mainUrl/api/frontend/episode/$episodeId/languages"
         val langResponse = cfAppGet(langUrl, headers = mapOf("X-Requested-With" to "XMLHttpRequest", "Referer" to "$mainUrl/anime/$slug", "Accept" to "application/json, text/plain, */*")).parsedSafe<LanguagesResponse>()
@@ -262,7 +251,6 @@ class AniDb : MainAPI() {
             val preferredCodes = if (audio == "sub") listOf("jpn", "ja", "japanese") else listOf("eng", "en", "english")
             listOfNotNull(langs.find { it.code?.lowercase() in preferredCodes } ?: langs.find { it.name?.lowercase() in preferredCodes })
         }
-        Log.d("RaghavAnime", "[AniDb] langsToExtract=${langsToExtract.size} for audio '$audio'")
         if (langsToExtract.isEmpty()) Log.d("RaghavAnime", "[AniDb] no matching language for audio '$audio', no links will be loaded")
 
         val hlsRegex = listOf(
@@ -275,7 +263,6 @@ class AniDb : MainAPI() {
         langsToExtract.amap { language ->
             val embedUrl = language.embed_url ?: return@amap
             val embedDoc = cfAppGet(embedUrl, headers = mapOf("Referer" to "$mainUrl/")).text
-            Log.d("RaghavAnime", "[AniDb] lang '${language.name}' embed fetched: ${embedUrl.take(80)} (html len ${embedDoc.length})")
 
             var hlsUrl: String? = null
             for (regex in hlsRegex) {
@@ -287,7 +274,6 @@ class AniDb : MainAPI() {
             }
 
             if (hlsUrl != null) {
-                Log.d("RaghavAnime", "[AniDb] lang '${language.name}' direct hls: ${hlsUrl.take(80)}")
                 val sourceName = if (audio == "movie") "$name - ${language.name ?: "Unknown"}" else name
                 generateM3u8(
                     sourceName,
@@ -295,12 +281,10 @@ class AniDb : MainAPI() {
                     "$mainUrl/"
                 ).forEach(callback)
             } else {
-                Log.d("RaghavAnime", "[AniDb] lang '${language.name}' no hls in embed html (len ${embedDoc.length}), trying loadExtractor")
                 loadExtractor(embedUrl, "$mainUrl/", subtitleCallback, callback)
             }
         }
 
-        Log.d("RaghavAnime", "[AniDb] loadLinks done for episode $episodeId")
         return true
     }
 

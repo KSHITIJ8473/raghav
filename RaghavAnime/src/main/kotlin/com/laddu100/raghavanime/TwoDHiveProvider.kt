@@ -92,7 +92,6 @@ class RaghavTwoDHive : MainAPI() {
         val html = quickGet(url)
         val soup = Jsoup.parse(html)
         val items = parseGrid(soup)
-        Log.d("RaghavAnime", "[2DHive] getMainPage '${request.name}' page $page -> ${items.size} items")
         return newHomePageResponse(request.name, items)
     }
 
@@ -102,7 +101,6 @@ class RaghavTwoDHive : MainAPI() {
         val html = quickGet("$mainUrl/?q=$encodedQuery")
         val soup = Jsoup.parse(html)
         val results = parseGrid(soup)
-        Log.d("RaghavAnime", "[2DHive] search '$query' -> ${results.size} results")
         return results
     }
 
@@ -236,8 +234,7 @@ class RaghavTwoDHive : MainAPI() {
                 this.posterUrl = ep.posterUrl
             }
         }
-        // the dub tab is only worth showing when megaplay actually carries a
-        // dub track for this title, otherwise it just ends in "no links"
+
         val hasDub = malId != null && probeDub(malId)
         val dubEpisodes = if (hasDub) {
             episodes.map { ep ->
@@ -248,8 +245,6 @@ class RaghavTwoDHive : MainAPI() {
                 }
             }
         } else emptyList()
-
-        Log.d("RaghavAnime", "[2DHive] load '$title' malId=$malId eps=$epCount sub=${subEpisodes.size} dub=${dubEpisodes.size} (hasDub=$hasDub)")
 
         return newAnimeLoadResponse(title, url, TvType.Anime) {
             this.posterUrl = poster
@@ -269,7 +264,6 @@ class RaghavTwoDHive : MainAPI() {
                 timeout = 15_000L
             ).text
             val hasDub = html.contains("data-id=") || html.contains("data-realid=")
-            Log.d("RaghavAnime", "[2DHive] probeDub malId=$malId -> $hasDub")
             hasDub
         } catch (e: Exception) {
             Log.e("RaghavAnime", "[2DHive] probeDub malId=$malId failed: ${e.message}")
@@ -287,13 +281,10 @@ class RaghavTwoDHive : MainAPI() {
         if (parts.size < 2) return@coroutineScope false
         val epUrl = parts[0]
         val type = parts[1]
-        Log.d("RaghavAnime", "[2DHive] loadLinks ep=$epUrl type=$type")
 
         val html = quickGet(epUrl)
         val soup = Jsoup.parse(html)
 
-        // the player island carries the mal id and episode number; the component
-        // was renamed from MultiServerPlayer to EpisodePlayer, match both
         val island = soup.select("astro-island").firstOrNull {
             val cu = it.attr("component-url")
             cu.contains("EpisodePlayer", ignoreCase = true) || cu.contains("MultiServerPlayer", ignoreCase = true)
@@ -316,7 +307,6 @@ class RaghavTwoDHive : MainAPI() {
             Log.e("RaghavAnime", "[2DHive] could not resolve malId, aborting")
             return@coroutineScope false
         }
-        Log.d("RaghavAnime", "[2DHive] resolved malId=$malId epNum=$epNum type=$type")
 
         val results = mutableListOf<Deferred<Boolean>>()
 
@@ -339,7 +329,6 @@ class RaghavTwoDHive : MainAPI() {
         })
 
         val anyOk = results.awaitAll().any { it }
-        Log.d("RaghavAnime", "[2DHive] loadLinks done malId=$malId epNum=$epNum -> $anyOk")
         anyOk
     }
 
@@ -395,7 +384,7 @@ class RaghavTwoDHive : MainAPI() {
         }
 
         val label = if (type == "dub") "MegaPlay Dub" else "MegaPlay Sub"
-        // the cdn rejects requests without a megaplay referer
+
         callback(
             newExtractorLink(label, label, m3u8Url, type = ExtractorLinkType.M3U8) {
                 this.headers = mapOf(
@@ -406,7 +395,6 @@ class RaghavTwoDHive : MainAPI() {
                 this.referer = "https://megaplay.buzz/"
             }
         )
-        Log.d("RaghavAnime", "[2DHive] MegaPlay emitted: $label ($m3u8Url)")
         return true
     }
 
@@ -430,10 +418,8 @@ class RaghavTwoDHive : MainAPI() {
                         this.headers = mapOf("User-Agent" to userAgent, "Referer" to "https://babastream.top/")
                     }
                 )
-                Log.d("RaghavAnime", "[2DHive] BabaStream emitted: $resolved")
                 true
             } else {
-                Log.d("RaghavAnime", "[2DHive] BabaStream resolved to non-media url: $resolved")
                 false
             }
         } catch (e: Exception) {

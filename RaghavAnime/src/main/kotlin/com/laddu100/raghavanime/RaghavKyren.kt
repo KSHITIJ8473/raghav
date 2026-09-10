@@ -74,7 +74,6 @@ class RaghavKyren : MainAPI() {
         for (server in servers) {
             try {
                 val streamUrl = "$mainUrl/api/stream/$anilistId/$episode?lang=$lang&title=$encodedTitle&server=$server"
-                Log.d("RaghavAnime", "[Kyren] requesting server '$server' for anilist $anilistId ep$episode ($lang)")
 
                 val res = app.get(streamUrl, headers = apiHeaders)
                 val parsed = parseJson<StreamResponse>(res.text)
@@ -86,7 +85,6 @@ class RaghavKyren : MainAPI() {
 
                 val sources = parsed.sources ?: emptyList()
                 if (sources.isEmpty()) {
-                    Log.d("RaghavAnime", "[Kyren] server '$server' returned no sources")
                     continue
                 }
 
@@ -120,16 +118,13 @@ class RaghavKyren : MainAPI() {
                                     )
                                 }
                             )
-                            Log.d("RaghavAnime", "[Kyren] server '$server' emitted hls link: $providerName $langLabel (${source.quality ?: "unknown"})")
                             found = true
                         }
                         else -> {
-                            Log.d("RaghavAnime", "[Kyren] server '$server' resolving embed: $sourceUrl")
                             val loaded = loadExtractor(sourceUrl, "$mainUrl/", subtitleCallback, callback)
                             if (loaded) {
                                 found = true
                             } else {
-                                Log.d("RaghavAnime", "[Kyren] server '$server' embed not resolved (no extractor for: $sourceUrl)")
                             }
                         }
                     }

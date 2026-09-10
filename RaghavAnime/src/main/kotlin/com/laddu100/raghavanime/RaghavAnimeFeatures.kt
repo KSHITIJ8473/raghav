@@ -175,7 +175,7 @@ object RaghavAnimeFeatures {
             .toRequestBody(RequestBodyTypes.JSON.toMediaTypeOrNull())
         return app.post(
             "https://graphql.anilist.co",
-            headers = mapOf("Accept" to "application/json", "Content-Type" to "application/json"),
+            headers = ANILIST_HEADERS,
             requestBody = requestData
         ).text
     }

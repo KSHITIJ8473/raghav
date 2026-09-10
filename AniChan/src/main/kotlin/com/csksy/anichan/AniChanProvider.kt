@@ -1,199 +1,164 @@
 package com.csksy.anichan
 
-import com.fasterxml.jackson.annotation.JsonIgnoreProperties
-import com.fasterxml.jackson.annotation.JsonProperty
-import com.fasterxml.jackson.databind.ObjectMapper
-import com.lagradost.api.Log
-import com.lagradost.cloudstream3.*
+import com.lagradost.cloudstream3.DubStatus
+import com.lagradost.cloudstream3.Episode
+import com.lagradost.cloudstream3.HomePageResponse
+import com.lagradost.cloudstream3.LoadResponse
+import com.lagradost.cloudstream3.MainAPI
+import com.lagradost.cloudstream3.MainPageRequest
+import com.lagradost.cloudstream3.Score
+import com.lagradost.cloudstream3.SearchResponse
+import com.lagradost.cloudstream3.ShowStatus
+import com.lagradost.cloudstream3.SubtitleFile
+import com.lagradost.cloudstream3.TvType
+import com.lagradost.cloudstream3.addDate
+import com.lagradost.cloudstream3.addEpisodes
+import com.lagradost.cloudstream3.mainPageOf
+import com.lagradost.cloudstream3.newAnimeLoadResponse
+import com.lagradost.cloudstream3.newAnimeSearchResponse
+import com.lagradost.cloudstream3.newEpisode
+import com.lagradost.cloudstream3.newHomePageResponse
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.AppUtils.toJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.newExtractorLink
-import com.lagradost.cloudstream3.app
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import java.util.TimeZone
 
 class AniChanProvider : MainAPI() {
-    override var mainUrl = "https://anichan.net"
+
+    override var mainUrl = AniChanApi.MAIN_URL
     override var name = "AniChan"
     override val hasMainPage = true
     override var lang = "en"
     override val hasDownloadSupport = true
     override val supportedTypes = setOf(TvType.Anime, TvType.AnimeMovie)
 
-    private val browserUA =
-        "Mozilla/5.0 (Linux; Android 13; Pixel 5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
-
     override val mainPage = mainPageOf(
         "trending" to "Trending Now",
-        "season" to "Airing This Season",
-        "popular" to "All-Time Popular"
+        "airing" to "Airing This Season"
     )
 
-    private val anilistUrl = "https://graphql.anilist.co"
+    private data class EpisodeRef(
+        val anilistId: Int,
+        val ep: Int,
+        val isDub: Boolean
+    )
 
-    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        return try {
-            val sort = when (request.data) {
-                "trending" -> "TRENDING_DESC"
-                "season" -> "POPULARITY_DESC"
-                "popular" -> "POPULARITY_DESC"
-                else -> "TRENDING_DESC"
-            }
-
-            val (season, seasonYear) = if (request.data == "season") {
-                val cal = java.util.Calendar.getInstance()
-                val s = when (cal.get(java.util.Calendar.MONTH)) {
-                    in 0..2 -> "WINTER"
-                    in 3..5 -> "SPRING"
-                    in 6..8 -> "SUMMER"
-                    in 9..11 -> "FALL"
-                    else -> "WINTER"
-                }
-                s to cal.get(java.util.Calendar.YEAR)
-            } else null to null
-
-            val query = if (season != null) {
-                "{ Page(page: 1, perPage: 20) { media(type: ANIME, sort: [$sort], season: $season, seasonYear: $seasonYear) { id title { english romaji } coverImage { large extraLarge } format episodes seasonYear } } }"
-            } else {
-                "{ Page(page: 1, perPage: 20) { media(type: ANIME, sort: [$sort]) { id title { english romaji } coverImage { large extraLarge } format episodes seasonYear } } }"
-            }
-
-            val response = app.post(anilistUrl, json = mapOf("query" to query), timeout = 15_000L).text
-            val data = parseJson<AniListPage>(response)
-            val media = data.data?.page?.media ?: emptyList()
-
-            val items = media.mapNotNull { m ->
-                val title = m.title?.english ?: m.title?.romaji ?: return@mapNotNull null
-                val id = m.id ?: return@mapNotNull null
-                val poster = m.coverImage?.extraLarge ?: m.coverImage?.large ?: ""
-                newAnimeSearchResponse(title, "/anime/$id", TvType.Anime) {
-                    this.posterUrl = poster
-                    this.year = m.seasonYear
-                }
-            }
-
-            newHomePageResponse(request.name, items)
-        } catch (e: Exception) {
-            Log.e("AniChan", "getMainPage: ${e.message}")
-            newHomePageResponse(request.name, emptyList())
+    override suspend fun getMainPage(
+        page: Int,
+        request: MainPageRequest
+    ): HomePageResponse? {
+        val items = when (request.data) {
+            "trending" -> AniChanApi.trending(page)
+            "airing" -> AniChanApi.airing(page)
+            else -> emptyList()
         }
+        return newHomePageResponse(
+            request.name,
+            items.mapNotNull { it.toSearchResponse() },
+            hasNext = items.size >= 20
+        )
     }
 
-    override suspend fun search(query: String): List<SearchResponse>? {
-        return try {
-            val response = app.get(
-                "$mainUrl/api/search?q=${java.net.URLEncoder.encode(query, "UTF-8")}",
-                headers = mapOf("User-Agent" to browserUA),
-                timeout = 15_000L
-            ).text
-            val data = parseJson<AniChanSearchResponse>(response)
-            data.results.mapNotNull { item ->
-                val title = item.title ?: item.titleRomaji ?: return@mapNotNull null
-                val id = item.id ?: return@mapNotNull null
-                val tvType = if (item.format == "MOVIE") TvType.AnimeMovie else TvType.Anime
-                newAnimeSearchResponse(title, "/anime/$id", tvType) {
-                    this.posterUrl = item.poster
-                    this.year = item.startDate?.year
-                }
-            }
-        } catch (e: Exception) {
-            Log.e("AniChan", "search: ${e.message}")
-            emptyList()
+    override suspend fun search(query: String): List<SearchResponse> {
+        if (query.isBlank()) return emptyList()
+        return AniChanApi.suggest(query).mapNotNull { it.toSearchResponse() }
+    }
+
+    private fun CatalogItem.toSearchResponse(): SearchResponse? {
+        val id = this.id ?: return null
+        val displayTitle = title ?: titleRomaji ?: return null
+        val tvType = if (format == "MOVIE") TvType.AnimeMovie else TvType.Anime
+        return newAnimeSearchResponse(displayTitle, "$mainUrl/anime/$id", tvType) {
+            this.posterUrl = poster
+            this.year = startDate?.year
+            this.otherName = titleRomaji
+            score?.let { score = Score.from100(it.toDouble()) }
         }
     }
 
     override suspend fun load(url: String): LoadResponse? {
         val anilistId = url.substringAfterLast("/").toIntOrNull() ?: return null
+        val anime = AniChanApi.animeDetail(anilistId) ?: return null
+        val title = anime.title ?: anime.titleRomaji ?: return null
 
-        val metaQuery = "{ Media(id: $anilistId) { id title { english romaji } coverImage { large extraLarge } bannerImage description genres episodes format seasonYear status nextAiringEpisode { episode } } }"
-        val meta: AniListMediaDetail? = try {
-            val resp = app.post(anilistUrl, json = mapOf("query" to metaQuery), timeout = 15_000L).text
-            parseJson<AniListDetailResponse>(resp).data?.media
+        val info = AniChanApi.watchInfo(anilistId)
+        val epMeta = anime.selfhost?.epMeta
+        val epNumbers = collectEpisodeNumbers(anime, info)
+        if (epNumbers.isEmpty()) return null
+
+        val tvType = if (anime.format == "MOVIE") TvType.AnimeMovie else TvType.Anime
+        val showStatus = when (anime.status) {
+            "RELEASING" -> ShowStatus.Ongoing
+            "FINISHED" -> ShowStatus.Completed
+            else -> null
+        }
+        val dubAvailable = info?.dubAvailable == true
+
+        val subEps = epNumbers.map { it.toEpisode(anilistId, false, epMeta) }
+        val dubEps = if (dubAvailable) epNumbers.map { it.toEpisode(anilistId, true, epMeta) } else emptyList()
+
+        return newAnimeLoadResponse(title, url, tvType) {
+            this.posterUrl = anime.poster
+            this.backgroundPosterUrl = anime.banner
+            this.plot = anime.description?.let(::stripHtml)
+            this.tags = anime.genres ?: emptyList()
+            this.year = anime.startDate?.year
+            this.duration = anime.duration
+            this.showStatus = showStatus
+            this.score = anime.score?.let { Score.from100(it.toDouble()) }
+            addEpisodes(DubStatus.Subbed, subEps)
+            if (dubEps.isNotEmpty()) addEpisodes(DubStatus.Dubbed, dubEps)
+        }
+    }
+
+    // only list episodes that already aired, the player cannot load unaired ones
+    private fun collectEpisodeNumbers(anime: CatalogItem, info: WatchInfo?): List<Int> {
+        val today = todayUtc()
+        val eps = sortedSetOf<Int>()
+        val selfhost = anime.selfhost
+        selfhost?.cachedEps?.forEach { if (it > 0) eps.add(it) }
+        selfhost?.epMeta?.forEach { (key, meta) ->
+            val num = key.toIntOrNull() ?: return@forEach
+            if (num <= 0) return@forEach
+            val air = meta.airDate
+            if (air != null && air <= today) eps.add(num)
+        }
+        if (eps.isEmpty()) {
+            val count = info?.episodes ?: anime.episodes ?: selfhost?.count ?: 0
+            if (count > 0) eps.addAll(1..count)
+        }
+        return eps.toList()
+    }
+
+    private fun Int.toEpisode(
+        anilistId: Int,
+        isDub: Boolean,
+        epMeta: Map<String, EpMeta>?
+    ): Episode {
+        val meta = epMeta?.get(toString())
+        val ref = EpisodeRef(anilistId, this, isDub)
+        return newEpisode(ref.toJson()) {
+            this.episode = this@toEpisode
+            this.name = meta?.title?.takeIf { it.isNotBlank() }
+            this.description = meta?.overview?.takeIf { it.isNotBlank() }
+            this.posterUrl = meta?.image?.takeIf { it.startsWith("http") }
+            parseAirDate(meta?.airDate)?.let { addDate(it) }
+        }
+    }
+
+    private fun parseAirDate(raw: String?): Date? {
+        if (raw.isNullOrBlank()) return null
+        return try {
+            val sdf = SimpleDateFormat("yyyy-MM-dd", Locale.US)
+            sdf.timeZone = TimeZone.getTimeZone("UTC")
+            sdf.parse(raw.substringBefore("T").take(10))
         } catch (e: Exception) {
-            Log.e("AniChan", "load: AniList fetch failed: ${e.message}")
             null
-        }
-
-        val title = meta?.title?.english ?: meta?.title?.romaji ?: return null
-        val poster = meta?.coverImage?.extraLarge ?: meta?.coverImage?.large ?: ""
-        val banner = meta?.bannerImage ?: ""
-        val plot = meta?.description?.replace(Regex("<[^>]+>"), "")?.replace("\\n", "\n")
-        val genres = meta?.genres ?: emptyList()
-        val year = meta?.seasonYear
-
-        val epData = try {
-            val resp = app.get(
-                "$mainUrl/api/watch/episodes?anilistId=$anilistId",
-                headers = mapOf("User-Agent" to browserUA, "Referer" to "$mainUrl/anime/$anilistId"),
-                timeout = 15_000L
-            ).text
-            parseJson<EpisodesResponse>(resp)
-        } catch (e: Exception) {
-            Log.e("AniChan", "load: episodes fetch failed: ${e.message}")
-            return null
-        }
-
-        val epTitles = fetchEpisodeTitles(anilistId)
-
-        var epCount = epData.episodes ?: 0
-        if (epCount == 0 && meta?.statusStr == "RELEASING") {
-            epCount = (meta?.nextAiringEpisode?.episode ?: 1) - 1
-            if (epCount < 1) epCount = 1
-        }
-        if (epCount == 0) epCount = 1
-
-        val dubAvailable = epData.dubAvailable == true
-        val isMovie = meta?.formatStr == "MOVIE" || epCount <= 1
-
-        if (isMovie) {
-            val movieTitle = epTitles[1] ?: title
-            if (dubAvailable) {
-                val subEp = newEpisode(EpisodeData(anilistId, 1, false).toJson()) { this.name = movieTitle }
-                val dubEp = newEpisode(EpisodeData(anilistId, 1, true).toJson()) { this.name = movieTitle }
-                return newAnimeLoadResponse(title, url, TvType.Anime) {
-                    this.posterUrl = poster
-                    this.backgroundPosterUrl = banner
-                    this.plot = plot
-                    this.tags = genres
-                    this.year = year
-                    addEpisodes(DubStatus.Subbed, listOf(subEp))
-                    addEpisodes(DubStatus.Dubbed, listOf(dubEp))
-                }
-            } else {
-                return newMovieLoadResponse(title, url, TvType.AnimeMovie, EpisodeData(anilistId, 1, false).toJson()) {
-                    this.posterUrl = poster
-                    this.backgroundPosterUrl = banner
-                    this.plot = plot
-                    this.tags = genres
-                    this.year = year
-                }
-            }
-        }
-
-        val subEpisodes = (1..epCount).map { epNum ->
-            newEpisode(EpisodeData(anilistId, epNum, false).toJson()) {
-                this.episode = epNum
-                this.name = epTitles[epNum] ?: "Episode $epNum"
-            }
-        }
-
-        val dubEpisodes = if (dubAvailable) {
-            (1..epCount).map { epNum ->
-                newEpisode(EpisodeData(anilistId, epNum, true).toJson()) {
-                    this.episode = epNum
-                    this.name = epTitles[epNum] ?: "Episode $epNum"
-                }
-            }
-        } else emptyList()
-
-        return newAnimeLoadResponse(title, url, TvType.Anime) {
-            this.posterUrl = poster
-            this.backgroundPosterUrl = banner
-            this.plot = plot
-            this.tags = genres
-            this.year = year
-            addEpisodes(DubStatus.Subbed, subEpisodes)
-            if (dubEpisodes.isNotEmpty()) addEpisodes(DubStatus.Dubbed, dubEpisodes)
         }
     }
 
@@ -203,245 +168,80 @@ class AniChanProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        return try {
-            val epData = parseJson<EpisodeData>(data)
-            val anilistId = epData.anilistId
-            val episode = epData.episode
-            val category = if (epData.isDub) "dub" else "sub"
+        val ref = try {
+            parseJson<EpisodeRef>(data)
+        } catch (e: Exception) {
+            null
+        } ?: return false
+        val category = if (ref.isDub) "dub" else "sub"
 
-            var foundLinks = false
+        val servers = AniChanApi.watchServers(ref.anilistId, ref.ep, category)
+        if (servers.isEmpty()) return false
 
-            try {
-                val resp = app.get(
-                    "$mainUrl/api/watch/servers?anilistId=$anilistId&ep=$episode&category=$category",
-                    headers = mapOf("User-Agent" to browserUA, "Referer" to "$mainUrl/anime/$anilistId"),
-                    timeout = 15_000L
-                ).text
-                val servers = parseJson<ServersResponse>(resp).servers ?: emptyList()
+        val linkHeaders = mapOf(
+            "User-Agent" to AniChanApi.USER_AGENT,
+            "Referer" to "$mainUrl/"
+        )
+        val seenSubs = HashSet<String>()
+        var found = false
 
-                for (server in servers) {
-                    val stream = server.stream ?: continue
-                    val fullStream = if (stream.startsWith("/")) "$mainUrl$stream" else stream
-                    val rawLabel = server.label ?: server.name ?: "AniChan"
-                    val label = rawLabel.replace("★ ", "").trim()
-                    val subType = server.subType ?: "soft"
-                    val isHardsub = subType == "hard"
-
-                    val displayLabel = when {
-                        isHardsub -> "$label (Hardsub)"
-                        epData.isDub -> "$label (Dub)"
-                        else -> label
+        for (server in servers) {
+            val label = serverLabel(server)
+            if (server.type == "embed") {
+                val embed = server.embed ?: continue
+                val vidServer = Regex("[?&]server=([^&]+)").find(embed)?.groupValues?.get(1)
+                    ?: "kari"
+                val tracks = VidhawkResolver.resolve(ref.anilistId, ref.ep, category, vidServer)
+                    ?: continue
+                val track = tracks.firstOrNull { it.id.equals(category, true) && !it.src.isNullOrBlank() }
+                    ?: continue
+                val src = track.src?.takeIf { it.startsWith("http") } ?: continue
+                callback.invoke(
+                    newExtractorLink(name, label, src, type = ExtractorLinkType.M3U8) {
+                        this.headers = linkHeaders
                     }
-
-                    callback.invoke(newExtractorLink(
-                        "AniChan",
-                        displayLabel,
-                        fullStream,
-                        type = ExtractorLinkType.M3U8
-                    ) {
-                        this.referer = "$mainUrl/"
-                        this.headers = mapOf(
-                            "User-Agent" to browserUA,
-                            "Referer" to "$mainUrl/anime/$anilistId"
-                        )
-                    })
-                    foundLinks = true
-
-                    server.subtitles?.forEach { sub ->
-                        val subUrl = sub.url ?: return@forEach
-                        val fullSubUrl = if (subUrl.startsWith("/")) "$mainUrl$subUrl" else subUrl
-                        val lang = sub.lang ?: "English"
-                        subtitleCallback.invoke(SubtitleFile(lang, fullSubUrl))
+                )
+                found = true
+            } else {
+                val stream = server.stream?.takeIf { it.startsWith("http") }
+                    ?: server.stream?.takeIf { it.startsWith("/") }?.let { "$mainUrl$it" }
+                    ?: continue
+                callback.invoke(
+                    newExtractorLink(name, label, stream, type = ExtractorLinkType.M3U8) {
+                        this.headers = linkHeaders
                     }
-                }
-            } catch (e: Exception) {
-                Log.e("AniChan", "loadLinks $category: ${e.message}")
+                )
+                found = true
             }
 
-            foundLinks
-        } catch (e: Exception) {
-            Log.e("AniChan", "loadLinks: ${e.message}")
-            false
+            for (sub in server.subtitles.orEmpty()) {
+                val url = sub.url?.takeIf { it.startsWith("http") } ?: continue
+                val lang = sub.lang ?: "English"
+                if (seenSubs.add(lang)) {
+                    subtitleCallback.invoke(SubtitleFile(lang, url))
+                }
+            }
         }
+        return found
     }
 
-    private suspend fun fetchEpisodeTitles(anilistId: Int): Map<Int, String> {
-        val titles = mutableMapOf<Int, String>()
-        try {
-            val html = app.get(
-                "$mainUrl/anime/$anilistId",
-                headers = mapOf("User-Agent" to browserUA),
-                timeout = 30_000L
-            ).text
-
-            // The page embeds episode metadata as escaped JSON inside a
-            // Next.js RSC stream. Quotes are escaped as \" so we search
-            // for the escaped form.
-            val marker = "\\\"epMeta\\\""
-            val epMetaIdx = html.indexOf(marker)
-            if (epMetaIdx < 0) return titles
-            val metaStart = html.indexOf('{', epMetaIdx)
-            if (metaStart < 0) return titles
-
-            var depth = 0
-            var inStr = false
-            var end = metaStart
-            var i = metaStart
-            while (i < html.length) {
-                val c = html[i]
-                if (c == '\\' && i + 1 < html.length) { i += 2; continue }
-                if (c == '"') { inStr = !inStr }
-                else if (!inStr) {
-                    when (c) {
-                        '{' -> depth++
-                        '}' -> { depth--; if (depth == 0) { end = i + 1; break } }
-                    }
-                }
-                i++
-            }
-
-            val raw = html.substring(metaStart, end)
-            // Literal quotes inside titles (\\\") must survive the unescape
-            // as escaped quotes (\") while structural quotes (\") become
-            // real delimiters.
-            val unescaped = raw
-                .replace("\\\\\\\"", "\u0000")
-                .replace("\\\"", "\"")
-                .replace("\u0000", "\\\"")
-                .replace("\\/", "/")
-
-            val mapper = ObjectMapper()
-            val node = mapper.readTree(unescaped)
-            val fields = node.fields()
-            while (fields.hasNext()) {
-                val entry = fields.next()
-                val epNum = entry.key.toIntOrNull() ?: continue
-                val title = entry.value.get("title")?.asText()
-                if (!title.isNullOrBlank()) titles[epNum] = title
-            }
-        } catch (e: Exception) {
-            Log.e("AniChan", "fetchEpisodeTitles: ${e.message}")
-        }
-        return titles
+    private fun serverLabel(server: Server): String {
+        val raw = (server.label ?: server.name ?: "AniChan")
+            .replace("★", "")
+            .replace(Regex("\\s*⧉\\s*\\(ads\\)"), "")
+            .trim()
+        val hardsub = server.subType.equals("hard", true)
+        return if (hardsub) "$raw (Hardsub)" else raw
     }
 
-    data class EpisodeData(val anilistId: Int, val episode: Int, val isDub: Boolean)
+    private fun todayUtc(): String {
+        val fmt = SimpleDateFormat("yyyy-MM-dd", Locale.US)
+        fmt.timeZone = TimeZone.getTimeZone("UTC")
+        return fmt.format(Date())
+    }
+
+    private fun stripHtml(html: String): String =
+        html.replace(Regex("<br\\s*/?>"), "\n")
+            .replace(Regex("<[^>]+>"), "")
+            .trim()
 }
-
-@JsonIgnoreProperties(ignoreUnknown = true)
-data class AniChanSearchResponse(
-    @JsonProperty("results") val results: List<SearchResult> = emptyList()
-)
-
-@JsonIgnoreProperties(ignoreUnknown = true)
-data class SearchResult(
-    @JsonProperty("id") val id: Int? = null,
-    @JsonProperty("title") val title: String? = null,
-    @JsonProperty("titleRomaji") val titleRomaji: String? = null,
-    @JsonProperty("poster") val poster: String? = null,
-    @JsonProperty("format") val format: String? = null,
-    @JsonProperty("startDate") val startDate: StartDate? = null
-)
-
-@JsonIgnoreProperties(ignoreUnknown = true)
-data class StartDate(
-    @JsonProperty("year") val year: Int? = null
-)
-
-@JsonIgnoreProperties(ignoreUnknown = true)
-data class EpisodesResponse(
-    @JsonProperty("episodes") val episodes: Int? = null,
-    @JsonProperty("dubAvailable") val dubAvailable: Boolean? = null
-)
-
-@JsonIgnoreProperties(ignoreUnknown = true)
-data class ServersResponse(
-    @JsonProperty("servers") val servers: List<Server>? = null
-)
-
-@JsonIgnoreProperties(ignoreUnknown = true)
-data class Server(
-    @JsonProperty("name") val name: String? = null,
-    @JsonProperty("label") val label: String? = null,
-    @JsonProperty("host") val host: String? = null,
-    @JsonProperty("type") val type: String? = null,
-    @JsonProperty("stream") val stream: String? = null,
-    @JsonProperty("subType") val subType: String? = null,
-    @JsonProperty("subtitles") val subtitles: List<Subtitle>? = null,
-    @JsonProperty("audios") val audios: List<Audio>? = null
-)
-
-@JsonIgnoreProperties(ignoreUnknown = true)
-data class Subtitle(
-    @JsonProperty("lang") val lang: String? = null,
-    @JsonProperty("url") val url: String? = null,
-    @JsonProperty("default") val default: Boolean? = null
-)
-
-@JsonIgnoreProperties(ignoreUnknown = true)
-data class Audio(
-    @JsonProperty("name") val name: String? = null,
-    @JsonProperty("lang") val lang: String? = null
-)
-
-@JsonIgnoreProperties(ignoreUnknown = true)
-data class AniListDetailResponse(
-    @JsonProperty("data") val data: AniListDetailData? = null
-)
-@JsonIgnoreProperties(ignoreUnknown = true)
-data class AniListDetailData(
-    @JsonProperty("Media") val media: AniListMediaDetail? = null
-)
-@JsonIgnoreProperties(ignoreUnknown = true)
-data class AniListMediaDetail(
-    @JsonProperty("id") val id: Int? = null,
-    @JsonProperty("title") val title: AniListTitle? = null,
-    @JsonProperty("coverImage") val coverImage: AniListCover? = null,
-    @JsonProperty("bannerImage") val bannerImage: String? = null,
-    @JsonProperty("description") val description: String? = null,
-    @JsonProperty("genres") val genres: List<String>? = null,
-    @JsonProperty("episodes") val episodes: Int? = null,
-    @JsonProperty("format") val formatStr: String? = null,
-    @JsonProperty("seasonYear") val seasonYear: Int? = null,
-    @JsonProperty("status") val statusStr: String? = null,
-    @JsonProperty("nextAiringEpisode") val nextAiringEpisode: AniListAiring? = null
-)
-@JsonIgnoreProperties(ignoreUnknown = true)
-data class AniListAiring(
-    @JsonProperty("episode") val episode: Int? = null
-)
-
-@JsonIgnoreProperties(ignoreUnknown = true)
-data class AniListPage(
-    @JsonProperty("data") val data: AniListPageData? = null
-)
-
-@JsonIgnoreProperties(ignoreUnknown = true)
-data class AniListPageData(
-    @JsonProperty("Page") val page: AniListPageMedia? = null
-)
-
-@JsonIgnoreProperties(ignoreUnknown = true)
-data class AniListPageMedia(
-    @JsonProperty("media") val media: List<AniListMedia>? = null
-)
-
-@JsonIgnoreProperties(ignoreUnknown = true)
-data class AniListMedia(
-    @JsonProperty("id") val id: Int? = null,
-    @JsonProperty("title") val title: AniListTitle? = null,
-    @JsonProperty("coverImage") val coverImage: AniListCover? = null,
-    @JsonProperty("seasonYear") val seasonYear: Int? = null
-)
-
-@JsonIgnoreProperties(ignoreUnknown = true)
-data class AniListTitle(
-    @JsonProperty("english") val english: String? = null,
-    @JsonProperty("romaji") val romaji: String? = null
-)
-
-@JsonIgnoreProperties(ignoreUnknown = true)
-data class AniListCover(
-    @JsonProperty("large") val large: String? = null,
-    @JsonProperty("extraLarge") val extraLarge: String? = null
-)

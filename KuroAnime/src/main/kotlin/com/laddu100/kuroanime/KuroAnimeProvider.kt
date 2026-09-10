@@ -363,28 +363,23 @@ class KuroAnimeProvider : MainAPI() {
                 }
                 return
             }
-            val playable = try {
+            val manifest = try {
                 val resp = app.get(signed, headers = headers)
-                resp.isSuccessful && resp.text.startsWith("#EXTM3U")
+                if (resp.isSuccessful) resp.text else null
             } catch (e: Exception) {
-                false
+                null
             }
-            if (!playable) continue
+            if (manifest == null || !manifest.startsWith("#EXTM3U")) continue
             if (seenUrls.add(signed)) {
-                try {
-                    generateM3u8(
-                        label,
-                        signed,
-                        mainUrl,
-                        headers = headers
-                    ).forEach(callback)
-                } catch (e: Exception) {
-                    callback.invoke(
-                        newExtractorLink(label, "$label - auto", signed, type = ExtractorLinkType.M3U8) {
-                            this.headers = headers
-                        }
-                    )
-                }
+                val height = Regex("""RESOLUTION=\d+x(\d+)""")
+                    .findAll(manifest).mapNotNull { it.groupValues[1].toIntOrNull() }.maxOrNull()
+                callback.invoke(
+                    newExtractorLink(label, label, signed, type = ExtractorLinkType.M3U8) {
+                        this.headers = headers
+                        this.referer = mainUrl
+                        height?.let { this.quality = it }
+                    }
+                )
             }
             if (audio == "sub") {
                 signSubtitle(bunny, headers, seenSubs, subtitleCallback)

@@ -8,7 +8,6 @@ class NineAnimePlugin : BasePlugin() {
     override fun load() {
         registerMainAPI(NineAnime())
         registerExtractorAPI(NineAnimeMegaPlay())
-        registerExtractorAPI(NineAnimeVidWish())
         registerExtractorAPI(NineAnimeVidmoly())
         registerExtractorAPI(NineAnimeMoon())
     }

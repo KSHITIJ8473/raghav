@@ -5,12 +5,17 @@ import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.loadExtractor
 import com.lagradost.cloudstream3.utils.newExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
-import com.lagradost.cloudstream3.network.WebViewResolver
-import com.google.gson.JsonParser
 import org.jsoup.Jsoup
 import android.util.Base64
+import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import com.lagradost.api.Log
 
 class NineAnime : MainAPI() {
+    private val TAG = "NineAnime"
+
     override var mainUrl = "https://9anime.org.lv"
     override var name = "9anime"
     override val hasMainPage = true
@@ -71,7 +76,6 @@ class NineAnime : MainAPI() {
         mainUrl = FirebaseDomainHelper.getDomain("nineanime") ?: mainUrl
         var detailUrl = url
         if (!url.contains("/anime/")) {
-            // Fetch the episode page to find the parent anime page link
             val doc = app.get(url).document
             val animeLink = doc.select("a[href*=/anime/]").map { it.attr("href") }.firstOrNull { href ->
                 val path = href.substringAfter("/anime/").trim('/')
@@ -87,17 +91,14 @@ class NineAnime : MainAPI() {
             ?: doc.selectFirst("h1")?.text()
             ?: "Unknown"
 
-        // Poster
         val posterUrl = doc.selectFirst(".thumb img")?.attr("src")
             ?: doc.selectFirst(".poster img")?.attr("src")
             ?: doc.selectFirst("img")?.attr("src")
 
-        // Description/Plot
         val plot = doc.selectFirst(".entry-content")?.text()
             ?: doc.selectFirst(".desc")?.text()
             ?: doc.selectFirst(".story")?.text()
 
-        // Metadata
         val tags = doc.select(".genxed a").map { it.text() }
 
         val statusText = doc.selectFirst(".info-content")?.text() ?: ""
@@ -114,7 +115,6 @@ class NineAnime : MainAPI() {
             else -> TvType.Anime
         }
 
-        // Episodes
         val episodesList = mutableListOf<Episode>()
         val eplister = doc.select(".eplister li")
         if (eplister.isNotEmpty()) {
@@ -141,7 +141,7 @@ class NineAnime : MainAPI() {
             })
         }
 
-        // Episodes on 9anime are listed in reverse order (newest first), reverse it
+        // episodes on 9anime are listed newest first, cloudstream expects oldest first
         episodesList.reverse()
 
         val isDub = title.contains("(Dub)", ignoreCase = true) || detailUrl.contains("-dub", ignoreCase = true)
@@ -165,86 +165,53 @@ class NineAnime : MainAPI() {
         isCasting: Boolean,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
-    ): Boolean {
-        // "data" is the watch page URL, e.g. https://9anime.org.lv/one-piece-episode-1166/
+    ): Boolean = coroutineScope {
         val res = try {
             app.get(data)
         } catch (e: Exception) {
-            return false
+            Log.w(TAG, "watch page load failed: ${e.message}")
+            return@coroutineScope false
         }
-        val html = res.text
         val doc = res.document
 
-        var found = false
-
-        // 1. Process base64 mirrors in the <select class="mirror"> tag
-        val selectMirror = doc.selectFirst("select.mirror")
-        if (selectMirror != null) {
-            val options = selectMirror.select("option")
-            options.forEach { opt ->
-                val b64Value = opt.attr("value")
-                if (b64Value.isBlank() || b64Value == "...") return@forEach
-
-                val decodedIframe = try {
-                    val decodedBytes = Base64.decode(b64Value, Base64.DEFAULT)
-                    String(decodedBytes, Charsets.UTF_8)
-                } catch (e: Exception) {
-                    null
-                } ?: return@forEach
-
-                val iframeUrl = Jsoup.parse(decodedIframe).selectFirst("iframe")?.attr("src") ?: return@forEach
-
-                val resolved = resolveAndExtract(iframeUrl, data, subtitleCallback, callback)
-                if (resolved) {
-                    found = true
-                }
-            }
-        }
-
-        // 2. Fetch AJAX dynamic kiwi links if present
-        val security = Regex("""var security\s*=\s*'([a-f0-9]+)'""").find(html)?.groupValues?.get(1)
-        val malId = Regex("""var malId\s*=\s*'(\d+)'""").find(html)?.groupValues?.get(1)
-        val ep = Regex("""var ep\s*=\s*'(\d+)'""").find(html)?.groupValues?.get(1)
-
-        if (security != null && malId != null && ep != null) {
-            try {
-                val ajaxResponse = app.post(
-                    "$mainUrl/wp-admin/admin-ajax.php",
-                    data = mapOf(
-                        "action" to "fetch_kiwik_stream_links",
-                        "security" to security,
-                        "mal_id" to malId,
-                        "ep" to ep
-                    ),
-                    headers = mapOf(
-                        "X-Requested-With" to "XMLHttpRequest",
-                        "Referer" to data
-                    )
-                ).text
-
-                val json = JsonParser.parseString(ajaxResponse).asJsonObject
-                if (json.get("success")?.asBoolean == true) {
-                    val dataObj = json.getAsJsonObject("data")
-                    if (dataObj != null && dataObj.get("status")?.asInt == 200) {
-                        val optionsArray = dataObj.getAsJsonArray("options")
-                        if (optionsArray != null) {
-                            for (opt in optionsArray) {
-                                val optObj = opt.asJsonObject
-                                val optUrl = optObj.get("url")?.asString ?: continue
-                                val resolved = resolveAndExtract(optUrl, data, subtitleCallback, callback)
-                                if (resolved) {
-                                    found = true
-                                }
-                            }
-                        }
-                    }
-                }
+        // gogo mirrors wrap the real embeds one level deeper, one iframe per server variant
+        val embedUrls = doc.select("select.mirror option").mapNotNull { opt ->
+            val b64Value = opt.attr("value")
+            if (b64Value.isBlank() || b64Value == "...") return@mapNotNull null
+            val decodedIframe = try {
+                String(Base64.decode(b64Value, Base64.DEFAULT), Charsets.UTF_8)
             } catch (e: Exception) {
-                // ignore
+                Log.w(TAG, "mirror decode failed: ${e.message}")
+                null
+            } ?: return@mapNotNull null
+            Jsoup.parse(decodedIframe).selectFirst("iframe")?.attr("src")
+        }.flatMap { iframeUrl ->
+            if (iframeUrl.contains("gogoanime.me.uk/newplayer.php")) {
+                val playerHtml = try {
+                    app.get(iframeUrl, headers = mapOf("Referer" to data)).text
+                } catch (e: Exception) {
+                    Log.w(TAG, "gogo player fetch failed: ${e.message}")
+                    ""
+                }
+                val innerSrcs = Jsoup.parse(playerHtml).select("iframe")
+                    .map { it.attr("src") }.filter { it.isNotBlank() }
+                if (innerSrcs.isNotEmpty()) innerSrcs else listOf(iframeUrl)
+            } else {
+                listOf(iframeUrl)
+            }
+        }.distinct()
+
+        val results = embedUrls.map { embedUrl ->
+            async {
+                try {
+                    resolveAndExtract(embedUrl, data, subtitleCallback, callback)
+                } catch (e: Exception) {
+                    Log.w(TAG, "extract failed for $embedUrl: ${e.message}")
+                    false
+                }
             }
         }
-
-        return found
+        results.awaitAll().any { it }
     }
 
     private suspend fun resolveAndExtract(
@@ -258,6 +225,7 @@ class NineAnime : MainAPI() {
             val playerPage = try {
                 app.get(iframeUrl, headers = mapOf("Referer" to refererUrl)).text
             } catch (e: Exception) {
+                Log.w(TAG, "gogo player page failed: ${e.message}")
                 return false
             }
             embedUrl = Jsoup.parse(playerPage).selectFirst("iframe")?.attr("src") ?: return false
@@ -288,10 +256,6 @@ class NineAnime : MainAPI() {
                     NineAnimeMegaPlay().getUrl(embedUrl, iframeUrl, subtitleCallback, callback)
                     true
                 }
-                embedUrl.contains("vidwish.live") -> {
-                    NineAnimeVidWish().getUrl(embedUrl, iframeUrl, subtitleCallback, callback)
-                    true
-                }
                 embedUrl.contains("vidmoly.biz") -> {
                     NineAnimeVidmoly().getUrl(embedUrl, iframeUrl, subtitleCallback, callback)
                     true
@@ -305,6 +269,7 @@ class NineAnime : MainAPI() {
                 }
             }
         } catch (e: Exception) {
+            Log.w(TAG, "extraction failed: ${e.message}")
             false
         }
     }

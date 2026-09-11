@@ -1,19 +1,15 @@
 package com.laddu100.raghavanime
 
-import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.api.Log
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.network.WebViewResolver
-import com.lagradost.cloudstream3.newSubtitleFile
 import com.lagradost.cloudstream3.utils.ExtractorApi
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.INFER_TYPE
 import com.lagradost.cloudstream3.utils.M3u8Helper.Companion.generateM3u8
 import com.lagradost.cloudstream3.utils.getQualityFromName
 import com.lagradost.cloudstream3.utils.newExtractorLink
-import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.RequestBody.Companion.toRequestBody
 
 class MiruroVidWish(sourceName: String = "VidWish") : MiruroMegaPlay(sourceName) {
     override val mainUrl = "https://vidwish.live"
@@ -30,36 +26,19 @@ open class MiruroMegaPlay(private val sourceName: String = "MegaPlay") : Extract
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        val headers = mapOf(
-            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:140.0) Gecko/20100101 Firefox/140.0",
-            "Accept" to "*/*",
-            "X-Requested-With" to "XMLHttpRequest",
-            "Referer" to "$mainUrl/"
-        )
+        val stream = MegaPlayHelper.resolveStream(url, referer ?: "$mainUrl/", "Miruro")
+        if (stream != null) {
+            MegaPlayHelper.emitLinks(
+                name, name, stream.m3u8, "$mainUrl/",
+                stream.subtitles, subtitleCallback, callback
+            )
+            return
+        }
 
+        // the megaplay family occasionally hides the playlist behind a player
+        // only a real browser can drive, so fall back to interception
+        Log.e("RaghavAnime", "[Miruro][${name}] direct extraction failed, trying WebViewResolver fallback")
         runCatching {
-            val document = app.get(url, headers = headers).document
-            val id = document.selectFirst("#megaplay-player")?.attr("data-id")?.takeIf { it.isNotBlank() }
-                ?: Regex("""data-id=["'](\d+)""").find(document.html())?.groupValues?.get(1)
-                ?: document.selectFirst("#megaplay-player")?.attr("data-realid")?.takeIf { it.isNotBlank() }
-                ?: Regex("""data-realid=["'](\d+)""").find(document.html())?.groupValues?.get(1)
-                ?: Regex("""/stream/s-\d+/(\d+)""").find(url)?.groupValues?.get(1)
-                ?: return@runCatching
-            val response = app.get("$mainUrl/stream/getSources?id=$id", headers = headers).parsedSafe<Response>()
-                ?: return@runCatching
-            val m3u8 = response.sources?.file ?: return@runCatching
-
-            generateM3u8(name, m3u8, mainUrl, headers = headers).forEach(callback)
-            response.tracks.forEach { track ->
-                val file = track.file ?: return@forEach
-                if (track.kind == "captions" || track.kind == "subtitles") {
-                    subtitleCallback(newSubtitleFile(track.label ?: "Subtitle", file) {
-                        this.headers = mapOf("Referer" to "$mainUrl/")
-                    })
-                }
-            }
-        }.onFailure { error ->
-            Log.e("RaghavAnime", "[Miruro][${name}] primary extraction failed: ${error.message}, trying WebViewResolver fallback")
             val resolver = WebViewResolver(
                 interceptUrl = Regex("""\.m3u8"""),
                 additionalUrls = listOf(Regex("""\.m3u8""")),
@@ -67,25 +46,18 @@ open class MiruroMegaPlay(private val sourceName: String = "MegaPlay") : Extract
                 useOkhttp = false,
                 timeout = 30_000L
             )
+            val headers = mapOf(
+                "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:140.0) Gecko/20100101 Firefox/140.0",
+                "Referer" to "$mainUrl/"
+            )
             val m3u8 = app.get(url, referer = mainUrl, interceptor = resolver).url
             if (m3u8.contains(".m3u8")) {
                 generateM3u8(name, m3u8, mainUrl, headers = headers).forEach(callback)
             }
+        }.onFailure { error ->
+            Log.e("RaghavAnime", "[Miruro][${name}] WebViewResolver fallback failed: ${error.message}")
         }
     }
-
-    data class Response(
-        @JsonProperty("sources") val sources: Sources? = null,
-        @JsonProperty("tracks") val tracks: List<Track> = emptyList()
-    )
-
-    data class Sources(@JsonProperty("file") val file: String? = null)
-
-    data class Track(
-        @JsonProperty("file") val file: String? = null,
-        @JsonProperty("label") val label: String? = null,
-        @JsonProperty("kind") val kind: String? = null
-    )
 }
 
 class MiruroWebView(private val sourceName: String, private val baseUrl: String) : ExtractorApi() {

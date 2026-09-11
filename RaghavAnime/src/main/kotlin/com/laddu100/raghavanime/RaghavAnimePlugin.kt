@@ -25,6 +25,7 @@ class RaghavAnimePlugin : Plugin() {
 
         registerExtractorAPI(MiruroMegaPlay())
         registerExtractorAPI(MiruroVidWish())
+        registerExtractorAPI(VidTubeExtractor())
 
         registerExtractorAPI(AniWavesEchoVideo())
         registerExtractorAPI(AniWavesFilemoon())

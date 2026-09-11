@@ -249,7 +249,7 @@ class Anikai : MainAPI() {
                     embedUrl.contains("vivibebe.site") || embedUrl.contains("bibiemb.xyz") -> {
                         val embedHtml = app.get(embedUrl, headers = mapOf("Referer" to "$mainUrl/")).text
                         val m3u8Url = Regex("""(https?://[^\s"']+\.m3u8[^\s"']*)""").find(embedHtml)?.groupValues?.get(1)
-                        if (m3u8Url != null) {
+                        if (m3u8Url != null && RaghavEmbeds.streamPlayable(m3u8Url, embedUrl)) {
                             callback.invoke(
                                 newExtractorLink(
                                     source = name,

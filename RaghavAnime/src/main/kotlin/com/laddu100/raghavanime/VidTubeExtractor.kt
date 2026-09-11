@@ -21,7 +21,7 @@ class VidTubeExtractor(private val sourceName: String = "VidTube") : ExtractorAp
     ) {
         val stream = MegaPlayHelper.resolveStream(url, referer ?: "$mainUrl/", "VidTube")
         if (stream == null) {
-            Log.d("RaghavAnimeKitsu", "[VidTube] no stream for ${url.take(120)}")
+            Log.d("RaghavAnime", "[VidTube] no stream for ${url.take(120)}")
             return
         }
         MegaPlayHelper.emitLinks(

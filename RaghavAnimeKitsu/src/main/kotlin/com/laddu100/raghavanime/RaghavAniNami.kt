@@ -8,7 +8,6 @@ import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.Qualities
-import com.lagradost.cloudstream3.utils.loadExtractor
 import com.lagradost.cloudstream3.utils.newExtractorLink
 
 class RaghavAniNami : MainAPI() {
@@ -68,6 +67,7 @@ class RaghavAniNami : MainAPI() {
         @JsonProperty("url") val url: String? = null,
         @JsonProperty("type") val type: String? = null,
         @JsonProperty("quality") val quality: String? = null,
+        @JsonProperty("server") val server: String? = null,
         @JsonProperty("referer") val referer: String? = null
     )
 
@@ -75,22 +75,19 @@ class RaghavAniNami : MainAPI() {
         mainUrl = FirebaseDomainHelper.getDomain("aninami") ?: mainUrl
         val anilistId = Regex("""/anime/(\d+)""").find(url)?.groupValues?.get(1)?.toIntOrNull()
             ?: return null
-        Log.d("RaghavAnime", "[AniNami] load: anilistId=$anilistId url=${url.take(120)}")
 
         val epsText = try {
             app.get("$mainUrl/api/episodes/$anilistId", headers = apiHeaders).textLarge
         } catch (e: Exception) {
-            Log.e("RaghavAnime", "[AniNami] load: episodes fetch failed for anilistId=$anilistId: ${e.message}")
+            Log.e("RaghavAnimeKitsu", "[AniNami] load: episodes fetch failed for anilistId=$anilistId: ${e.message}")
             return null
         }
-        Log.d("RaghavAnime", "[AniNami] load: episodes response len=${epsText.length}")
         val providers = try {
             parseJson<EpisodesResponse>(epsText).results?.providers ?: emptyMap()
         } catch (e: Exception) {
-            Log.e("RaghavAnime", "[AniNami] load: episodes parse failed (len=${epsText.length}): ${e.message}")
+            Log.e("RaghavAnimeKitsu", "[AniNami] load: episodes parse failed (len=${epsText.length}): ${e.message}")
             return null
         }
-        Log.d("RaghavAnime", "[AniNami] load: ${providers.size} providers: ${providers.keys.joinToString(",")}")
 
 
         val subIdsByNumber = sortedMapOf<Int, MutableList<String>>()
@@ -108,7 +105,7 @@ class RaghavAniNami : MainAPI() {
                     val id = ep.id ?: return@forEach
                     dubIdsByNumber.getOrPut(num) { mutableListOf() }.add(id)
                 }
-            } catch (e: Throwable) { Log.e("RaghavAnime", "AniNami: ${e.message}") }
+            } catch (e: Throwable) { Log.e("RaghavAnimeKitsu", "AniNami: ${e.message}") }
         }
 
 
@@ -125,7 +122,6 @@ class RaghavAniNami : MainAPI() {
             }
         }
 
-        Log.d("RaghavAnime", "[AniNami] load: built ${subEpisodes.size} sub / ${dubEpisodes.size} dub episodes")
         return newAnimeLoadResponse("AniNami", url, TvType.Anime) {
             if (subEpisodes.isNotEmpty()) addEpisodes(DubStatus.Subbed, subEpisodes)
             if (dubEpisodes.isNotEmpty()) addEpisodes(DubStatus.Dubbed, dubEpisodes)
@@ -140,14 +136,13 @@ class RaghavAniNami : MainAPI() {
     ): Boolean {
         val pipeIdx = data.indexOf("|")
         if (pipeIdx < 0) {
-            Log.w("RaghavAnime", "[AniNami] loadLinks: no '|' separator in data")
+            Log.w("RaghavAnimeKitsu", "[AniNami] loadLinks: no '|' separator in data")
             return false
         }
         val requestedAudio = data.substring(0, pipeIdx).substringAfterLast("/")
         val epIds = data.substring(pipeIdx + 1).split(";;").filter { it.isNotEmpty() }
-        Log.d("RaghavAnime", "[AniNami] loadLinks: audio=$requestedAudio epIds=${epIds.size}")
         if (epIds.isEmpty()) {
-            Log.w("RaghavAnime", "[AniNami] loadLinks: empty epIds list")
+            Log.w("RaghavAnimeKitsu", "[AniNami] loadLinks: empty epIds list")
             return false
         }
 
@@ -158,7 +153,7 @@ class RaghavAniNami : MainAPI() {
         for (epId in epIds) {
             val parts = epId.split("/")
             if (parts.size < 5 || parts[0] != "watch") {
-                Log.w("RaghavAnime", "[AniNami] skipping malformed epId: ${epId.take(120)}")
+                Log.w("RaghavAnimeKitsu", "[AniNami] skipping malformed epId: ${epId.take(120)}")
                 continue
             }
             val provider = parts[1]
@@ -168,20 +163,18 @@ class RaghavAniNami : MainAPI() {
             if (provider.isEmpty() || slug.isEmpty()) continue
 
             val watchUrl = "$mainUrl/api/watch/$provider/$anilistId/$audioType/$slug"
-            Log.d("RaghavAnime", "[AniNami] provider=$provider: GET ${watchUrl.take(120)}")
             val streamsText = try {
                 app.get(watchUrl, headers = apiHeaders).text
             } catch (e: Exception) {
-                Log.e("RaghavAnime", "[AniNami] provider=$provider: watch fetch failed: ${e.message}")
+                Log.e("RaghavAnimeKitsu", "[AniNami] provider=$provider: watch fetch failed: ${e.message}")
                 continue
             }
             val streams = try {
                 parseJson<StreamResponse>(streamsText).results?.streams
             } catch (e: Exception) {
-                Log.e("RaghavAnime", "[AniNami] provider=$provider: streams parse failed (len=${streamsText.length}): ${e.message}")
+                Log.e("RaghavAnimeKitsu", "[AniNami] provider=$provider: streams parse failed (len=${streamsText.length}): ${e.message}")
                 continue
             } ?: continue
-            Log.d("RaghavAnime", "[AniNami] provider=$provider: ${streams.size} streams")
 
 
             for (stream in streams) {
@@ -189,11 +182,23 @@ class RaghavAniNami : MainAPI() {
                 if (streamUrl.isBlank() || !seenUrls.add(streamUrl)) continue
                 val referer = stream.referer?.takeIf { it.isNotBlank() } ?: "$mainUrl/"
                 val qualityLabel = stream.quality?.takeIf { it.isNotBlank() } ?: "Auto"
-                val label = "AniNami $qualityLabel"
+                val serverTag = stream.server?.takeIf { it.isNotBlank() }
 
                 when (stream.type?.lowercase()) {
                     "hls" -> {
-                        Log.d("RaghavAnime", "[AniNami] hls link: $label ${streamUrl.take(120)}")
+                        val label = listOfNotNull("AniNami", serverTag, qualityLabel).joinToString(" ")
+                        // vivibebe/bibiemb storage 403s segments when it dies,
+                        // probe those before offering them
+                        val host = try {
+                            java.net.URL(streamUrl).host
+                        } catch (e: Exception) {
+                            ""
+                        }
+                        if ((host.endsWith("vivibebe.site") || host.endsWith("bibiemb.xyz")) &&
+                            !RaghavEmbeds.streamPlayable(streamUrl, referer)
+                        ) {
+                            continue
+                        }
                         callback.invoke(
                             newExtractorLink(label, label, streamUrl, ExtractorLinkType.M3U8) {
                                 this.quality = parseQuality(stream.quality)
@@ -202,29 +207,30 @@ class RaghavAniNami : MainAPI() {
                         )
                         found = true
                     }
-                    "embed" -> {
-                        try {
-                            Log.d("RaghavAnime", "[AniNami] embed via loadExtractor: ${streamUrl.take(120)}")
-                            loadExtractor(streamUrl, referer, subtitleCallback, callback)
-                            found = true
-                        } catch (e: Exception) {
-                            Log.e("RaghavAnime", "[AniNami] embed loadExtractor failed: ${e.message}")
-                        }
+                    "mp4", "video" -> {
+                        val label = listOfNotNull("AniNami", serverTag, qualityLabel).joinToString(" ")
+                        callback.invoke(
+                            newExtractorLink(label, label, streamUrl, ExtractorLinkType.VIDEO) {
+                                this.quality = parseQuality(stream.quality)
+                                this.headers = mapOf("Referer" to referer)
+                            }
+                        )
+                        found = true
                     }
                     else -> {
                         try {
-                            Log.d("RaghavAnime", "[AniNami] type=${stream.type} via loadExtractor: ${streamUrl.take(120)}")
-                            loadExtractor(streamUrl, referer, subtitleCallback, callback)
-                            found = true
+                            val label = listOfNotNull("AniNami", serverTag).joinToString(" ")
+                            if (RaghavEmbeds.resolveEmbed(streamUrl, referer, label, "AniNami", requestedAudio, subtitleCallback, callback)) {
+                                found = true
+                            }
                         } catch (e: Exception) {
-                            Log.e("RaghavAnime", "[AniNami] loadExtractor failed: ${e.message}")
+                            Log.e("RaghavAnimeKitsu", "[AniNami] embed resolve failed: ${e.message}")
                         }
                     }
                 }
             }
         }
 
-        Log.d("RaghavAnime", "[AniNami] loadLinks done: found=$found (seenUrls=${seenUrls.size})")
         return found
     }
 

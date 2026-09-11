@@ -248,6 +248,7 @@ class RaghavAnime : MainAPI() {
                 }
             }
         } catch (e: Exception) {
+            Log.e("RaghavAnime", "search '$query' failed: ${e.message}")
             emptyList()
         }
         return results
@@ -511,8 +512,6 @@ class RaghavAnime : MainAPI() {
                 }
             },
             {
-            },
-            {
                 try {
                     val twoDHive = RaghavTwoDHive()
                     val searchTitles = listOfNotNull(title, jpTitle).filter { it.isNotBlank() }
@@ -646,6 +645,14 @@ class RaghavAnime : MainAPI() {
                     Log.e("RaghavAnime", "[Kyren] FAILED: ${e.message}")
                 }
             },
+            {
+                try {
+                    val reanime = RaghavReAnime()
+                    reanime.loadLinksByAnilistId(aniId, episode, isDub, subtitleCallback, callback)
+                } catch (e: Throwable) {
+                    Log.e("RaghavAnime", "[ReAnime] FAILED: ${e.message}")
+                }
+            },
         )
 
         return true
@@ -760,7 +767,6 @@ class RaghavAnime : MainAPI() {
                 val ep = loadResult.episodes?.get(epKey)?.find { it.episode == episode }
                 if (ep != null) {
                     return ep.data
-                } else {
                 }
             } catch (e: Throwable) {
                 Log.e("RaghavAnime", "[$sourceTag] load failed for '${cand.result.name}': ${e.message}")

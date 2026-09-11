@@ -316,7 +316,13 @@ class RaghavAniDao : MainAPI() {
             when {
                 embedUrl.contains("vivibebe.site") || embedUrl.contains("bibiemb.xyz") -> {
                     val html = app.get(embedUrl, headers = baseHeaders).text
-                    extractM3u8(html)?.let { callback(m3u8Link(label, it, embedUrl)); true } ?: false
+                    val m3u8 = extractM3u8(html)
+                    if (m3u8 != null && RaghavEmbeds.streamPlayable(m3u8, embedUrl)) {
+                        callback(m3u8Link(label, m3u8, embedUrl))
+                        true
+                    } else {
+                        false
+                    }
                 }
                 embedUrl.contains("otakuhg.site") || embedUrl.contains("otakuvid.online") -> {
                     val html = app.get(embedUrl, headers = baseHeaders).text

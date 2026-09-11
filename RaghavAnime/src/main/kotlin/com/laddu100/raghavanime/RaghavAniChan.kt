@@ -2,13 +2,18 @@ package com.laddu100.raghavanime
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties
 import com.fasterxml.jackson.annotation.JsonProperty
+import com.fasterxml.jackson.databind.ObjectMapper
+import com.fasterxml.jackson.module.kotlin.KotlinModule
 import com.lagradost.api.Log
-import com.lagradost.cloudstream3.*
-import com.lagradost.cloudstream3.utils.AppUtils.parseJson
+import com.lagradost.cloudstream3.MainAPI
+import com.lagradost.cloudstream3.SubtitleFile
+import com.lagradost.cloudstream3.TvType
+import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.newExtractorLink
-import com.lagradost.cloudstream3.app
+import kotlinx.coroutines.delay
+import java.net.URLEncoder
 
 class RaghavAniChan : MainAPI() {
     override var mainUrl = "https://anichan.net"
@@ -18,16 +23,9 @@ class RaghavAniChan : MainAPI() {
     override val hasDownloadSupport = true
     override val supportedTypes = setOf(TvType.Anime, TvType.AnimeMovie)
 
-    private val browserUA = "Mozilla/5.0 (Linux; Android 13; Pixel 5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
-
+    private val mapper = ObjectMapper().registerModule(KotlinModule.Builder().build())
     @JsonIgnoreProperties(ignoreUnknown = true)
-    data class EpisodesResponse(
-        @JsonProperty("episodes") val episodes: Int? = null,
-        @JsonProperty("dubAvailable") val dubAvailable: Boolean? = null
-    )
-
-    @JsonIgnoreProperties(ignoreUnknown = true)
-    data class ServersResponse(
+    data class ServersEnvelope(
         @JsonProperty("servers") val servers: List<Server>? = null
     )
 
@@ -35,7 +33,9 @@ class RaghavAniChan : MainAPI() {
     data class Server(
         @JsonProperty("name") val name: String? = null,
         @JsonProperty("label") val label: String? = null,
+        @JsonProperty("type") val type: String? = null,
         @JsonProperty("stream") val stream: String? = null,
+        @JsonProperty("embed") val embed: String? = null,
         @JsonProperty("subType") val subType: String? = null,
         @JsonProperty("subtitles") val subtitles: List<Subtitle>? = null
     )
@@ -46,7 +46,28 @@ class RaghavAniChan : MainAPI() {
         @JsonProperty("url") val url: String? = null
     )
 
-    data class EpisodeData(val anilistId: Int, val episode: Int, val isDub: Boolean)
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    data class VidhawkRace(
+        @JsonProperty("ticket") val ticket: String? = null,
+        @JsonProperty("servers") val servers: List<VidhawkServer>? = null
+    )
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    data class VidhawkServer(
+        @JsonProperty("id") val id: String? = null,
+        @JsonProperty("ticket") val ticket: String? = null
+    )
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    data class VidhawkPlay(
+        @JsonProperty("tracks") val tracks: List<VidhawkTrack>? = null
+    )
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    data class VidhawkTrack(
+        @JsonProperty("id") val id: String? = null,
+        @JsonProperty("src") val src: String? = null
+    )
 
     suspend fun loadLinksByAnilistId(
         anilistId: Int,
@@ -56,53 +77,152 @@ class RaghavAniChan : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         val category = if (isDub) "dub" else "sub"
-        return try {
-            val resp = app.get(
-                "$mainUrl/api/watch/servers?anilistId=$anilistId&ep=$episode&category=$category",
-                headers = mapOf("User-Agent" to browserUA, "Referer" to "$mainUrl/anime/$anilistId"),
-                timeout = 15_000L
-            ).text
-            val servers = parseJson<ServersResponse>(resp).servers ?: emptyList()
-            var found = false
 
-            for (server in servers) {
-                val stream = server.stream ?: continue
-                val fullStream = if (stream.startsWith("/")) "$mainUrl$stream" else stream
-                val rawLabel = server.label ?: server.name ?: "AniChan"
-                val label = rawLabel.replace("\u2605 ", "").trim()
-                val subType = server.subType ?: "soft"
-                val isHardsub = subType == "hard"
+        val servers = watchServers(anilistId, episode, category)
+        if (servers.isEmpty()) {
+            return false
+        }
 
-                val displayLabel = when {
-                    isHardsub -> "$label (Hardsub)"
-                    isDub -> "$label (Dub)"
-                    else -> label
-                }
+        val linkHeaders = mapOf(
+            "User-Agent" to USER_AGENT,
+            "Referer" to "$mainUrl/"
+        )
+        val seenSubs = HashSet<String>()
+        var found = false
 
-                callback.invoke(newExtractorLink(
-                    "AniChan",
-                    displayLabel,
-                    fullStream,
-                    type = ExtractorLinkType.M3U8
-                ) {
-                    this.referer = "$mainUrl/"
-                    this.headers = mapOf(
-                        "User-Agent" to browserUA,
-                        "Referer" to "$mainUrl/anime/$anilistId"
-                    )
-                })
+        for (server in servers) {
+            val label = serverLabel(server, isDub)
+            if (server.type == "embed") {
+                val embed = server.embed ?: continue
+                val vidServer = Regex("[?&]server=([^&]+)").find(embed)?.groupValues?.get(1)
+                    ?: "kari"
+                val track = vidhawkResolve(anilistId, episode, category, vidServer)
+                    ?.firstOrNull { it.id.equals(category, true) && !it.src.isNullOrBlank() }
+                    ?: continue
+                val src = track.src?.takeIf { it.startsWith("http") } ?: continue
+                callback.invoke(
+                    newExtractorLink(name, label, src, type = ExtractorLinkType.M3U8) {
+                        this.headers = linkHeaders
+                    }
+                )
                 found = true
+            } else {
+                val stream = server.stream?.takeIf { it.startsWith("http") }
+                    ?: server.stream?.takeIf { it.startsWith("/") }?.let { "$mainUrl$it" }
+                    ?: continue
+                callback.invoke(
+                    newExtractorLink(name, label, stream, type = ExtractorLinkType.M3U8) {
+                        this.headers = linkHeaders
+                    }
+                )
+                found = true
+            }
 
-                server.subtitles?.forEach { sub ->
-                    val subUrl = sub.url ?: return@forEach
-                    val fullSubUrl = if (subUrl.startsWith("/")) "$mainUrl$subUrl" else subUrl
-                    subtitleCallback.invoke(SubtitleFile(sub.lang ?: "English", fullSubUrl))
+            for (sub in server.subtitles.orEmpty()) {
+                val url = sub.url?.takeIf { it.startsWith("http") } ?: continue
+                val lang = sub.lang ?: "English"
+                if (seenSubs.add(lang)) {
+                    subtitleCallback.invoke(SubtitleFile(lang, url))
                 }
             }
-            found
-        } catch (e: Exception) {
-            Log.e("RaghavAnime", "[AniChan] FAILED: ${e.message}")
-            false
         }
+        return found
+    }
+
+    // the session cookie is single use, every servers call needs a fresh one
+    private suspend fun newWatchSession(): String? {
+        return try {
+            val resp = app.post(
+                "$mainUrl/api/watch/session",
+                headers = mapOf(
+                    "User-Agent" to USER_AGENT,
+                    "Accept" to "application/json",
+                    "Origin" to mainUrl
+                ),
+                json = mapOf("token" to "")
+            )
+            if (!resp.isSuccessful) return null
+            for (cookie in resp.headers.values("set-cookie")) {
+                if (cookie.startsWith("anichan_ws=")) {
+                    return cookie.substringBefore(";").substringAfter("anichan_ws=")
+                }
+            }
+            null
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    private suspend fun watchServers(anilistId: Int, ep: Int, category: String): List<Server> {
+        val url = "$mainUrl/api/watch/servers?anilistId=$anilistId&ep=$ep&category=$category"
+        repeat(SESSION_ATTEMPTS) {
+            val cookie = newWatchSession() ?: return emptyList()
+            try {
+                val resp = app.get(
+                    url,
+                    headers = mapOf(
+                        "User-Agent" to USER_AGENT,
+                        "Accept" to "application/json",
+                        "Cookie" to "anichan_ws=$cookie"
+                    )
+                )
+                if (resp.isSuccessful) {
+                    return mapper.readValue(resp.text, ServersEnvelope::class.java).servers ?: emptyList()
+                }
+            } catch (e: Exception) {
+                Log.d("RaghavAnime", "[AniChan] servers attempt failed: ${e.message}")
+            }
+            delay(400)
+        }
+        return emptyList()
+    }
+
+    private suspend fun vidhawkResolve(
+        anilistId: Int,
+        ep: Int,
+        audio: String,
+        server: String
+    ): List<VidhawkTrack>? {
+        return try {
+            val headers = mapOf(
+                "User-Agent" to USER_AGENT,
+                "Referer" to "$mainUrl/"
+            )
+            val raceUrl = "https://vidhawk.buzz/api/stream/race?episode=$ep&audio=$audio&server=$server" +
+                "&anilistId=$anilistId&parentHost=anichan.net"
+            val raceResp = app.get(raceUrl, headers = headers)
+            val race = mapper.readValue(raceResp.text, VidhawkRace::class.java)
+
+            val ticket = race.servers?.firstOrNull { it.id.equals(server, true) }?.ticket
+                ?: race.ticket
+                ?: return null
+
+            val playResp = app.get(
+                "https://vidhawk.buzz/api/play?t=${URLEncoder.encode(ticket, "UTF-8")}",
+                headers = headers
+            )
+            mapper.readValue(playResp.text, VidhawkPlay::class.java).tracks ?: emptyList()
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    private fun serverLabel(server: Server, isDub: Boolean): String {
+        val raw = (server.label ?: server.name ?: "AniChan")
+            .replace("★", "")
+            .replace(Regex("\\s*⧉\\s*\\(ads\\)"), "")
+            .trim()
+        val hardsub = server.subType.equals("hard", true)
+        return when {
+            hardsub -> "$raw (Hardsub)"
+            isDub -> "$raw (Dub)"
+            else -> raw
+        }
+    }
+
+    companion object {
+        private const val USER_AGENT =
+            "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
+        private const val SESSION_ATTEMPTS = 4
     }
 }

@@ -74,19 +74,17 @@ class RaghavKyren : MainAPI() {
         for (server in servers) {
             try {
                 val streamUrl = "$mainUrl/api/stream/$anilistId/$episode?lang=$lang&title=$encodedTitle&server=$server"
-                Log.d("RaghavAnime", "[Kyren] requesting server '$server' for anilist $anilistId ep$episode ($lang)")
 
                 val res = app.get(streamUrl, headers = apiHeaders)
                 val parsed = parseJson<StreamResponse>(res.text)
 
                 if (parsed.ok != true) {
-                    Log.d("RaghavAnime", "[Kyren] server '$server' not available: ${parsed.error ?: "ok=false"}")
+                    Log.d("RaghavAnimeKitsu", "[Kyren] server '$server' not available: ${parsed.error ?: "ok=false"}")
                     continue
                 }
 
                 val sources = parsed.sources ?: emptyList()
                 if (sources.isEmpty()) {
-                    Log.d("RaghavAnime", "[Kyren] server '$server' returned no sources")
                     continue
                 }
 
@@ -120,16 +118,13 @@ class RaghavKyren : MainAPI() {
                                     )
                                 }
                             )
-                            Log.d("RaghavAnime", "[Kyren] server '$server' emitted hls link: $providerName $langLabel (${source.quality ?: "unknown"})")
                             found = true
                         }
                         else -> {
-                            Log.d("RaghavAnime", "[Kyren] server '$server' resolving embed: $sourceUrl")
                             val loaded = loadExtractor(sourceUrl, "$mainUrl/", subtitleCallback, callback)
                             if (loaded) {
                                 found = true
                             } else {
-                                Log.d("RaghavAnime", "[Kyren] server '$server' embed not resolved (no extractor for: $sourceUrl)")
                             }
                         }
                     }
@@ -142,12 +137,12 @@ class RaghavKyren : MainAPI() {
                     subtitleCallback.invoke(SubtitleFile(subLabel, subUrl))
                 }
             } catch (e: Exception) {
-                Log.e("RaghavAnime", "[Kyren] server '$server' failed for anilist $anilistId ep$episode ($lang): ${e.message}")
+                Log.e("RaghavAnimeKitsu", "[Kyren] server '$server' failed for anilist $anilistId ep$episode ($lang): ${e.message}")
             }
         }
 
         if (!found) {
-            Log.w("RaghavAnime", "[Kyren] produced no links for anilist $anilistId ep$episode ($lang)")
+            Log.w("RaghavAnimeKitsu", "[Kyren] produced no links for anilist $anilistId ep$episode ($lang)")
         }
         return found
     }

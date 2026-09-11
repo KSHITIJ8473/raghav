@@ -477,9 +477,7 @@ private fun buildMMHeaders(original: Map<String, String>): Map<String, String> {
 suspend fun mmGet(url: String, headers: Map<String, String> = emptyMap(), allowRedirects: Boolean = true): NiceResponse {
     val targetHost = extractHost(url)
 
-    var response = try {
-        app.get(url, headers = buildMMHeaders(headers), timeout = 30_000L, allowRedirects = allowRedirects)
-    } catch (e: Exception) { throw e }
+    var response = app.get(url, headers = buildMMHeaders(headers), timeout = 30_000L, allowRedirects = allowRedirects)
 
     if (!isMMCloudflareBlocked(response)) return response
 
@@ -489,26 +487,25 @@ suspend fun mmGet(url: String, headers: Map<String, String> = emptyMap(), allowR
 
     cfBypassMutex.withLock {
         if (MMCFStore.isRecentlyBypassed()) {
-            response = try { app.get(url, headers = buildMMHeaders(headers), timeout = 30_000L, allowRedirects = allowRedirects) } catch (e: Exception) { throw e }
+            response = app.get(url, headers = buildMMHeaders(headers), timeout = 30_000L, allowRedirects = allowRedirects)
             if (!isMMCloudflareBlocked(response)) return response
             if (MMCFStore.getCookies() == null) return response
         }
 
         val cachedCookies = MMCFStore.getCookies()
         if (cachedCookies != null) {
-            response = try { app.get(url, headers = buildMMHeaders(headers), timeout = 30_000L, allowRedirects = allowRedirects) } catch (e: Exception) { throw e }
+            response = app.get(url, headers = buildMMHeaders(headers), timeout = 30_000L, allowRedirects = allowRedirects)
             if (!isMMCloudflareBlocked(response)) return response
         }
 
         MMCFStore.clear()
-        val bypassHost = targetHost
-        val bypassSuccess = showMMCFBypassDialogAndWait(bypassHost)
+        val bypassSuccess = showMMCFBypassDialogAndWait(targetHost)
         if (!bypassSuccess) {
             MMCFStore.markBypassed()
             return@withLock
         }
-        for (attempt in 1..2) {
-            response = try { app.get(url, headers = buildMMHeaders(headers), timeout = 30_000L, allowRedirects = allowRedirects) } catch (e: Exception) { throw e }
+        for (i in 1..2) {
+            response = app.get(url, headers = buildMMHeaders(headers), timeout = 30_000L, allowRedirects = allowRedirects)
             if (!isMMCloudflareBlocked(response)) return@withLock
         }
         // cookie did not unblock the page, back off instead of hammering the dialog
@@ -534,9 +531,7 @@ suspend fun mmPost(url: String, data: Map<String, String>, headers: Map<String, 
         return h
     }
 
-    var response = try {
-        app.post(url, data = data, headers = buildPostHeaders(), timeout = 30_000L)
-    } catch (e: Exception) { throw e }
+    var response = app.post(url, data = data, headers = buildPostHeaders(), timeout = 30_000L)
 
     if (!isMMCloudflareBlocked(response)) return response
 
@@ -546,26 +541,25 @@ suspend fun mmPost(url: String, data: Map<String, String>, headers: Map<String, 
 
     cfBypassMutex.withLock {
         if (MMCFStore.isRecentlyBypassed()) {
-            response = try { app.post(url, data = data, headers = buildPostHeaders(), timeout = 30_000L) } catch (e: Exception) { throw e }
+            response = app.post(url, data = data, headers = buildPostHeaders(), timeout = 30_000L)
             if (!isMMCloudflareBlocked(response)) return response
             if (MMCFStore.getCookies() == null) return response
         }
 
         val cachedCookies = MMCFStore.getCookies()
         if (cachedCookies != null) {
-            response = try { app.post(url, data = data, headers = buildPostHeaders(), timeout = 30_000L) } catch (e: Exception) { throw e }
+            response = app.post(url, data = data, headers = buildPostHeaders(), timeout = 30_000L)
             if (!isMMCloudflareBlocked(response)) return response
         }
 
         MMCFStore.clear()
-        val bypassHost = targetHost
-        val bypassSuccess = showMMCFBypassDialogAndWait(bypassHost)
+        val bypassSuccess = showMMCFBypassDialogAndWait(targetHost)
         if (!bypassSuccess) {
             MMCFStore.markBypassed()
             return@withLock
         }
-        for (attempt in 1..2) {
-            response = try { app.post(url, data = data, headers = buildPostHeaders(), timeout = 30_000L) } catch (e: Exception) { throw e }
+        for (i in 1..2) {
+            response = app.post(url, data = data, headers = buildPostHeaders(), timeout = 30_000L)
             if (!isMMCloudflareBlocked(response)) return@withLock
         }
         MMCFStore.markBypassed()

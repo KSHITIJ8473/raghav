@@ -26,6 +26,7 @@ object AniChanApi {
         try {
             mapper.readValue(text, T::class.java)
         } catch (e: Exception) {
+            Log.d(TAG, "parse failed: ${e.message}")
             null
         }
 
@@ -33,6 +34,7 @@ object AniChanApi {
         val resp = app.get(url, headers = BASE_HEADERS)
         if (resp.isSuccessful) resp.text else null
     } catch (e: Exception) {
+        Log.d(TAG, "GET $url failed: ${e.message}")
         null
     }
 

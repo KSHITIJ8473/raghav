@@ -1,5 +1,6 @@
 package com.laddu100.reanime
 
+import com.lagradost.api.Log
 import com.lagradost.cloudstream3.DubStatus
 import com.lagradost.cloudstream3.Episode
 import com.lagradost.cloudstream3.HomePageResponse
@@ -207,6 +208,7 @@ class ReAnimeProvider : MainAPI() {
         val ref = try {
             parseJson<EpisodeRef>(data)
         } catch (e: Exception) {
+            Log.e("ReAnime", "bad episode data: ${e.message}")
             null
         } ?: return false
         if (ref.ep <= 0) return false

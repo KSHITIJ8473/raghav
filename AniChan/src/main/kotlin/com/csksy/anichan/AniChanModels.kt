@@ -34,6 +34,7 @@ data class StartDate(
 @JsonIgnoreProperties(ignoreUnknown = true)
 data class Selfhost(
     @JsonProperty("cached_eps") val cachedEps: List<Int>? = null,
+    @JsonProperty("cached_dub") val cachedDub: List<Int>? = null,
     @JsonProperty("count") val count: Int? = null,
     @JsonProperty("ep_meta") val epMeta: Map<String, EpMeta>? = null
 )

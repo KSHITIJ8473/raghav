@@ -1,5 +1,6 @@
 package com.csksy.anichan
 
+import com.lagradost.api.Log
 import com.lagradost.cloudstream3.DubStatus
 import com.lagradost.cloudstream3.Episode
 import com.lagradost.cloudstream3.HomePageResponse
@@ -91,7 +92,10 @@ class AniChanProvider : MainAPI() {
         val epNumbers = collectEpisodeNumbers(anime, info)
         if (epNumbers.isEmpty()) return null
 
-        val dubAvailable = info?.dubAvailable == true
+        // the watch endpoint is the dub source of truth, but it can fail on a
+        // cold cache, the selfhost dub list from the detail response covers that
+        val dubAvailable = info?.dubAvailable == true ||
+            anime.selfhost?.cachedDub?.isNotEmpty() == true
 
         val subEps = epNumbers.map { it.toEpisode(anilistId, false, epMeta) }
         val dubEps = if (dubAvailable) epNumbers.map { it.toEpisode(anilistId, true, epMeta) } else emptyList()
@@ -178,6 +182,7 @@ class AniChanProvider : MainAPI() {
         val ref = try {
             parseJson<EpisodeRef>(data)
         } catch (e: Exception) {
+            Log.e("AniChan", "bad episode data: ${e.message}")
             null
         } ?: return false
         val category = if (ref.isDub) "dub" else "sub"

@@ -64,7 +64,8 @@ class SenshiProvider : MainAPI() {
     )
 
     // mirrors the header set the site player sends on cross-origin XHRs to the
-    // stream cdn, the waf there rejects plain requests without them
+    // stream api and cdn, the waf there rejects plain requests without them
+    // (the sources endpoint started requiring Origin, same pattern as the cdn)
     private val cdnHeaders = mapOf(
         "User-Agent" to ua,
         "Accept" to "*/*",
@@ -417,7 +418,7 @@ class SenshiProvider : MainAPI() {
                 delay(2500L * attempt)
             }
             text = try {
-                val res = app.get("$vidcloudApi$sourceId", headers = apiHeaders, timeout = 20_000L)
+                val res = app.get("$vidcloudApi$sourceId", headers = cdnHeaders, timeout = 20_000L)
                 if (res.code == 200) res.text else null
             } catch (e: Exception) {
                 Log.d(TAG, "vidcloud $sourceId request failed: ${e.message}")

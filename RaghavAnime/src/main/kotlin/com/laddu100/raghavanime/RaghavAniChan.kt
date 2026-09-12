@@ -16,7 +16,7 @@ import kotlinx.coroutines.delay
 import java.net.URLEncoder
 
 class RaghavAniChan : MainAPI() {
-    override var mainUrl = "https://anichan.net"
+    override var mainUrl = "https://anichan.to"
     override var name = "AniChan"
     override val hasMainPage = false
     override var lang = "en"
@@ -156,21 +156,23 @@ class RaghavAniChan : MainAPI() {
     private suspend fun watchServers(anilistId: Int, ep: Int, category: String): List<Server> {
         val url = "$mainUrl/api/watch/servers?anilistId=$anilistId&ep=$ep&category=$category"
         repeat(SESSION_ATTEMPTS) {
-            val cookie = newWatchSession() ?: return emptyList()
-            try {
-                val resp = app.get(
-                    url,
-                    headers = mapOf(
-                        "User-Agent" to USER_AGENT,
-                        "Accept" to "application/json",
-                        "Cookie" to "anichan_ws=$cookie"
+            val cookie = newWatchSession()
+            if (cookie != null) {
+                try {
+                    val resp = app.get(
+                        url,
+                        headers = mapOf(
+                            "User-Agent" to USER_AGENT,
+                            "Accept" to "application/json",
+                            "Cookie" to "anichan_ws=$cookie"
+                        )
                     )
-                )
-                if (resp.isSuccessful) {
-                    return mapper.readValue(resp.text, ServersEnvelope::class.java).servers ?: emptyList()
+                    if (resp.isSuccessful) {
+                        return mapper.readValue(resp.text, ServersEnvelope::class.java).servers ?: emptyList()
+                    }
+                } catch (e: Exception) {
+                    Log.d("RaghavAnime", "[AniChan] servers attempt failed: ${e.message}")
                 }
-            } catch (e: Exception) {
-                Log.d("RaghavAnime", "[AniChan] servers attempt failed: ${e.message}")
             }
             delay(400)
         }
@@ -189,7 +191,7 @@ class RaghavAniChan : MainAPI() {
                 "Referer" to "$mainUrl/"
             )
             val raceUrl = "https://vidhawk.buzz/api/stream/race?episode=$ep&audio=$audio&server=$server" +
-                "&anilistId=$anilistId&parentHost=anichan.net"
+                "&anilistId=$anilistId&parentHost=anichan.to"
             val raceResp = app.get(raceUrl, headers = headers)
             val race = mapper.readValue(raceResp.text, VidhawkRace::class.java)
 

@@ -19,7 +19,7 @@ object VidhawkResolver {
                 "Referer" to "${AniChanApi.MAIN_URL}/"
             )
             val raceUrl = "$MAIN_URL/api/stream/race?episode=$ep&audio=$audio&server=$server" +
-                "&anilistId=$anilistId&parentHost=anichan.net"
+                "&anilistId=$anilistId&parentHost=anichan.to"
             val raceResp = app.get(raceUrl, headers = headers)
             val race = mapper.readValue(raceResp.text, VidhawkRace::class.java)
 

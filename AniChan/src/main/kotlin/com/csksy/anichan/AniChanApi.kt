@@ -8,7 +8,7 @@ import kotlinx.coroutines.delay
 
 object AniChanApi {
 
-    const val MAIN_URL = "https://anichan.net"
+    const val MAIN_URL = "https://anichan.to"
     private const val TAG = "AniChan"
     private const val SESSION_ATTEMPTS = 4
 
@@ -87,17 +87,19 @@ object AniChanApi {
     suspend fun watchServers(anilistId: Int, ep: Int, category: String): List<Server> {
         val url = "$MAIN_URL/api/watch/servers?anilistId=$anilistId&ep=$ep&category=$category"
         repeat(SESSION_ATTEMPTS) {
-            val cookie = newWatchSession() ?: return emptyList()
-            try {
-                val resp = app.get(
-                    url,
-                    headers = BASE_HEADERS + mapOf("Cookie" to "anichan_ws=$cookie")
-                )
-                if (resp.isSuccessful) {
-                    return parse<ServersEnvelope>(resp.text)?.servers ?: emptyList()
+            val cookie = newWatchSession()
+            if (cookie != null) {
+                try {
+                    val resp = app.get(
+                        url,
+                        headers = BASE_HEADERS + mapOf("Cookie" to "anichan_ws=$cookie")
+                    )
+                    if (resp.isSuccessful) {
+                        return parse<ServersEnvelope>(resp.text)?.servers ?: emptyList()
+                    }
+                } catch (e: Exception) {
+                    Log.d(TAG, "watch servers failed: ${e.message}")
                 }
-            } catch (e: Exception) {
-                Log.d(TAG, "watch servers failed: ${e.message}")
             }
             delay(400)
         }

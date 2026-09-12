@@ -1,4 +1,4 @@
-version = 3
+version = 4
 
 android {
     buildFeatures {
@@ -13,5 +13,5 @@ cloudstream {
     status = 1
     tvTypes = listOf("Anime", "AnimeMovie")
     language = "en"
-    iconUrl = "https://www.google.com/s2/favicons?domain=anichan.net&sz=%size%"
+    iconUrl = "https://www.google.com/s2/favicons?domain=anichan.to&sz=%size%"
 }

@@ -7,8 +7,7 @@ import com.lagradost.cloudstream3.plugins.Plugin
 @CloudstreamPlugin
 class SenshiPlugin : Plugin() {
     override fun load(context: Context) {
-        // Initialize the Cloudflare bypass safety-net (persistent cookie store)
         initSenshiCFBypass(context)
-        registerMainAPI(Senshi())
+        registerMainAPI(SenshiProvider())
     }
 }

@@ -1,13 +1,14 @@
-package com.laddu100.raghavanime
+package com.laddu100.senshi
 
-import com.fasterxml.jackson.annotation.JsonIgnoreProperties
 import com.lagradost.api.Log
 import com.lagradost.cloudstream3.DubStatus
 import com.lagradost.cloudstream3.Episode
+import com.lagradost.cloudstream3.HomePageResponse
 import com.lagradost.cloudstream3.LoadResponse
 import com.lagradost.cloudstream3.LoadResponse.Companion.addAniListId
 import com.lagradost.cloudstream3.LoadResponse.Companion.addMalId
 import com.lagradost.cloudstream3.MainAPI
+import com.lagradost.cloudstream3.MainPageRequest
 import com.lagradost.cloudstream3.Score
 import com.lagradost.cloudstream3.SearchResponse
 import com.lagradost.cloudstream3.ShowStatus
@@ -16,9 +17,11 @@ import com.lagradost.cloudstream3.TvType
 import com.lagradost.cloudstream3.addDubStatus
 import com.lagradost.cloudstream3.addEpisodes
 import com.lagradost.cloudstream3.app
+import com.lagradost.cloudstream3.mainPageOf
 import com.lagradost.cloudstream3.newAnimeLoadResponse
 import com.lagradost.cloudstream3.newAnimeSearchResponse
 import com.lagradost.cloudstream3.newEpisode
+import com.lagradost.cloudstream3.newHomePageResponse
 import com.lagradost.cloudstream3.newSubtitleFile
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.AppUtils.toJson
@@ -31,10 +34,13 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 
-class RaghavSenshi : MainAPI() {
+class SenshiProvider : MainAPI() {
     override var mainUrl = "https://senshi.to"
     override var name = "Senshi"
     override var lang = "en"
+    override val hasMainPage = true
+    override val hasDownloadSupport = true
+    override val supportedTypes = setOf(TvType.Anime, TvType.AnimeMovie, TvType.OVA)
 
     private val TAG = "Senshi"
 
@@ -80,6 +86,14 @@ class RaghavSenshi : MainAPI() {
         "Referer" to "$mainUrl/"
     )
 
+    override val mainPage = mainPageOf(
+        "latest" to "Latest Episodes",
+        "recent" to "Recently Added",
+        "trending" to "Trending",
+        "upcoming" to "Upcoming",
+        "all" to "All Anime"
+    )
+
     private suspend fun getJson(url: String, timeout: Long = 20_000L): String? {
         return try {
             val res = cfGet(url, headers = apiHeaders, timeout = timeout)
@@ -99,6 +113,57 @@ class RaghavSenshi : MainAPI() {
             null
         }
     }
+
+    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse? {
+        return try {
+            when (request.data) {
+                "latest" -> {
+                    val text = getJson("$mainUrl/episode-embeds/latest") ?: return emptyPage(request)
+                    val resp = parseJson<List<SenshiLatestEmbed>>(text)
+                    val seen = mutableSetOf<Int>()
+                    val home = resp.asSequence()
+                        .mapNotNull { it.anime }
+                        .filter { it.id != null && seen.add(it.id!!) }
+                        .mapNotNull { it.toSearchResponse() }
+                        .toList()
+                    newHomePageResponse(request.name, home, hasNext = false)
+                }
+
+                "recent" -> {
+                    val text = getJson("$mainUrl/anime/recently-added") ?: return emptyPage(request)
+                    val home = parseJson<List<SenshiAnime>>(text).mapNotNull { it.toSearchResponse() }
+                    newHomePageResponse(request.name, home, hasNext = false)
+                }
+
+                "trending" -> {
+                    val text = getJson("$mainUrl/anime/trending/day") ?: return emptyPage(request)
+                    val home = parseJson<List<SenshiAnime>>(text).mapNotNull { it.toSearchResponse() }
+                    newHomePageResponse(request.name, home, hasNext = false)
+                }
+
+                "upcoming" -> {
+                    val text = getJson("$mainUrl/anime/upcoming") ?: return emptyPage(request)
+                    val home = parseJson<List<SenshiAnime>>(text).mapNotNull { it.toSearchResponse() }
+                    newHomePageResponse(request.name, home, hasNext = false)
+                }
+
+                "all" -> {
+                    val resp = postFilter(SenshiFilterBody(page = page, limit = 40, sortBy = "recent"))
+                        ?: return emptyPage(request)
+                    val home = resp.data.mapNotNull { it.toSearchResponse() }
+                    newHomePageResponse(request.name, home, hasNext = page * 40 < (resp.total ?: 0))
+                }
+
+                else -> emptyPage(request)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "getMainPage '${request.name}' failed: ${e.message}")
+            emptyPage(request)
+        }
+    }
+
+    private fun emptyPage(request: MainPageRequest): HomePageResponse =
+        newHomePageResponse(request.name, emptyList(), hasNext = false)
 
     override suspend fun search(query: String): List<SearchResponse> {
         if (query.isBlank()) return emptyList()
@@ -279,12 +344,12 @@ class RaghavSenshi : MainAPI() {
         }
 
         var playlist = masterText
-        if (playlist != null && RaghavSenshiCrypt.isEncrypted(playlist)) {
-            playlist = RaghavSenshiCrypt.decrypt(playlist)
+        if (playlist != null && SenshiCrypt.isEncrypted(playlist)) {
+            playlist = SenshiCrypt.decrypt(playlist)
         }
 
         if (playlist != null && playlist.startsWith("#EXTM3U")) {
-            val proxyBase = RaghavSenshiProxy.register(master, playlist, senshiHeaders(cdnHeaders, master))
+            val proxyBase = SenshiProxy.register(master, playlist, senshiHeaders(cdnHeaders, master))
             if (proxyBase != null) {
                 val mode = if (wantDub) "dub" else "sub"
                 val variants = parseVariantQualities(playlist)
@@ -456,7 +521,7 @@ class RaghavSenshi : MainAPI() {
         return if (wantDub) dub.ifEmpty { sub } else sub.ifEmpty { dub }
     }
 
-    @JsonIgnoreProperties(ignoreUnknown = true)
+    @com.fasterxml.jackson.annotation.JsonIgnoreProperties(ignoreUnknown = true)
     data class SenshiFilterBody(
         val searchTerm: String? = null,
         val page: Int = 1,
@@ -468,82 +533,5 @@ class RaghavSenshi : MainAPI() {
         val malId: Int,
         val ep: Int,
         val type: String
-    )
-
-    @JsonIgnoreProperties(ignoreUnknown = true)
-    data class SenshiAnime(
-        val id: Int? = null,
-        val public_id: String? = null,
-        val anime_picture: String? = null,
-        val trailer: String? = null,
-        val title: String? = null,
-        val title_english: String? = null,
-        val synonyms: String? = null,
-        val type: String? = null,
-        val ani_source: String? = null,
-        val ani_episodes: String? = null,
-        val ani_status: String? = null,
-        val airing_date: String? = null,
-        val duration: String? = null,
-        val rating: String? = null,
-        val score: Double? = null,
-        val scored_by: Int? = null,
-        val ani_description: String? = null,
-        val ani_season: String? = null,
-        val ani_year: Int? = null,
-        val genres: String? = null,
-        val producers: String? = null,
-        val studios: String? = null,
-        val anilist_id: Int? = null,
-        val sub_count: Int? = null,
-        val dub_count: Int? = null
-    )
-
-    @JsonIgnoreProperties(ignoreUnknown = true)
-    data class SenshiEpisode(
-        val id: Int? = null,
-        val ep_id: Int? = null,
-        val mal_id: Int? = null,
-        val ep_title: String? = null,
-        val ep_filler: Boolean? = null,
-        val ep_recap: Boolean? = null,
-        val ep_thumbnail: String? = null
-    )
-
-    @JsonIgnoreProperties(ignoreUnknown = true)
-    data class SenshiEmbed(
-        val id: Int? = null,
-        val public_id: String? = null,
-        val remote_source_id: Int? = null,
-        val url: String? = null,
-        val status: String? = null
-    )
-
-    @JsonIgnoreProperties(ignoreUnknown = true)
-    data class SenshiFilterResponse(
-        val data: List<SenshiAnime> = emptyList(),
-        val total: Int? = null
-    )
-
-    @JsonIgnoreProperties(ignoreUnknown = true)
-    data class VidcloudFile(
-        val src: String? = null,
-        val quality: String? = null,
-        val audio: String? = null
-    )
-
-    @JsonIgnoreProperties(ignoreUnknown = true)
-    data class VidcloudTrack(
-        val url: String? = null,
-        val vtt_url: String? = null,
-        val label: String? = null,
-        val html: String? = null,
-        val default: Boolean? = null
-    )
-
-    @JsonIgnoreProperties(ignoreUnknown = true)
-    data class VidcloudSource(
-        val source: VidcloudFile? = null,
-        val tracks: List<VidcloudTrack> = emptyList()
     )
 }

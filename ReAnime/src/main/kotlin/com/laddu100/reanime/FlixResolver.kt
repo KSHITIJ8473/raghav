@@ -1,6 +1,7 @@
 package com.laddu100.reanime
 
 import android.util.Base64
+import com.lagradost.api.Log
 import com.lagradost.cloudstream3.app
 import java.security.MessageDigest
 import javax.crypto.Cipher
@@ -98,7 +99,7 @@ object FlixResolver {
             val subs = extractSubtitles(region)
             Result(url, pk, masterBody, subs)
         } catch (e: Exception) {
-            android.util.Log.d(TAG, "flix resolve failed: ${e.message}")
+            Log.d(TAG, "flix resolve failed: ${e.message}")
             null
         }
     }

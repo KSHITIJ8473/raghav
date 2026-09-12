@@ -355,7 +355,7 @@ class RaghavEnma : MainAPI() {
         val loadData = try {
             parseJson<EpisodeLoadData>(data)
         } catch (e: Exception) {
-            Log.e("RaghavAnimeKitsu", "[Enma] loadLinks: bad data '${data.take(60)}'")
+            Log.e("RaghavAnimeKitsu", "[Enma] loadLinks: bad data")
             return false
         }
 

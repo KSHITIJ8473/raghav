@@ -153,7 +153,7 @@ class RaghavAnime : MainAPI() {
                 }
                 newHomePageResponse(request.name, home)
             } catch (e: Exception) {
-                Log.e("RaghavAnimeKitsu", "[Recommendations] FAILED: ${e.message}")
+                Log.e("RaghavAnimeKitsu", "[Recommendations] failed: ${e.message}")
                 newHomePageResponse(request.name, emptyList())
             }
         }
@@ -265,8 +265,9 @@ class RaghavAnime : MainAPI() {
 
         val tags = try { fetchCategories(kitsuId) } catch (_: Exception) { emptyList() }
 
+        // movies carry both sub and dub episode lists here, and the app hides
+        // the sub/dub switcher on movie types, so they stay regular anime
         val tvType = when (subtype) {
-            "movie" -> TvType.AnimeMovie
             "ova", "ona", "special" -> TvType.OVA
             else -> TvType.Anime
         }
@@ -611,7 +612,7 @@ class RaghavAnime : MainAPI() {
         try {
             block(subtitleCallback, callback)
         } catch (t: Throwable) {
-            Log.e("RaghavAnimeKitsu", "[$tag] FAILED: ${t.message}")
+            Log.e("RaghavAnimeKitsu", "[$tag] failed: ${t.message}")
         }
     }
 

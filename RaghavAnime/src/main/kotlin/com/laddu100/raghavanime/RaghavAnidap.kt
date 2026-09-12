@@ -140,8 +140,7 @@ class RaghavAnidap : MainAPI() {
                 val res = app.get(url, headers = baseHeaders, timeout = 15_000L)
                 val body = res.text
                 if (body.contains("error", ignoreCase = true) && !body.contains("results")) {
-                    lastError = "server error: ${body.take(50)}"
-                    Log.w("RaghavAnime", "[Anidap] search attempt $attempt server error: ${body.take(50)}")
+                    lastError = "server error response"
                     kotlinx.coroutines.delay(2000L * attempt)
                     continue
                 }
@@ -216,8 +215,10 @@ class RaghavAnidap : MainAPI() {
                 }
             } else emptyList()
 
+            // the app hides the sub/dub switcher on movie types, so dual audio
+            // movies are typed as regular anime to keep both reachable
             val tvType = when (detail.format) {
-                "MOVIE" -> TvType.AnimeMovie
+                "MOVIE" -> if (dubEpisodes.isNotEmpty()) TvType.Anime else TvType.AnimeMovie
                 "OVA", "ONA" -> TvType.OVA
                 else -> TvType.Anime
             }
@@ -335,7 +336,7 @@ class RaghavAnidap : MainAPI() {
         val cleanData = data.removePrefix("$mainUrl/").removePrefix("$mainUrl|").trim()
         val parts = cleanData.split("|")
         if (parts.size < 5) {
-            Log.w("RaghavAnime", "[Anidap] loadLinks: malformed data '${data.take(60)}'")
+            Log.w("RaghavAnime", "[Anidap] loadLinks: malformed data")
             return false
         }
         val slug = parts[0]
@@ -363,7 +364,7 @@ class RaghavAnidap : MainAPI() {
                 )
 
                 if (sourcesRes.code != 200 || sourcesRes.text.contains("bot_detected") || sourcesRes.text.contains("\"error\"")) {
-                    Log.w("RaghavAnime", "[Anidap] provider=$providerId sources bad response: code=${sourcesRes.code} len=${sourcesRes.text.length}")
+                    Log.w("RaghavAnime", "[Anidap] provider=$providerId sources bad response")
                     continue
                 }
 

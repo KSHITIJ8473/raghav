@@ -48,10 +48,6 @@ object EnmaDecryptor {
             readySignal?.completeExceptionally(Exception(error))
         }
 
-        @JavascriptInterface
-        fun log(msg: String) {
-            Log.d(TAG, "JS: $msg")
-        }
     }
 
     private val bridge = DecryptBridge()

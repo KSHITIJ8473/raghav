@@ -112,11 +112,6 @@ class ReAnimeProvider : MainAPI() {
         val anime = ReAnimeApi.animeDetail(slug) ?: return null
         val eps = ReAnimeApi.episodes(slug)
         val title = anime.title?.display() ?: return null
-        val type = when (anime.format) {
-            "MOVIE" -> TvType.AnimeMovie
-            "OVA", "ONA", "SPECIAL" -> TvType.OVA
-            else -> TvType.Anime
-        }
         val showStatus = when (anime.status) {
             "RELEASING" -> ShowStatus.Ongoing
             "FINISHED" -> ShowStatus.Completed
@@ -135,6 +130,15 @@ class ReAnimeProvider : MainAPI() {
                 val num = ep.episodeNumber ?: continue
                 subEps.add(ep.toEpisode(slug, num, "sub", anime))
             }
+        }
+
+        // the app hides the sub/dub switcher on movie types, so dual audio movies
+        // are typed as regular anime to keep both reachable
+        val type = when {
+            anime.format == "MOVIE" && dubEps.isNotEmpty() -> TvType.Anime
+            anime.format == "MOVIE" -> TvType.AnimeMovie
+            anime.format == "OVA" || anime.format == "ONA" || anime.format == "SPECIAL" -> TvType.OVA
+            else -> TvType.Anime
         }
 
         return newAnimeLoadResponse(title, "$mainUrl/anime/$slug", type) {

@@ -102,7 +102,7 @@ object MegaPlayHelper {
         val pageHtml = try {
             app.get(embedUrl, headers = pageHeaders).text
         } catch (e: Exception) {
-            Log.d(TAG, "[$sourceTag][MegaPlay] embed page failed for $host: ${e.message}")
+            Log.d(TAG, "[MegaPlay] embed page failed for $host: ${e.message}")
             return null
         }
 
@@ -186,13 +186,13 @@ object MegaPlayHelper {
         val text = try {
             app.get(url, headers = headers, timeout = 15_000L).text
         } catch (e: Exception) {
-            Log.d(TAG, "[MegaPlay] sources request failed ($url): ${e.message}")
+            Log.d(TAG, "[MegaPlay] sources request failed: ${e.message}")
             return null
         }
         return try {
             mapper.readTree(text)
         } catch (e: Exception) {
-            Log.d(TAG, "[MegaPlay] sources json parse failed for $url: ${e.message}")
+            Log.d(TAG, "[MegaPlay] sources json parse failed: ${e.message}")
             null
         }
     }
@@ -216,7 +216,7 @@ object MegaPlayHelper {
         val generated = try {
             M3u8Helper.generateM3u8(source, m3u8, referer, headers = playHeaders)
         } catch (e: Exception) {
-            Log.d(TAG, "[MegaPlay] m3u8 expansion failed for $m3u8: ${e.message}")
+            Log.d(TAG, "[MegaPlay] m3u8 expansion failed: ${e.message}")
             emptyList()
         }
         if (generated.isNotEmpty()) {

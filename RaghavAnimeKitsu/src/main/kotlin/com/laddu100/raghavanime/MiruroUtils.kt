@@ -390,7 +390,7 @@ private suspend fun miruroPipeRequestForDomain(
         Log.w("RaghavAnimeKitsu", "[Miruro] pipeForDomain: WebView returned empty body for /$path on $domain")
     }
 
-    Log.e("RaghavAnimeKitsu", "[Miruro] pipeForDomain: FAILED on $domain for /$path")
+    Log.e("RaghavAnimeKitsu", "[Miruro] pipeForDomain: failed on $domain for /$path")
     throw Exception("Failed on $domain for /$path")
 }
 

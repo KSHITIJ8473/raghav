@@ -102,14 +102,13 @@ class AniDb : MainAPI() {
 
         val episodesUrl = "$mainUrl/api/frontend/anime/$siteId/episodes"
         val epResponse = cfAppGet(episodesUrl, headers = mapOf("X-Requested-With" to "XMLHttpRequest", "Referer" to url, "Accept" to "application/json, text/plain, */*")).parsedSafe<EpisodesResponse>()
-        if (epResponse == null) Log.d("RaghavAnime", "[AniDb] episodes api parse failed for $episodesUrl")
+        if (epResponse == null) Log.d("RaghavAnime", "[AniDb] episodes api parse failed")
         val episodesList = epResponse?.episodes ?: emptyList()
 
         val firstEpId = episodesList.firstOrNull()?.id
         var hasSub = true
         var hasDub = false
 
-        if (firstEpId == null) Log.d("RaghavAnime", "[AniDb] episode list empty, defaulting sub=true dub=false")
         if (firstEpId != null) {
             val langUrl = "$mainUrl/api/frontend/episode/$firstEpId/languages"
             val langResponse = cfAppGet(langUrl, headers = mapOf("X-Requested-With" to "XMLHttpRequest", "Referer" to url, "Accept" to "application/json, text/plain, */*")).parsedSafe<LanguagesResponse>()

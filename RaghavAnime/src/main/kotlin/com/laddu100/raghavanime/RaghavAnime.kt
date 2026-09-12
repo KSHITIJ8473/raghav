@@ -162,7 +162,7 @@ class RaghavAnime : MainAPI() {
                 }
                 newHomePageResponse(request.name, home)
             } catch (e: Exception) {
-                Log.e("RaghavAnime", "[Recommendations] FAILED: ${e.message}")
+                Log.e("RaghavAnime", "[Recommendations] failed: ${e.message}")
                 newHomePageResponse(request.name, emptyList())
             }
         }
@@ -384,7 +384,7 @@ class RaghavAnime : MainAPI() {
                         }
                     }
                 } catch (e: Throwable) {
-                    Log.e("RaghavAnime", "[Miruro] FAILED: ${e.message}")
+                    Log.e("RaghavAnime", "[Miruro] failed: ${e.message}")
                 }
             },
             {
@@ -401,7 +401,7 @@ class RaghavAnime : MainAPI() {
                         aniSuge.loadLinks(epData, false, subtitleCallback, callback)
                     }
                 } catch (e: Throwable) {
-                    Log.e("RaghavAnime", "[AniSuge] FAILED: ${e.message}")
+                    Log.e("RaghavAnime", "[AniSuge] failed: ${e.message}")
                 }
             },
             {
@@ -449,7 +449,7 @@ class RaghavAnime : MainAPI() {
                         aniWaves.loadLinks(matchedData, false, subtitleCallback, callback)
                     }
                 } catch (e: Throwable) {
-                    Log.e("RaghavAnime", "[AniWaves] FAILED: ${e.message}")
+                    Log.e("RaghavAnime", "[AniWaves] failed: ${e.message}")
                 }
             },
             {
@@ -466,7 +466,7 @@ class RaghavAnime : MainAPI() {
                         anikai.loadLinks(epData, false, subtitleCallback, callback)
                     }
                 } catch (e: Throwable) {
-                    Log.e("RaghavAnime", "[Anikai] FAILED: ${e.message}")
+                    Log.e("RaghavAnime", "[Anikai] failed: ${e.message}")
                 }
             },
             {
@@ -483,7 +483,7 @@ class RaghavAnime : MainAPI() {
                         aniDb.loadLinks(epData, false, subtitleCallback, callback)
                     }
                 } catch (e: Throwable) {
-                    Log.e("RaghavAnime", "[AniDb] FAILED: ${e.message}")
+                    Log.e("RaghavAnime", "[AniDb] failed: ${e.message}")
                 }
             },
             {
@@ -491,7 +491,7 @@ class RaghavAnime : MainAPI() {
                     val anikage = RaghavAniKage()
                     anikage.loadLinksByAnilistId(aniId, title, jpTitle, episode, isDub, subtitleCallback, callback)
                 } catch (e: Throwable) {
-                    Log.e("RaghavAnime", "[AniKage] FAILED: ${e.message}")
+                    Log.e("RaghavAnime", "[AniKage] failed: ${e.message}")
                 }
             },
             {
@@ -508,7 +508,7 @@ class RaghavAnime : MainAPI() {
                         anineko.loadLinks(epData, false, subtitleCallback, callback)
                     }
                 } catch (e: Throwable) {
-                    Log.e("RaghavAnime", "[Anineko] FAILED: ${e.message}")
+                    Log.e("RaghavAnime", "[Anineko] failed: ${e.message}")
                 }
             },
             {
@@ -525,7 +525,7 @@ class RaghavAnime : MainAPI() {
                         twoDHive.loadLinks(epData, false, subtitleCallback, callback)
                     }
                 } catch (e: Throwable) {
-                    Log.e("RaghavAnime", "[2DHive] FAILED: ${e.message}")
+                    Log.e("RaghavAnime", "[2DHive] failed: ${e.message}")
                 }
             },
             {
@@ -542,7 +542,7 @@ class RaghavAnime : MainAPI() {
                         anikoto.loadLinks(epData, false, subtitleCallback, callback)
                     }
                 } catch (e: Throwable) {
-                    Log.e("RaghavAnime", "[AniKoto] FAILED: ${e.message}")
+                    Log.e("RaghavAnime", "[AniKoto] failed: ${e.message}")
                 }
             },
             {
@@ -550,7 +550,7 @@ class RaghavAnime : MainAPI() {
                     val enma = RaghavEnma()
                     enma.loadLinksByAnilistId(aniId, title, jpTitle, episode, isDub, subtitleCallback, callback)
                 } catch (e: Throwable) {
-                    Log.e("RaghavAnime", "[Enma] FAILED: ${e.message}")
+                    Log.e("RaghavAnime", "[Enma] failed: ${e.message}")
                 }
             },
             {
@@ -567,7 +567,7 @@ class RaghavAnime : MainAPI() {
                         animo.loadLinks(epData, false, subtitleCallback, callback)
                     }
                 } catch (e: Throwable) {
-                    Log.e("RaghavAnime", "[Animo] FAILED: ${e.message}")
+                    Log.e("RaghavAnime", "[Animo] failed: ${e.message}")
                 }
             },
             {
@@ -575,7 +575,7 @@ class RaghavAnime : MainAPI() {
                     val anidap = RaghavAnidap()
                     anidap.loadLinksByAnilistId(aniId, episode, isDub, subtitleCallback, callback)
                 } catch (e: Throwable) {
-                    Log.e("RaghavAnime", "[Anidap] FAILED: ${e.message}")
+                    Log.e("RaghavAnime", "[Anidap] failed: ${e.message}")
                 }
             },
             {
@@ -592,7 +592,7 @@ class RaghavAnime : MainAPI() {
                         senshi.loadLinks(epData, false, subtitleCallback, callback)
                     }
                 } catch (e: Throwable) {
-                    Log.e("RaghavAnime", "[Senshi] FAILED: ${e.message}")
+                    Log.e("RaghavAnime", "[Senshi] failed: ${e.message}")
                 }
             },
             {
@@ -609,7 +609,7 @@ class RaghavAnime : MainAPI() {
                         }
                     }
                 } catch (e: Throwable) {
-                    Log.e("RaghavAnime", "[AniNami] FAILED: ${e.message}")
+                    Log.e("RaghavAnime", "[AniNami] failed: ${e.message}")
                 }
             },
             {
@@ -626,7 +626,7 @@ class RaghavAnime : MainAPI() {
                         aniDao.loadLinks(epData, false, subtitleCallback, callback)
                     }
                 } catch (e: Throwable) {
-                    Log.e("RaghavAnime", "[AniDao] FAILED: ${e.message}")
+                    Log.e("RaghavAnime", "[AniDao] failed: ${e.message}")
                 }
             },
             {
@@ -634,7 +634,7 @@ class RaghavAnime : MainAPI() {
                     val anichan = RaghavAniChan()
                     anichan.loadLinksByAnilistId(aniId, episode, isDub, subtitleCallback, callback)
                 } catch (e: Throwable) {
-                    Log.e("RaghavAnime", "[AniChan] FAILED: ${e.message}")
+                    Log.e("RaghavAnime", "[AniChan] failed: ${e.message}")
                 }
             },
             {
@@ -642,7 +642,7 @@ class RaghavAnime : MainAPI() {
                     val kyren = RaghavKyren()
                     kyren.loadLinksByAnilistId(aniId, title, episode, isDub, subtitleCallback, callback)
                 } catch (e: Throwable) {
-                    Log.e("RaghavAnime", "[Kyren] FAILED: ${e.message}")
+                    Log.e("RaghavAnime", "[Kyren] failed: ${e.message}")
                 }
             },
             {
@@ -650,7 +650,7 @@ class RaghavAnime : MainAPI() {
                     val reanime = RaghavReAnime()
                     reanime.loadLinksByAnilistId(aniId, episode, isDub, subtitleCallback, callback)
                 } catch (e: Throwable) {
-                    Log.e("RaghavAnime", "[ReAnime] FAILED: ${e.message}")
+                    Log.e("RaghavAnime", "[ReAnime] failed: ${e.message}")
                 }
             },
         )

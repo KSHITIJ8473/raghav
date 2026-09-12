@@ -91,16 +91,23 @@ class AniChanProvider : MainAPI() {
         val epNumbers = collectEpisodeNumbers(anime, info)
         if (epNumbers.isEmpty()) return null
 
-        val tvType = if (anime.format == "MOVIE") TvType.AnimeMovie else TvType.Anime
+        val dubAvailable = info?.dubAvailable == true
+
+        val subEps = epNumbers.map { it.toEpisode(anilistId, false, epMeta) }
+        val dubEps = if (dubAvailable) epNumbers.map { it.toEpisode(anilistId, true, epMeta) } else emptyList()
+
+        // the app hides the sub/dub switcher on movie types, so dual audio movies
+        // are typed as regular anime to keep both reachable
+        val tvType = when {
+            anime.format == "MOVIE" && dubEps.isNotEmpty() -> TvType.Anime
+            anime.format == "MOVIE" -> TvType.AnimeMovie
+            else -> TvType.Anime
+        }
         val showStatus = when (anime.status) {
             "RELEASING" -> ShowStatus.Ongoing
             "FINISHED" -> ShowStatus.Completed
             else -> null
         }
-        val dubAvailable = info?.dubAvailable == true
-
-        val subEps = epNumbers.map { it.toEpisode(anilistId, false, epMeta) }
-        val dubEps = if (dubAvailable) epNumbers.map { it.toEpisode(anilistId, true, epMeta) } else emptyList()
 
         return newAnimeLoadResponse(title, url, tvType) {
             this.posterUrl = anime.poster

@@ -21,5 +21,5 @@ cloudstream {
         "AnimeMovie",
         "OVA"
     )
-    iconUrl = "https://anidap.se/favicon.ico"
+    iconUrl = "https://anikuro.ru/static/favicon/favicon-96x96.png"
 }

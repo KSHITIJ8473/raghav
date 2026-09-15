@@ -5,7 +5,7 @@ import com.google.gson.JsonParser
 import com.lagradost.api.Log
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
-import com.lagradost.cloudstream3.newSubtitleFile
+
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Element
 import java.net.URLEncoder
@@ -56,15 +56,12 @@ class RaghavAnikoto : MainAPI() {
         val response = try {
             app.get(url, headers = browserHeaders)
         } catch (e: Exception) {
-            Log.e("RaghavAnimeKitsu", "[AniKoto] load: fetch failed for '$url': ${e.message}")
             return null
         }
         val doc = response.document
         val title = doc.selectFirst("#w-info h1.title, h1[itemprop=name], .title[itemprop=name]")?.text()?.trim()
             ?: doc.selectFirst("h1.title")?.text()?.trim()
-            ?: run {
-                return null
-            }
+            ?: return null
         val poster = doc.selectFirst("#w-info .poster img, img[itemprop=image], .poster img")?.let {
             it.attr("data-src").ifBlank { it.attr("src") }
         }
@@ -73,6 +70,7 @@ class RaghavAnikoto : MainAPI() {
         val isMovie = doc.selectFirst("#w-info a[href*='/type/movie']") != null ||
             doc.selectFirst(".bmeta")?.text()?.contains("Movie", ignoreCase = true) == true
 
+        // the page may render differently depending on the skin, try a few
         val animeId = doc.selectFirst("#watch-main")?.attr("data-id")
             ?: doc.selectFirst("[data-id]")?.attr("data-id")
             ?: Regex("""data-id=["'](\d+)["']""").find(doc.html())?.groupValues?.get(1)
@@ -87,8 +85,6 @@ class RaghavAnikoto : MainAPI() {
                     referer = url, headers = ajaxHeaders(url)
                 ).text
                 val html = jsonResultString(json)
-                if (html.isBlank()) {
-                }
                 Jsoup.parse(html).select("a[data-ids]").forEach { el ->
                     val serverIds = el.attr("data-ids")
                     val episodeNumber = el.attr("data-num").toIntOrNull()
@@ -96,8 +92,11 @@ class RaghavAnikoto : MainAPI() {
                     val hasDub = el.attr("data-dub") == "1"
                     if (serverIds.isBlank()) return@forEach
 
-                    val episodeName = el.selectFirst(".d-title")?.text()?.ifBlank { null }
-                        ?: el.attr("data-jp").ifBlank { "Episode ${episodeNumber ?: ""}" }
+                    val dTitleSpan = el.selectFirst(".d-title")
+                    val episodeName = dTitleSpan?.text()?.trim()?.ifBlank { null }
+                        ?: el.parent()?.attr("title")?.trim()?.ifBlank { null }
+                        ?: dTitleSpan?.attr("data-jp")?.trim()?.ifBlank { null }
+                        ?: "Episode ${episodeNumber ?: ""}"
 
                     if (hasSub || !hasDub) {
                         subEpisodes.add(newEpisode("anikoto|$url|$serverIds|sub") {
@@ -113,10 +112,11 @@ class RaghavAnikoto : MainAPI() {
                     }
                 }
             } catch (e: Exception) {
-                Log.e("RaghavAnimeKitsu", "[AniKoto] load: episode ajax failed for animeId=$animeId: ${e.message}")
+                Log.e("AniKoto", "episode list failed: ${e.message}")
             }
         }
 
+        // last resort when the ajax list never answered: walk the episode links
         if (subEpisodes.isEmpty() && dubEpisodes.isEmpty()) {
             doc.select("a[href*='/ep-']").mapIndexed { i, el ->
                 subEpisodes.add(newEpisode(fixUrl(el.attr("href"))) {
@@ -126,7 +126,8 @@ class RaghavAnikoto : MainAPI() {
             }
         }
 
-        return newAnimeLoadResponse(title, url, if (isMovie) TvType.AnimeMovie else TvType.Anime) {
+        val finalType = if (isMovie && dubEpisodes.isNotEmpty()) TvType.Anime else if (isMovie) TvType.AnimeMovie else TvType.Anime
+        return newAnimeLoadResponse(title, url, finalType) {
             this.posterUrl = poster?.let { fixUrl(it) }
             this.plot = description
             this.tags = genres
@@ -141,7 +142,8 @@ class RaghavAnikoto : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-
+        // CloudStream can prefix the data with mainUrl when it does not start
+        // with http; strip it so the anikoto| marker is found
         val cleanData = when {
             data.startsWith("$mainUrl/anikoto|") -> data.removePrefix("$mainUrl/")
             data.startsWith("/anikoto|") -> data.removePrefix("/")
@@ -158,9 +160,10 @@ class RaghavAnikoto : MainAPI() {
             return resolveServers(serverIds, referer, audioType, subtitleCallback, callback)
         }
 
+        // the episode page carries the same data-id as the anime page, so the
+        // ajax list can be retried here when it failed during load
         return try {
             val doc = app.get(cleanData, headers = browserHeaders).document
-
             val animeId = doc.selectFirst("#watch-main")?.attr("data-id")
                 ?: doc.selectFirst("[data-id]")?.attr("data-id")
                 ?: Regex("""data-id=["'](\d+)["']""").find(doc.html())?.groupValues?.get(1)
@@ -181,9 +184,7 @@ class RaghavAnikoto : MainAPI() {
 
             val epEl = Jsoup.parse(html).select("a[data-ids]").find {
                 it.attr("data-num").toIntOrNull() == epNum
-            } ?: Jsoup.parse(html).selectFirst("a[data-ids]") ?: run {
-                return false
-            }
+            } ?: Jsoup.parse(html).selectFirst("a[data-ids]") ?: return false
 
             val serverIds = epEl.attr("data-ids")
             val audioType = if (epEl.attr("data-dub") == "1") "dub" else "sub"
@@ -191,7 +192,7 @@ class RaghavAnikoto : MainAPI() {
 
             resolveServers(serverIds, data, audioType, subtitleCallback, callback)
         } catch (e: Exception) {
-            Log.e("RaghavAnimeKitsu", "[AniKoto] loadLinks direct path failed: ${e.message}")
+            Log.e("AniKoto", "episode page fallback failed: ${e.message}")
             false
         }
     }
@@ -203,13 +204,13 @@ class RaghavAnikoto : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-
+        // serverIds is a base64 blob with '+', '=' and '/'; without encoding
+        // '+' turns into a space server-side and the api answers 500
         val encodedIds = URLEncoder.encode(serverIds, "UTF-8")
         val serverListJson = try {
             app.get("$mainUrl/ajax/server/list?servers=$encodedIds",
                 referer = referer, headers = ajaxHeaders(referer)).text
         } catch (e: Exception) {
-            Log.e("RaghavAnimeKitsu", "[AniKoto] resolveServers: server list fetch failed: ${e.message}")
             return false
         }
 
@@ -232,12 +233,16 @@ class RaghavAnikoto : MainAPI() {
             serverDoc.select("li[data-link-id]")
         }
 
-        val linkIds = preferredServers.map { it.attr("data-link-id") }
-            .filter { it.isNotBlank() }.distinct()
-        if (linkIds.isEmpty()) return false
+        val serverEntries = preferredServers.mapNotNull { el ->
+            val lid = el.attr("data-link-id")
+            if (lid.isBlank()) null
+            else lid to el.text().trim().ifBlank { "Server" }
+        }.distinctBy { it.first }
+
+        if (serverEntries.isEmpty()) return false
 
         var found = false
-        for (linkId in linkIds) {
+        for ((linkId, serverName) in serverEntries) {
             try {
                 val encodedLinkId = URLEncoder.encode(linkId, "UTF-8")
                 val serverJson = app.get("$mainUrl/ajax/server?get=$encodedLinkId",
@@ -251,11 +256,11 @@ class RaghavAnikoto : MainAPI() {
                     embedUrl = embedUrl.replace("/dub", "/sub")
                 }
 
-                if (resolveEmbedInline(embedUrl, referer, audioType, subtitleCallback, callback)) {
+                if (resolveEmbedInline(embedUrl, referer, audioType, serverName, subtitleCallback, callback)) {
                     found = true
                 }
             } catch (e: Exception) {
-                Log.e("RaghavAnimeKitsu", "[AniKoto] resolveServers: linkId $linkId failed: ${e.message}")
+                Log.e("AniKoto", "server $serverName failed: ${e.message}")
             }
         }
         return found
@@ -265,6 +270,7 @@ class RaghavAnikoto : MainAPI() {
         url: String,
         referer: String,
         audioType: String,
+        serverName: String,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
@@ -276,7 +282,7 @@ class RaghavAnikoto : MainAPI() {
 
         getHashM3u8(normalizedUrl)?.let { m3u8 ->
             callback.invoke(
-                newExtractorLink("AniKoto", "AniKoto M3U8", m3u8, type = ExtractorLinkType.M3U8) {
+                newExtractorLink("AniKoto", "AniKoto $serverName", m3u8, type = ExtractorLinkType.M3U8) {
                     this.referer = normalizedUrl
                     this.headers = mapOf("Referer" to normalizedUrl, "Origin" to "https://mewcdn.online")
                 }
@@ -290,12 +296,11 @@ class RaghavAnikoto : MainAPI() {
                                domain.contains("vidtube", ignoreCase = true)
 
         return if (isMegaPlayDomain) {
-            resolveMegaPlayInline(normalizedUrl, referer, domain, audioType, subtitleCallback, callback)
+            resolveMegaPlayInline(normalizedUrl, referer, domain, audioType, serverName, subtitleCallback, callback)
         } else {
             try {
                 loadExtractor(normalizedUrl, referer, subtitleCallback, callback)
             } catch (e: Exception) {
-                Log.e("RaghavAnimeKitsu", "[AniKoto] loadExtractor failed for '$normalizedUrl': ${e.message}")
                 false
             }
         }
@@ -306,21 +311,15 @@ class RaghavAnikoto : MainAPI() {
         referer: String,
         domain: String,
         audioType: String,
+        serverName: String,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val serverName = when {
-            domain.contains("megaplay", ignoreCase = true) -> "MegaPlay"
-            domain.contains("vidwish", ignoreCase = true) -> "Vidwish"
-            else -> "Vidtube"
-        }
         val displayType = if (audioType == "dub") "DUB" else "SUB"
         val label = "AniKoto $serverName $displayType"
 
         val stream = MegaPlayHelper.resolveStream(url, referer, "AniKoto")
-        if (stream == null) {
-            return false
-        }
+            ?: return false
         return MegaPlayHelper.emitLinks(
             "AniKoto", label, stream.m3u8, "https://$domain/",
             stream.subtitles, subtitleCallback, callback
@@ -349,6 +348,8 @@ class RaghavAnikoto : MainAPI() {
         return proxyPlayerHost(decoded).takeIf { it.startsWith("http") && it.contains(".m3u8") }
     }
 
+    // the player hands out urls on hosts that 403 cross-origin requests;
+    // these mirrors serve the same files with permissive headers
     private fun proxyPlayerHost(url: String): String {
         return url
             .replace("vibeplayer.site", "nanobyte.bigdreamsmalldih.site")

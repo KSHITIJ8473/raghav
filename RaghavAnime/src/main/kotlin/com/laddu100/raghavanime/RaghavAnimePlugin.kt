@@ -31,6 +31,8 @@ class RaghavAnimePlugin : Plugin() {
         registerExtractorAPI(AniWavesFilemoon())
         registerExtractorAPI(AniWavesMyVidPlay())
 
+        registerExtractorAPI(KwikExtractor())
+
         this.openSettings = { ctx ->
             val activity = ctx as? AppCompatActivity
             if (activity != null) {

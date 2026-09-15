@@ -7,10 +7,10 @@ import com.lagradost.api.Log
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.newSubtitleFile
-import com.lagradost.cloudstream3.utils.M3u8Helper
 import com.lagradost.cloudstream3.utils.newExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import javax.crypto.Cipher
+import javax.crypto.Mac
 import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
@@ -132,7 +132,7 @@ object MegaPlayHelper {
             for (endpoint in listOf("getSourcesNew", "getSources")) {
                 val root = fetchJson("$base/stream/$endpoint?id=$streamId&type=$audioType", ajaxHeaders)
                     ?: continue
-                val streamUrl = extractStream(root, base, sourceTag)
+                val streamUrl = extractStream(root, base)
                 if (streamUrl != null) {
                     val subs = parseSubtitleTracks(root, streamUrl)
                     return MegaPlayStream(streamUrl, subs)
@@ -142,17 +142,17 @@ object MegaPlayHelper {
         return null
     }
 
-    private suspend fun extractStream(root: JsonNode, base: String, sourceTag: String): String? {
+    private suspend fun extractStream(root: JsonNode, base: String): String? {
         val sources = root.get("sources")
         val plain = when {
             sources == null -> null
             sources.isObject -> sources.get("file")?.asText()
-            sources.isArray -> sources.get(0)?.get("file")?.asText()
+            sources.isArray && sources.size() > 0 -> sources.get(0)?.get("file")?.asText()
             else -> null
         }
         if (!plain.isNullOrBlank()) return migrateLegacyUrl(plain)
 
-        val enc = root.get("enc")?.asText() ?: return null
+        val enc = root.get("enc")?.takeIf { !it.isNull }?.asText() ?: return null
         val resolved = MegaPlayCipher.resolveEncStreamUrl(enc, base) ?: return null
         return migrateLegacyUrl(resolved)
     }
@@ -183,22 +183,68 @@ object MegaPlayHelper {
     }
 
     private suspend fun fetchJson(url: String, headers: Map<String, String>): JsonNode? {
-        val text = try {
-            app.get(url, headers = headers, timeout = 15_000L).text
+        return try {
+            mapper.readTree(app.get(url, headers = headers, timeout = 15_000L).text)
         } catch (e: Exception) {
             Log.d(TAG, "[MegaPlay] sources request failed: ${e.message}")
-            return null
-        }
-        return try {
-            mapper.readTree(text)
-        } catch (e: Exception) {
-            Log.d(TAG, "[MegaPlay] sources json parse failed: ${e.message}")
             null
         }
     }
 
-    // emits quality variants from the master playlist, falling back to the raw
-    // url when the playlist cannot be fetched or holds a single stream
+    // the cdn's openresty layer 403s master.m3u8 without a token; the web
+    // player signs for 90s but the server only rejects tokens already expired
+    private const val TOKEN_KEY = "MpCdnT0k3n!9f2K#xQ7vL5mR8wN1pY4s"
+    private const val TOKEN_LIFETIME_SECONDS = 7L * 24L * 60L * 60L
+    private val hexIdsRegex = Regex("""/([a-f0-9]{32})/([a-f0-9]{32})/""", RegexOption.IGNORE_CASE)
+
+    private fun b64url(bytes: ByteArray): String =
+        Base64.encodeToString(bytes, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
+
+    fun signUrl(url: String): String {
+        val m = hexIdsRegex.find(url) ?: return url
+        val expires = System.currentTimeMillis() / 1000L + TOKEN_LIFETIME_SECONDS
+        val payload = "$expires|${m.groupValues[1].lowercase()}/${m.groupValues[2].lowercase()}"
+        val mac = Mac.getInstance("HmacSHA256")
+        mac.init(SecretKeySpec(TOKEN_KEY.toByteArray(Charsets.UTF_8), "HmacSHA256"))
+        val signature = mac.doFinal(payload.toByteArray(Charsets.UTF_8))
+        val token = "${b64url(payload.toByteArray(Charsets.UTF_8))}.${b64url(signature)}"
+        val sep = if (url.contains('?')) "&" else "?"
+        return "$url${sep}token=$token"
+    }
+
+    private data class VariantEntry(val url: String, val quality: Int?)
+
+    // i-frame entries only ever appear as attributes of
+    // #EXT-X-I-FRAME-STREAM-INF so they never match the line after
+    // #EXT-X-STREAM-INF and are skipped here
+    private fun parseVariants(masterUrl: String, masterText: String): List<VariantEntry> {
+        val base = masterUrl.substringBefore('?').let { it.substringBeforeLast('/') + "/" }
+        val out = mutableListOf<VariantEntry>()
+        val lines = masterText.lines()
+        var i = 0
+        while (i < lines.size) {
+            val line = lines[i].trim()
+            if (line.startsWith("#EXT-X-STREAM-INF:")) {
+                val res = Regex("""RESOLUTION=(\d+)x(\d+)""").find(line)
+                val quality = res?.groupValues?.get(2)?.toIntOrNull()
+                var j = i + 1
+                while (j < lines.size && (lines[j].isBlank() || lines[j].startsWith("#"))) j++
+                if (j < lines.size) {
+                    val uri = lines[j].trim()
+                    if (uri.isNotEmpty()) {
+                        val absolute = if (uri.startsWith("http")) uri else base + uri
+                        out.add(VariantEntry(absolute, quality))
+                    }
+                    i = j
+                }
+            }
+            i++
+        }
+        return out
+    }
+
+    // emits one signed link per quality variant of the master playlist, with
+    // the signed master itself as fallback when it cannot be fetched or parsed
     suspend fun emitLinks(
         source: String,
         label: String,
@@ -212,24 +258,44 @@ object MegaPlayHelper {
             "User-Agent" to USER_AGENT,
             "Referer" to referer
         )
-        var found = false
-        val generated = try {
-            M3u8Helper.generateM3u8(source, m3u8, referer, headers = playHeaders)
+
+        val signedMaster = signUrl(m3u8)
+        val masterText = try {
+            app.get(signedMaster, headers = playHeaders, timeout = 15_000L).text
         } catch (e: Exception) {
-            Log.d(TAG, "[MegaPlay] m3u8 expansion failed: ${e.message}")
-            emptyList()
+            Log.d(TAG, "[MegaPlay] master playlist fetch failed: ${e.message}")
+            null
         }
-        if (generated.isNotEmpty()) {
-            generated.forEach(callback)
-            found = true
+
+        var found = false
+        val variants = masterText?.let { parseVariants(m3u8, it) } ?: emptyList()
+        if (variants.isNotEmpty()) {
+            for (v in variants) {
+                val suffix = v.quality?.let { "${it}p" } ?: ""
+                callback.invoke(
+                    newExtractorLink(
+                        source,
+                        if (suffix.isEmpty()) label else "$label $suffix",
+                        signUrl(v.url),
+                        type = ExtractorLinkType.M3U8
+                    ) {
+                        this.referer = referer
+                        v.quality?.let { quality = it }
+                        this.headers = playHeaders
+                    }
+                )
+                found = true
+            }
         } else {
             callback.invoke(
-                newExtractorLink(source, label, m3u8, type = ExtractorLinkType.M3U8) {
+                newExtractorLink(source, label, signedMaster, type = ExtractorLinkType.M3U8) {
+                    this.referer = referer
                     this.headers = playHeaders
                 }
             )
             found = true
         }
+
         for ((subLabel, subUrl) in subtitles) {
             subtitleCallback.invoke(
                 newSubtitleFile(subLabel, subUrl) {

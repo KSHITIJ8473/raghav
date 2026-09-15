@@ -1,4 +1,4 @@
-package com.laddu100.raghavanime
+package com.anikoto
 
 import android.util.Base64
 import com.fasterxml.jackson.databind.JsonNode
@@ -7,16 +7,18 @@ import com.lagradost.api.Log
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.newSubtitleFile
-import com.lagradost.cloudstream3.utils.newExtractorLink
+import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
+import com.lagradost.cloudstream3.utils.newExtractorLink
 import javax.crypto.Cipher
 import javax.crypto.Mac
 import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
-// megaplay clones encrypt the enc field of legacy getSources responses; the
-// key material sits in lib/newclient.min.js, with pinned fallbacks
+// megaplay clones encrypt the enc field of their sources response; the key
+// material sits in lib/newclient.min.js, with pinned fallbacks
 object MegaPlayCipher {
+    private const val TAG = "MegaPlay"
     private const val FALLBACK_KEY_SEED = "i?LMTAx0Q6,:}50U"
     private const val FALLBACK_IV_SEED = "W0;27ToaUpl_P%'c"
 
@@ -59,7 +61,7 @@ object MegaPlayCipher {
             cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(keyBytes, "AES"), IvParameterSpec(ivBytes))
             String(cipher.doFinal(cipherBytes), Charsets.UTF_8)
         } catch (e: Exception) {
-            Log.d("MegaPlay", "token decrypt failed: ${e.message}")
+            Log.d(TAG, "token decrypt failed: ${e.message}")
             null
         }
     }
@@ -73,11 +75,8 @@ object MegaPlayCipher {
     }
 }
 
-// megaplay-style players expose the playlist through getSourcesNew; the
-// legacy getSources endpoint only carries an encrypted payload on a dead cdn
-object MegaPlayHelper {
-
-    private const val TAG = "RaghavAnimeKitsu"
+object MegaPlayResolver {
+    private const val TAG = "MegaPlay"
     private val mapper = ObjectMapper()
 
     private const val USER_AGENT =
@@ -88,11 +87,9 @@ object MegaPlayHelper {
     fun audioTypeFromUrl(url: String): String? =
         Regex("""/(dub|sub)(?:[/?#]|$)""").find(url)?.groupValues?.get(1)
 
-    suspend fun resolveStream(
-        embedUrl: String,
-        referer: String?,
-        sourceTag: String
-    ): MegaPlayStream? {
+    // the ?s= param is never forwarded: the tcdn flavor serves segments with
+    // a 252-byte prefix ExoPlayer cannot parse, the default cdn plays clean
+    suspend fun resolveStream(embedUrl: String, referer: String?): MegaPlayStream? {
         val host = Regex("""https?://([^/]+)""").find(embedUrl)?.groupValues?.get(1) ?: return null
         val pageHeaders = mapOf(
             "User-Agent" to USER_AGENT,
@@ -102,16 +99,14 @@ object MegaPlayHelper {
         val pageHtml = try {
             app.get(embedUrl, headers = pageHeaders).text
         } catch (e: Exception) {
-            Log.d(TAG, "[MegaPlay] embed page failed for $host: ${e.message}")
+            Log.d(TAG, "embed page failed for $host: ${e.message}")
             return null
         }
 
         val streamId = Regex("""data-id=["'](\d+)""").find(pageHtml)?.groupValues?.get(1)
             ?: Regex("""data-realid=["'](\d+)""").find(pageHtml)?.groupValues?.get(1)
             ?: Regex("""/stream/s-\d+/(\d+)/""").find(embedUrl)?.groupValues?.get(1)
-            ?: run {
-                return null
-            }
+            ?: return null
 
         val audioType = audioTypeFromUrl(embedUrl)
             ?: Regex("""type\s*:\s*['"](dub|sub)['"]""").find(pageHtml)?.groupValues?.get(1)
@@ -130,12 +125,11 @@ object MegaPlayHelper {
                 "Referer" to embedUrl
             )
             for (endpoint in listOf("getSourcesNew", "getSources")) {
-                val root = fetchJson("$base/stream/$endpoint?id=$streamId&type=$audioType", ajaxHeaders)
-                    ?: continue
+                val url = "$base/stream/$endpoint?id=$streamId&type=$audioType"
+                val root = fetchJson(url, ajaxHeaders) ?: continue
                 val streamUrl = extractStream(root, base)
                 if (streamUrl != null) {
-                    val subs = parseSubtitleTracks(root, streamUrl)
-                    return MegaPlayStream(streamUrl, subs)
+                    return MegaPlayStream(streamUrl, parseSubtitleTracks(root))
                 }
             }
         }
@@ -145,28 +139,19 @@ object MegaPlayHelper {
     private suspend fun extractStream(root: JsonNode, base: String): String? {
         val sources = root.get("sources")
         val plain = when {
-            sources == null -> null
+            sources == null || sources.isNull -> null
             sources.isObject -> sources.get("file")?.asText()
             sources.isArray && sources.size() > 0 -> sources.get(0)?.get("file")?.asText()
             else -> null
         }
-        if (!plain.isNullOrBlank()) return migrateLegacyUrl(plain)
+        if (!plain.isNullOrBlank()) return plain
 
         val enc = root.get("enc")?.takeIf { !it.isNull }?.asText() ?: return null
-        val resolved = MegaPlayCipher.resolveEncStreamUrl(enc, base) ?: return null
-        return migrateLegacyUrl(resolved)
+        return MegaPlayCipher.resolveEncStreamUrl(enc, base)
     }
 
-    // legacy imgnex cdn paths carry an /anime prefix the megap hosts dropped;
-    // every megap mirror serves the same paths so any of them works as a target
-    private fun migrateLegacyUrl(url: String): String {
-        if (!url.contains("https://cdn.imgnex.top/anime")) return url
-        return url.replace("https://cdn.imgnex.top/anime", "https://megap.norami.top")
-    }
-
-    private fun parseSubtitleTracks(root: JsonNode, m3u8: String): List<Pair<String, String>> {
+    private fun parseSubtitleTracks(root: JsonNode): List<Pair<String, String>> {
         val subs = mutableListOf<Pair<String, String>>()
-        val origin = Regex("""https?://[^/]+""").find(m3u8)?.value ?: "https://megap.norami.top"
         val tracks = root.get("tracks") ?: return subs
         if (!tracks.isArray) return subs
         for (element in tracks) {
@@ -174,10 +159,7 @@ object MegaPlayHelper {
             if (kind != "captions" && kind != "subtitles") continue
             val file = element.get("file")?.asText() ?: continue
             if (file.isBlank()) continue
-            val migrated = if (file.contains("https://cdn.imgnex.top/anime")) {
-                file.replace("https://cdn.imgnex.top/anime", origin)
-            } else file
-            subs.add((element.get("label")?.asText() ?: "English") to migrated)
+            subs.add((element.get("label")?.asText() ?: "English") to file)
         }
         return subs
     }
@@ -186,7 +168,7 @@ object MegaPlayHelper {
         return try {
             mapper.readTree(app.get(url, headers = headers, timeout = 15_000L).text)
         } catch (e: Exception) {
-            Log.d(TAG, "[MegaPlay] sources request failed: ${e.message}")
+            Log.d(TAG, "sources request failed: ${e.message}")
             null
         }
     }
@@ -252,7 +234,7 @@ object MegaPlayHelper {
         referer: String,
         subtitles: List<Pair<String, String>>,
         subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (com.lagradost.cloudstream3.utils.ExtractorLink) -> Unit
+        callback: (ExtractorLink) -> Unit
     ): Boolean {
         val playHeaders = mapOf(
             "User-Agent" to USER_AGENT,
@@ -263,7 +245,7 @@ object MegaPlayHelper {
         val masterText = try {
             app.get(signedMaster, headers = playHeaders, timeout = 15_000L).text
         } catch (e: Exception) {
-            Log.d(TAG, "[MegaPlay] master playlist fetch failed: ${e.message}")
+            Log.d(TAG, "master playlist fetch failed: ${e.message}")
             null
         }
 
@@ -306,3 +288,4 @@ object MegaPlayHelper {
         return found
     }
 }
+

@@ -33,6 +33,7 @@ class AniSugeProvider : MainAPI() {
     )
 
     private val cfKiller = CloudflareKiller()
+    private val kwikExtractor by lazy { KwikExtractor() }
 
     private fun rc4(key: ByteArray, input: ByteArray): ByteArray {
         val s = IntArray(256) { it }
@@ -98,6 +99,7 @@ class AniSugeProvider : MainAPI() {
         return result.toString()
     }
 
+    // vrf token the ajax endpoints expect, matching the site's client js
     private fun generateVrf(input: String): String {
         val encoded = URLEncoder.encode(input, "UTF-8").replace("+", "%20")
         val key = "ysJhV6U27FVIjjuk".toByteArray(Charsets.UTF_8)
@@ -132,7 +134,6 @@ class AniSugeProvider : MainAPI() {
             "mostview" -> soup.selectFirst("section.mostview")
             else -> null
         }
-        if (section == null) Log.d("RaghavAnime", "[AniSuge] getMainPage no section matched '${request.data}'")
 
         val home = mutableListOf<SearchResponse>()
         section?.select(".item")?.forEach { item ->
@@ -227,29 +228,34 @@ class AniSugeProvider : MainAPI() {
         val dubEpisodes = mutableListOf<Episode>()
 
         epsSoup.select("a[data-ids]")?.forEach { epLink ->
-            val epNum = epLink.text().toIntOrNull() ?: epLink.attr("data-slug").toIntOrNull() ?: 1
+            val epNum = epLink.text().trim().toIntOrNull()
+                ?: epLink.attr("data-slug").toIntOrNull()
+                ?: epLink.attr("data-num").filter { it.isDigit() }.toIntOrNull()
+                ?: 1
             val epTitle = epLink.attr("data-num")?.takeIf { it.isNotBlank() } ?: "Episode $epNum"
             val dataIds = epLink.attr("data-ids") ?: return@forEach
+            // episodes without mapper coords fall back to the legacy server path
+            val malId = epLink.attr("data-mal").trim()
+            val slug = epLink.attr("data-slug").takeIf { it.isNotBlank() } ?: epNum.toString()
+            val timestamp = epLink.attr("data-timestamp").trim()
             val hasSub = epLink.attr("data-sub") == "1"
             val hasDub = epLink.attr("data-dub") == "1"
 
             if (hasSub) {
-                subEpisodes.add(newEpisode("$mainUrl|$dataId|$epNum|$dataIds|sub") {
+                subEpisodes.add(newEpisode("$mainUrl|$dataId|$epNum|$dataIds|$malId|$slug|$timestamp|sub") {
                     this.episode = epNum
                     this.name = epTitle
                 })
             }
             if (hasDub) {
-                dubEpisodes.add(newEpisode("$mainUrl|$dataId|$epNum|$dataIds|dub") {
+                dubEpisodes.add(newEpisode("$mainUrl|$dataId|$epNum|$dataIds|$malId|$slug|$timestamp|dub") {
                     this.episode = epNum
                     this.name = epTitle
                 })
             }
         }
 
-        val tvType = TvType.Anime
-
-        return newAnimeLoadResponse(title, url, tvType) {
+        return newAnimeLoadResponse(title, url, TvType.Anime) {
             this.posterUrl = poster
             this.backgroundPosterUrl = banner
             this.year = year
@@ -260,6 +266,8 @@ class AniSugeProvider : MainAPI() {
         }
     }
 
+    // episode data: baseUrl|animeId|epNum|dataIds|malId|slug|timestamp|sub|dub
+    // dataIds feeds the legacy server flow, mal/slug/timestamp the mapper api
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -270,13 +278,49 @@ class AniSugeProvider : MainAPI() {
         val parts = data.split("|")
         if (parts.size < 5) return@coroutineScope false
         val baseUrl = parts[0]
-        val animeId = parts[1]
         val epNum = parts[2]
         val dataIds = parts[3]
-        val selectedType = parts[4]
+        val malId = parts.getOrNull(4)
+        val slug = parts.getOrNull(5) ?: epNum
+        val timestamp = parts.getOrNull(6)
+        val selectedType = parts.last()
 
+        var anyLoaded = false
+
+        // legacy native servers, currently empty on the site but kept so
+        // sources reappear instantly if it restores them
+        try {
+            if (loadLegacyServers(baseUrl, dataIds, selectedType, subtitleCallback, callback)) {
+                anyLoaded = true
+            }
+        } catch (e: Exception) {
+            Log.d("AniSuge", "legacy server path failed: ${e.message}")
+        }
+
+        if (!malId.isNullOrBlank() && !timestamp.isNullOrBlank()) {
+            try {
+                if (loadMapperSources(baseUrl, malId, slug, timestamp, selectedType, subtitleCallback, callback)) {
+                    anyLoaded = true
+                }
+            } catch (e: Exception) {
+                Log.d("AniSuge", "mapper path failed: ${e.message}")
+            }
+        }
+
+        anyLoaded
+    }
+
+    private suspend fun loadLegacyServers(
+        baseUrl: String,
+        dataIds: String,
+        selectedType: String,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean = coroutineScope {
+        // '+' in the base64 blob must be url-encoded or the api mangles it
+        val encodedIds = URLEncoder.encode(dataIds, "UTF-8")
         val serverListResponseText = app.get(
-            url = "$baseUrl/ajax/server/list?servers=$dataIds",
+            url = "$baseUrl/ajax/server/list?servers=$encodedIds",
             headers = mapOf(
                 "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
                 "Referer" to "$baseUrl/watch/",
@@ -299,11 +343,9 @@ class AniSugeProvider : MainAPI() {
             } else {
                 typeAttr == "dub" || typeAttr == "adub" || typeAttr == "a-dub"
             }
-
             if (!isMatch) continue
 
-            val servers = st.select(".server")
-            for (s in servers) {
+            for (s in st.select(".server")) {
                 val linkId = s.attr("data-link-id") ?: continue
                 val serverName = s.selectFirst("span")?.text()?.trim() ?: "Unknown Server"
                 serversToLoad.add(Pair(serverName, linkId))
@@ -319,10 +361,9 @@ class AniSugeProvider : MainAPI() {
                     loadedSingle = true
                     callback(link)
                 }
-
                 try {
                     val serverInfoText = app.get(
-                        url = "$baseUrl/ajax/server?get=$linkId",
+                        url = "$baseUrl/ajax/server?get=${URLEncoder.encode(linkId, "UTF-8")}",
                         headers = mapOf(
                             "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
                             "Referer" to "$baseUrl/watch/",
@@ -334,179 +375,187 @@ class AniSugeProvider : MainAPI() {
                     val serverInfoJson = parseJson<ServerInfoResponse>(serverInfoText)
                     val playerUrl = serverInfoJson.result?.url ?: return@async false
 
-                    val parsedUrl = java.net.URI(playerUrl)
-                    val embedBase = "${parsedUrl.scheme}://${parsedUrl.host}"
-
-                    if (playerUrl.contains("plyr.php#")) {
-                        val b64 = playerUrl.substringAfter("#").substringBefore("#")
-                        val decodedUrl = try {
-                            String(android.util.Base64.decode(b64, android.util.Base64.DEFAULT), Charsets.UTF_8)
-                        } catch (e: Exception) {
-                            Log.e("RaghavAnime", "[AniSuge] server '$serverName' plyr.php base64 decode failed: ${e.message}")
-                            ""
-                        }
-                        if (decodedUrl.isNotBlank()) {
-                            val userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-                            val finalUrl = decodedUrl
-                            wrappedCallback(
-                                newExtractorLink(
-                                    serverName,
-                                    serverName,
-                                    finalUrl,
-                                    if (finalUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                                ) {
-                                    this.referer = "https://gogoanime.me.uk/"
-                                }
-                            )
-                            return@async true
-                        }
-                    }
-
-                    val isMegaplayClone = playerUrl.contains("megaplay.buzz") ||
-                                          playerUrl.contains("vidwish.live") ||
-                                          playerUrl.contains("vidtube.site") ||
-                                          playerUrl.contains("vidstream") ||
-                                          playerUrl.contains("vidplay")
-
-                    if (isMegaplayClone) {
-                        try {
-                            val playerPageHtml = app.get(
-                                url = playerUrl,
-                                headers = mapOf(
-                                    "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-                                    "Referer" to "$baseUrl/"
-                                )
-                            ).text
-
-                            val playerPageSoup = Jsoup.parse(playerPageHtml)
-                            val playerId = playerPageSoup.selectFirst("#megaplay-player")?.attr("data-id")
-                                ?: Regex("""data-id=["'](\d+)""").find(playerPageHtml)?.groupValues?.get(1)
-                                ?: playerPageSoup.selectFirst("#megaplay-player")?.attr("data-realid")
-                                ?: Regex("""data-realid=["'](\d+)""").find(playerPageHtml)?.groupValues?.get(1)
-                                ?: Regex("""/stream/s-\d+/(\d+)""").find(playerUrl)?.groupValues?.get(1)
-
-                            if (playerId != null) {
-                                val sourcesText = app.get(
-                                    url = "$embedBase/stream/getSources?id=$playerId&type=$selectedType",
-                                    headers = mapOf(
-                                        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-                                        "Referer" to playerUrl,
-                                        "X-Requested-With" to "XMLHttpRequest",
-                                        "Origin" to embedBase
-                                    )
-                                ).text
-
-                                val sourcesJson = parseJson<SourcesResponse>(sourcesText)
-                                val m3u8Url = sourcesJson.sources?.file
-
-                                if (!m3u8Url.isNullOrEmpty()) {
-                                    M3u8Helper.generateM3u8(
-                                        source = "$name - $serverName",
-                                        streamUrl = m3u8Url,
-                                        referer = embedBase,
-                                        headers = mapOf(
-                                            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-                                            "Referer" to "$embedBase/"
-                                        )
-                                    ).forEach(wrappedCallback)
-                                }
-
-                                sourcesJson.tracks?.forEach { track ->
-                                    val file = track.file ?: return@forEach
-                                    if (track.kind == "captions" || track.kind == "subtitles") {
-                                        subtitleCallback(
-                                            newSubtitleFile(track.label ?: "Subtitle", file) {
-                                                this.headers = mapOf("Referer" to "$embedBase/")
-                                            }
-                                        )
-                                    }
-                                }
-                            }
-                        } catch (e: Exception) {
-                            Log.e("RaghavAnime", "[AniSuge] server '$serverName' megaplay getSources failed: ${e.message}")
-                        }
-
-                        if (!loadedSingle) {
-                            try {
-                                val resolver = com.lagradost.cloudstream3.network.WebViewResolver(
-                                    interceptUrl = Regex("""\.m3u8"""),
-                                    additionalUrls = listOf(Regex("""\.m3u8""")),
-                                    script = """document.querySelector('.jw-icon-display')?.click();""",
-                                    useOkhttp = false,
-                                    timeout = 30_000L
-                                )
-                                val m3u8 = app.get(playerUrl, referer = "$baseUrl/", interceptor = resolver).url
-                                if (m3u8.contains(".m3u8")) {
-                                    val userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-                                    val finalUrl = m3u8
-                                    M3u8Helper.generateM3u8(
-                                        source = "$name - $serverName",
-                                        streamUrl = finalUrl,
-                                        referer = embedBase,
-                                        headers = mapOf(
-                                            "User-Agent" to userAgent,
-                                            "Referer" to "$embedBase/"
-                                        )
-                                    ).forEach(wrappedCallback)
-                                }
-                            } catch (e: Exception) {
-                                Log.e("RaghavAnime", "[AniSuge] server '$serverName' WebViewResolver fallback failed: ${e.message}")
-                            }
-                        }
-                    } else {
-
-                        val loaded = loadExtractor(playerUrl, "$baseUrl/", subtitleCallback, wrappedCallback)
-                        if (!loaded) {
-                            try {
-                                val resolver = com.lagradost.cloudstream3.network.WebViewResolver(
-                                    interceptUrl = Regex("""(?i)\.(m3u8|mp4)(?:\?|$)"""),
-                                    additionalUrls = listOf(Regex("""(?i)\.(m3u8|mp4)(?:\?|$)""")),
-                                    script = """document.querySelector('button,[role="button"],.jw-icon-display,.vds-play-button')?.click();""",
-                                    useOkhttp = false,
-                                    timeout = 30_000L
-                                )
-                                val resolved = app.get(playerUrl, referer = "$baseUrl/", interceptor = resolver).url
-                                val headers = mapOf("Referer" to playerUrl)
-                                when {
-                                    resolved.contains(".m3u8", ignoreCase = true) -> {
-                                        val userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-                                        M3u8Helper.generateM3u8(
-                                            source = "$name - $serverName",
-                                            streamUrl = resolved,
-                                            referer = playerUrl,
-                                            headers = mapOf(
-                                                "User-Agent" to userAgent,
-                                                "Referer" to "$playerUrl/"
-                                            )
-                                        ).forEach(wrappedCallback)
-                                    }
-                                    resolved.contains(".mp4", ignoreCase = true) -> {
-                                        wrappedCallback(
-                                            newExtractorLink(
-                                                source = "$name - $serverName",
-                                                name = "$name - $serverName",
-                                                url = resolved,
-                                                type = ExtractorLinkType.VIDEO
-                                            ) {
-                                                quality = getQualityFromName(resolved)
-                                                this.headers = headers
-                                            }
-                                        )
-                                    }
-                                }
-                            } catch (e: Exception) {
-                                Log.e("RaghavAnime", "[AniSuge] server '$serverName' WebViewResolver fallback failed: ${e.message}")
-                            }
-                        }
+                    if (resolveEmbed(playerUrl, baseUrl, serverName, subtitleCallback, wrappedCallback)) {
+                        loadedSingle = true
                     }
                 } catch (e: Exception) {
-                    Log.e("RaghavAnime", "[AniSuge] server '$serverName' failed: ${e.message}")
+                    Log.e("AniSuge", "server $serverName failed: ${e.message}")
                 }
                 loadedSingle
             }
         }.awaitAll()
 
         loadedResults.any { it }
+    }
+
+    private suspend fun loadMapperSources(
+        baseUrl: String,
+        malId: String,
+        slug: String,
+        timestamp: String,
+        selectedType: String,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
+        val providers = AniSugeMapper.fetchProviders(malId, slug, timestamp) ?: return false
+
+        var anyLoaded = false
+        for ((providerKey, subDub) in providers) {
+            val displayName = AniSugeMapper.displayProviderName(providerKey)
+            val entry = if (selectedType == "dub") subDub.second else subDub.first
+            if (entry == null) continue
+
+            val streamUrl = entry.url
+            if (streamUrl != null) {
+                var embedUrl: String? = null
+                try {
+                    val serverInfoText = app.get(
+                        url = "$baseUrl/ajax/server?get=${URLEncoder.encode(streamUrl, "UTF-8")}",
+                        headers = mapOf(
+                            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+                            "Referer" to "$baseUrl/watch/",
+                            "X-Requested-With" to "XMLHttpRequest"
+                        )
+                    ).text
+                    val serverInfoJson = parseJson<ServerInfoResponse>(serverInfoText)
+                    embedUrl = serverInfoJson.result?.url
+                } catch (_: Exception) {
+                    // the site may not wrap this one, use the mapper url directly
+                }
+                if (embedUrl.isNullOrBlank()) embedUrl = streamUrl
+
+                try {
+                    if (resolveEmbed(embedUrl, baseUrl, displayName, subtitleCallback, callback)) {
+                        anyLoaded = true
+                    }
+                } catch (e: Exception) {
+                    Log.d("AniSuge", "embed $displayName failed: ${e.message}")
+                }
+            }
+
+            for ((qualityLabel, paheUrl) in entry.downloads) {
+                try {
+                    val kwikUrl = PaheDownloadResolver.resolveKwikUrl(paheUrl) ?: continue
+                    val resolved = kwikExtractor.resolve(kwikUrl, paheUrl) ?: continue
+                    val (playUrl, kwikPage) = resolved
+                    val qualityInt = qualityLabel.filter { it.isDigit() }.toIntOrNull()
+                    callback.invoke(
+                        newExtractorLink(
+                            name,
+                            "$name $displayName $qualityLabel",
+                            playUrl,
+                            if (playUrl.contains(".m3u8", true)) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                        ) {
+                            this.quality = qualityInt ?: Qualities.Unknown.value
+                            this.referer = kwikPage
+                            this.headers = mapOf("Referer" to kwikPage)
+                        }
+                    )
+                    anyLoaded = true
+                } catch (e: Exception) {
+                    Log.d("AniSuge", "download $displayName $qualityLabel failed: ${e.message}")
+                }
+            }
+        }
+        return anyLoaded
+    }
+
+    private suspend fun resolveEmbed(
+        playerUrl: String,
+        baseUrl: String,
+        serverName: String,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
+        if (playerUrl.contains("plyr.php#")) {
+            val b64 = playerUrl.substringAfter("#").substringBefore("#")
+            val decodedUrl = try {
+                String(Base64.decode(b64, Base64.DEFAULT), Charsets.UTF_8)
+            } catch (e: Exception) {
+                ""
+            }
+            if (decodedUrl.isNotBlank()) {
+                callback.invoke(
+                    newExtractorLink(
+                        serverName,
+                        "$name $serverName",
+                        decodedUrl,
+                        if (decodedUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                    ) {
+                        this.referer = "https://gogoanime.me.uk/"
+                    }
+                )
+                return true
+            }
+        }
+
+        val embedHost = Regex("""https?://([^/]+)""").find(playerUrl)?.groupValues?.get(1) ?: ""
+        val isMegaplayClone = embedHost.contains("megaplay") ||
+                embedHost.contains("vidwish") ||
+                embedHost.contains("vidtube") ||
+                embedHost.contains("vidstream") ||
+                embedHost.contains("vidplay")
+
+        if (isMegaplayClone) {
+            val stream = MegaPlayHelper.resolveStream(playerUrl, "$baseUrl/", name)
+            if (stream != null) {
+                return MegaPlayHelper.emitLinks(
+                    name, "$name $serverName", stream.m3u8, "https://$embedHost/",
+                    stream.subtitles, subtitleCallback, callback
+                )
+            }
+            Log.e("AniSuge", "megaplay resolution failed for $serverName")
+            return false
+        }
+
+        val loaded = try {
+            loadExtractor(playerUrl, "$baseUrl/", subtitleCallback, callback)
+        } catch (e: Exception) {
+            false
+        }
+        if (!loaded) {
+            try {
+                val resolver = com.lagradost.cloudstream3.network.WebViewResolver(
+                    interceptUrl = Regex("""(?i)\.(m3u8|mp4)(?:\?|$)"""),
+                    additionalUrls = listOf(Regex("""(?i)\.(m3u8|mp4)(?:\?|$)""")),
+                    script = """document.querySelector('button,[role="button"],.jw-icon-display,.vds-play-button')?.click();""",
+                    useOkhttp = false,
+                    timeout = 30_000L
+                )
+                val resolved = app.get(playerUrl, referer = "$baseUrl/", interceptor = resolver).url
+                when {
+                    resolved.contains(".m3u8", ignoreCase = true) -> {
+                        M3u8Helper.generateM3u8(
+                            source = name,
+                            streamUrl = resolved,
+                            referer = playerUrl,
+                            headers = mapOf(
+                                "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+                                "Referer" to "$playerUrl/"
+                            )
+                        ).forEach(callback)
+                        return true
+                    }
+                    resolved.contains(".mp4", ignoreCase = true) -> {
+                        callback.invoke(
+                            newExtractorLink(
+                                source = name,
+                                name = "$name $serverName",
+                                url = resolved,
+                                type = ExtractorLinkType.VIDEO
+                            ) {
+                                quality = getQualityFromName(resolved)
+                                this.headers = mapOf("Referer" to playerUrl)
+                            }
+                        )
+                        return true
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e("AniSuge", "webview fallback failed for $serverName: ${e.message}")
+            }
+        }
+        return loaded
     }
 
     data class EpsResponse(
@@ -522,20 +571,4 @@ class AniSugeProvider : MainAPI() {
     data class ServerInfoResult(
         @JsonProperty("url") val url: String? = null
     )
-
-    data class SourcesResponse(
-        @JsonProperty("sources") val sources: SourcesFile? = null,
-        @JsonProperty("tracks") val tracks: List<SourcesTrack>? = null
-    )
-
-    data class SourcesFile(
-        @JsonProperty("file") val file: String? = null
-    )
-
-    data class SourcesTrack(
-        @JsonProperty("file") val file: String? = null,
-        @JsonProperty("label") val label: String? = null,
-        @JsonProperty("kind") val kind: String? = null
-    )
-
 }

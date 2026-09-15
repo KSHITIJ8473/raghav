@@ -7,5 +7,6 @@ import com.lagradost.cloudstream3.plugins.CloudstreamPlugin
 class AniSugePlugin : BasePlugin() {
     override fun load() {
         registerMainAPI(AniSugeProvider())
+        registerExtractorAPI(KwikExtractor())
     }
 }

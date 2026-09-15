@@ -113,7 +113,9 @@ class AnimeWorldSettingsFragment(private val plugin: Plugin) : BottomSheetDialog
                             cm.setCookie(host, "$name=; Max-Age=0; expires=Thu, 01 Jan 1970 00:00:00 GMT")
                         }
                         cm.flush()
-                    } catch (e: Exception) {}
+                    } catch (e: Exception) {
+                        Log.e("AnimeWorld_Settings", "clear: ${e.message}")
+                    }
                     AnimeWorldCFStore.clear()
                     bypassBtn.text = "Bypass Cloudflare"
                     Toast.makeText(ctx, "Cleared", Toast.LENGTH_SHORT).show()

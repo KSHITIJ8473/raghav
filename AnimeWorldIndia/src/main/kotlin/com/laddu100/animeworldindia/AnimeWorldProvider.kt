@@ -33,6 +33,12 @@ class AnimeWorldProvider : MainAPI() {
         @JsonProperty("awi_url") val awi_url: String? = null
     )
 
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    data class ZephyrixVideo(
+        @JsonProperty("videoSource") val videoSource: String? = null,
+        @JsonProperty("securedLink") val securedLink: String? = null
+    )
+
     private suspend fun loadFirebaseUrl() {
         if (isUrlLoaded) return
         try {
@@ -43,6 +49,7 @@ class AnimeWorldProvider : MainAPI() {
             isUrlLoaded = true
         } catch (e: Exception) {
             isUrlLoaded = true
+            Log.e(TAG, "firebase url: ${e.message}")
         }
     }
 
@@ -269,8 +276,7 @@ class AnimeWorldProvider : MainAPI() {
             var found = false
             for (iframe in iframes) {
                 if (iframe.contains("zephyrix") || iframe.contains("zephyrflick")) {
-                    val videoId = Regex("/video/([a-f0-9]+)").find(iframe)?.groupValues?.get(1) ?: continue
-                    val resolved = resolveZephyrix(videoId, subtitleCallback, callback)
+                    val resolved = resolveZephyrix(iframe, subtitleCallback, callback)
                     if (resolved) found = true
                 }
             }
@@ -282,37 +288,38 @@ class AnimeWorldProvider : MainAPI() {
     }
 
     private suspend fun resolveZephyrix(
-        videoId: String,
+        iframeUrl: String,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         return try {
-            val response = animeWorldGet("https://play.zephyrix.top/video/$videoId", headers = mapOf(
-                "Referer" to mainUrl
-            ))
-            val html = response.text
-            val allHashes = Regex("[a-f0-9]{32}").findAll(html).map { it.value }.distinct().toList()
-            val cdnHash = allHashes.firstOrNull { it != videoId } ?: return false
+            val videoId = Regex("/video/([a-f0-9]+)").find(iframeUrl)?.groupValues?.get(1) ?: return false
+            val playerBase = Regex("(https?://[^/]+)").find(iframeUrl)?.groupValues?.get(1) ?: return false
 
-            val cdnDomain = Regex("https?://(s\\d+\\.as-cdn\\d+\\.top)").find(html)?.groupValues?.get(1)
-                ?: "s7.as-cdn7.top"
-
-            val m3u8Url = "https://$cdnDomain/cdn/down/$cdnHash/master.m3u8"
-
-            val subtitleUrl = Regex("https?://[^\"'\\s]*Subtitle/[^\"'\\s]+\\.(srt|vtt)").find(html)?.value
-            if (subtitleUrl != null) {
-                subtitleCallback.invoke(SubtitleFile("en", subtitleUrl))
-            }
+            val response = app.post(
+                "$playerBase/player/index.php?data=$videoId&do=getVideo",
+                data = mapOf("hash" to videoId, "r" to "$mainUrl/"),
+                headers = mapOf(
+                    "X-Requested-With" to "XMLHttpRequest",
+                    "Origin" to playerBase,
+                    "Referer" to "$playerBase/video/$videoId",
+                    "Accept" to "application/json, text/javascript, */*; q=0.01"
+                ),
+                timeout = 30_000L
+            )
+            val video = parseJson<ZephyrixVideo>(response.text)
+            // master.txt keeps every audio rendition (hin/tam/tel/eng/jpn) in one playlist
+            val streamUrl = video.videoSource ?: video.securedLink ?: return false
+            val absoluteUrl = if (streamUrl.startsWith("http")) streamUrl else playerBase + streamUrl
 
             val link = newExtractorLink(
                 "Anime World India",
                 "Anime World India",
-                m3u8Url,
+                absoluteUrl,
                 ExtractorLinkType.M3U8
             ) {
                 this.quality = Qualities.Unknown.value
-                this.referer = "https://play.zephyrix.top/"
-                this.headers = mapOf("Referer" to "https://play.zephyrix.top/")
+                this.referer = "$playerBase/"
             }
             callback.invoke(link)
             true

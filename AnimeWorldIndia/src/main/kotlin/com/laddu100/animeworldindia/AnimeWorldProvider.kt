@@ -320,6 +320,11 @@ class AnimeWorldProvider : MainAPI() {
             ) {
                 this.quality = Qualities.Unknown.value
                 this.referer = "$playerBase/"
+                // stream cdn rejects requests that lack a browser UA and Accept header
+                this.headers = mapOf(
+                    "Accept" to "*/*",
+                    "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+                )
             }
             callback.invoke(link)
             true

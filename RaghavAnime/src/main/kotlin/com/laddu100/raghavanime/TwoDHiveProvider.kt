@@ -234,8 +234,7 @@ class RaghavTwoDHive : MainAPI() {
                 this.posterUrl = ep.posterUrl
             }
         }
-        // the dub tab is only worth showing when megaplay actually carries a
-        // dub track for this title, otherwise it just ends in "no links"
+        // the dub tab just ends in "no links" when megaplay has no dub track
         val hasDub = malId != null && probeDub(malId)
         val dubEpisodes = if (hasDub) {
             episodes.map { ep ->
@@ -246,7 +245,6 @@ class RaghavTwoDHive : MainAPI() {
                 }
             }
         } else emptyList()
-
 
         return newAnimeLoadResponse(title, url, TvType.Anime) {
             this.posterUrl = poster
@@ -287,14 +285,10 @@ class RaghavTwoDHive : MainAPI() {
         val html = quickGet(epUrl)
         val soup = Jsoup.parse(html)
 
-        // the player island carries the mal id and episode number; the component
-        // was renamed from MultiServerPlayer to EpisodePlayer, match both
+        // the island was renamed from MultiServerPlayer to EpisodePlayer, match both
         val island = soup.select("astro-island").firstOrNull {
             val cu = it.attr("component-url")
             cu.contains("EpisodePlayer", ignoreCase = true) || cu.contains("MultiServerPlayer", ignoreCase = true)
-        }
-        if (island == null) {
-            Log.e("RaghavAnime", "[2DHive] no EpisodePlayer/MultiServerPlayer island on page, falling back to URL params")
         }
         val propsStr = island?.attr("props")?.takeIf { it.isNotEmpty() }
         val decoded = if (propsStr != null) decodeAstro(mapper.readTree(propsStr)) else null
@@ -307,10 +301,7 @@ class RaghavTwoDHive : MainAPI() {
             ?: epUrl.substringAfter("ep_num=").substringBefore("&").toIntOrNull()
             ?: 1
 
-        if (malId == null) {
-            Log.e("RaghavAnime", "[2DHive] could not resolve malId, aborting")
-            return@coroutineScope false
-        }
+        if (malId == null) return@coroutineScope false
 
         val results = mutableListOf<Deferred<Boolean>>()
 
@@ -332,8 +323,7 @@ class RaghavTwoDHive : MainAPI() {
             }
         })
 
-        val anyOk = results.awaitAll().any { it }
-        anyOk
+        results.awaitAll().any { it }
     }
 
     private suspend fun resolveMegaPlay(
@@ -356,6 +346,120 @@ class RaghavTwoDHive : MainAPI() {
         )
     }
 
+    private val babaSolverScript = """
+(function () {
+    if (window.__babaShell) return;
+    window.__babaShell = 1;
+
+    var tries = 0;
+    function poll() {
+        var t = "";
+        try { t = document.title || ""; } catch (e) {}
+        if (t === "video.mp4") { rebuild(); return; }
+        if (t === "Just a moment...") return;
+        if (tries++ < 300) setTimeout(poll, 10);
+    }
+
+    function rebuild() {
+        document.open();
+        document.write(
+            '<!doctype html><html><head><meta charset="utf-8"><title>baba</title>' +
+            '<script src="https://cdn.jsdelivr.net/npm/cap-widget@0.1.57"><\/script>' +
+            '</head><body><script>(' + driver.toString() + ')();<\/script></body></html>'
+        );
+        document.close();
+    }
+
+    function driver() {
+        function b64d(s) {
+            var b = atob(s), u = new Uint8Array(b.length);
+            for (var i = 0; i < b.length; i++) u[i] = b.charCodeAt(i);
+            return u;
+        }
+        function b64e(u) {
+            var s = "";
+            for (var i = 0; i < u.length; i++) s += String.fromCharCode(u[i]);
+            return btoa(s);
+        }
+        var keyPromise = null;
+        function key() {
+            if (!keyPromise) {
+                keyPromise = crypto.subtle.importKey(
+                    "raw", b64d(CFG.pk), { name: "AES-GCM" }, false, ["encrypt", "decrypt"]
+                );
+            }
+            return keyPromise;
+        }
+        async function seal(str) {
+            var iv = crypto.getRandomValues(new Uint8Array(12));
+            var ct = await crypto.subtle.encrypt(
+                { name: "AES-GCM", iv: iv }, await key(), new TextEncoder().encode(str)
+            );
+            var out = new Uint8Array(iv.length + ct.byteLength);
+            out.set(iv, 0);
+            out.set(new Uint8Array(ct), iv.length);
+            return b64e(out);
+        }
+        async function open(b64) {
+            var d = b64d(b64), iv = d.slice(0, 12), ct = d.slice(12);
+            var pt = await crypto.subtle.decrypt({ name: "AES-GCM", iv: iv }, await key(), ct);
+            return new TextDecoder().decode(pt);
+        }
+        async function call(route, payload) {
+            var body = { s: CFG.sid, d: await seal(JSON.stringify(payload)) };
+            var r = await fetch(route, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(body)
+            });
+            if (!r.ok) throw new Error("http " + r.status + " on " + route);
+            return JSON.parse(await open((await r.json()).d));
+        }
+
+        var attempts = 0;
+        async function run() {
+            var html = await (await fetch(location.href, { credentials: "same-origin" })).text();
+            var m = html.match(/var CFG = (\{[^;]+\});/);
+            if (!m) throw new Error("page config missing");
+            window.CFG = JSON.parse(m[1]);
+
+            var r = await call("/api/resolve", { ts: Date.now() });
+
+            if (r.t === "error" && r.m === "verify") {
+                if (!window.Cap) throw new Error("cap widget missing");
+                var solved = await new window.Cap({ apiEndpoint: CFG.cap }).solve();
+                var v = await call("/api/cap-verify", {
+                    ts: Date.now(), token: solved.token, mode: "invisible"
+                });
+                if (v.t !== "ok") throw new Error("cap rejected");
+                r = await call("/api/resolve", { ts: Date.now() });
+            }
+
+            if (!r.u) throw new Error(r.m || "no stream url");
+            var url = new URL(r.u, location.origin).href;
+            if (/\.(m3u8|mp4)([?#]|$)/i.test(url)) {
+                // the host app watches for media requests leaving the webview
+                fetch(url, { mode: "no-cors" }).catch(function () {});
+            } else {
+                // some titles hand back a third-party embed page instead, let
+                // that player load and ask for its own media
+                location.href = url;
+            }
+        }
+
+        (function attempt() {
+            attempts += 1;
+            if (attempts > 3) return;
+            run().catch(function () {
+                setTimeout(attempt, 5000);
+            });
+        })();
+    }
+
+    poll();
+})();
+""".trimIndent()
+
     private suspend fun resolveBabaStream(
         malId: Int, epNum: Int, type: String, epUrl: String,
         callback: (ExtractorLink) -> Unit
@@ -363,12 +467,10 @@ class RaghavTwoDHive : MainAPI() {
         val embedUrl = "https://babastream.top/embed/$malId/$epNum/$type"
         return try {
             val resolver = WebViewResolver(
-                interceptUrl = Regex("""(?i)\.(m3u8|mp4)(?:\?|$)"""),
-                additionalUrls = listOf(Regex("""(?i)\.(m3u8|mp4)(?:\?|$)""")),
-                script = """document.querySelector('button,[role="button"],.vjs-big-play-button,.jw-icon-display,.vds-play-button,[onclick]')?.click();""",
-                // the babastream cloudflare managed challenge plus the moon player
-                // handshake routinely take over a minute to clear
-                useOkhttp = false, timeout = 90_000L
+                interceptUrl = Regex("""(?i)\.(m3u8|mp4)(?:[?#]|$)"""),
+                script = babaSolverScript,
+                // the cap pow solve alone can take half a minute on slow hardware
+                useOkhttp = false, timeout = 120_000L
             )
             val resolved = app.get(embedUrl, referer = epUrl, interceptor = resolver).url
             if (resolved.contains(".m3u8") || resolved.contains(".mp4")) {

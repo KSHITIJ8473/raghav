@@ -14,8 +14,8 @@ import javax.crypto.Mac
 import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
-// megaplay clones encrypt the enc field of legacy getSources responses; the
-// key material sits in lib/newclient.min.js, with pinned fallbacks
+// megaplay encrypts the enc field of getSources responses, seeds live in
+// lib/newclient.min.js with pinned fallbacks
 object MegaPlayCipher {
     private const val FALLBACK_KEY_SEED = "i?LMTAx0Q6,:}50U"
     private const val FALLBACK_IV_SEED = "W0;27ToaUpl_P%'c"
@@ -35,7 +35,8 @@ object MegaPlayCipher {
             keyPairRegex.find(js)?.groupValues?.let { g ->
                 Pair(g[1], g[2]).also { cachedSeeds = it }
             }
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            Log.d("MegaPlay", "seed fetch failed: ${e.message}")
             null
         }
         return listOfNotNull(dynamic, fallback())
@@ -73,8 +74,8 @@ object MegaPlayCipher {
     }
 }
 
-// megaplay-style players expose the playlist through getSourcesNew; the
-// legacy getSources endpoint only carries an encrypted payload on a dead cdn
+// megaplay-style players expose the playlist through getSourcesNew, the
+// legacy endpoint only carries an encrypted payload on a dead cdn
 object MegaPlayHelper {
 
     private const val TAG = "RaghavAnime"
@@ -109,9 +110,7 @@ object MegaPlayHelper {
         val streamId = Regex("""data-id=["'](\d+)""").find(pageHtml)?.groupValues?.get(1)
             ?: Regex("""data-realid=["'](\d+)""").find(pageHtml)?.groupValues?.get(1)
             ?: Regex("""/stream/s-\d+/(\d+)/""").find(embedUrl)?.groupValues?.get(1)
-            ?: run {
-                return null
-            }
+            ?: return null
 
         val audioType = audioTypeFromUrl(embedUrl)
             ?: Regex("""type\s*:\s*['"](dub|sub)['"]""").find(pageHtml)?.groupValues?.get(1)
@@ -157,8 +156,7 @@ object MegaPlayHelper {
         return migrateLegacyUrl(resolved)
     }
 
-    // legacy imgnex cdn paths carry an /anime prefix the megap hosts dropped;
-    // every megap mirror serves the same paths so any of them works as a target
+    // legacy imgnex paths carry an /anime prefix the megap mirrors dropped
     private fun migrateLegacyUrl(url: String): String {
         if (!url.contains("https://cdn.imgnex.top/anime")) return url
         return url.replace("https://cdn.imgnex.top/anime", "https://megap.norami.top")
@@ -191,8 +189,7 @@ object MegaPlayHelper {
         }
     }
 
-    // the cdn's openresty layer 403s master.m3u8 without a token; the web
-    // player signs for 90s but the server only rejects tokens already expired
+    // the cdn 403s master.m3u8 without a token but only rejects expired ones
     private const val TOKEN_KEY = "MpCdnT0k3n!9f2K#xQ7vL5mR8wN1pY4s"
     private const val TOKEN_LIFETIME_SECONDS = 7L * 24L * 60L * 60L
     private val hexIdsRegex = Regex("""/([a-f0-9]{32})/([a-f0-9]{32})/""", RegexOption.IGNORE_CASE)
@@ -214,9 +211,8 @@ object MegaPlayHelper {
 
     private data class VariantEntry(val url: String, val quality: Int?)
 
-    // i-frame entries only ever appear as attributes of
-    // #EXT-X-I-FRAME-STREAM-INF so they never match the line after
-    // #EXT-X-STREAM-INF and are skipped here
+    // i-frame entries are inline attributes so they never match the line
+    // after #EXT-X-STREAM-INF
     private fun parseVariants(masterUrl: String, masterText: String): List<VariantEntry> {
         val base = masterUrl.substringBefore('?').let { it.substringBeforeLast('/') + "/" }
         val out = mutableListOf<VariantEntry>()
@@ -243,8 +239,7 @@ object MegaPlayHelper {
         return out
     }
 
-    // emits one signed link per quality variant of the master playlist, with
-    // the signed master itself as fallback when it cannot be fetched or parsed
+    // one signed link per quality variant, the signed master as fallback
     suspend fun emitLinks(
         source: String,
         label: String,

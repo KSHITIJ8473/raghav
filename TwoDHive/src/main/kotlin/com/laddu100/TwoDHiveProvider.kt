@@ -16,6 +16,7 @@ import kotlinx.coroutines.Deferred
 import android.util.Base64
 import com.lagradost.api.Log
 import javax.crypto.Cipher
+import javax.crypto.Mac
 import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
@@ -81,6 +82,11 @@ object MegaPlayCipher {
 
 class TwoDHiveProvider : MainAPI() {
     private val TAG = "TwoDHive"
+
+    // the cdn only serves master.m3u8 with a valid HMAC token, variants just
+    // need the referer
+    private val cdnTokenKey = "MpCdnT0k3n!9f2K#xQ7vL5mR8wN1pY4s"
+    private val cdnHexIdsRegex = Regex("""/([a-f0-9]{32})/([a-f0-9]{32})/""", RegexOption.IGNORE_CASE)
 
     override var mainUrl = "https://2dhive.com"
     override var name = "2Dhive"
@@ -443,17 +449,84 @@ class TwoDHiveProvider : MainAPI() {
         }
 
         val label = if (type == "dub") "MegaPlay Dub" else "MegaPlay Sub"
-        // the megap cdn rejects requests without a megaplay referer
-        callback(
-            newExtractorLink(label, label, m3u8Url, type = ExtractorLinkType.M3U8) {
-                this.headers = mapOf(
-                    "User-Agent" to userAgent,
-                    "Referer" to "https://megaplay.buzz/"
-                )
-                this.referer = "https://megaplay.buzz/"
-            }
+        val playHeaders = mapOf(
+            "User-Agent" to userAgent,
+            "Referer" to "https://megaplay.buzz/"
         )
+
+        val signedMaster = signCdnUrl(m3u8Url)
+        val masterText = try {
+            app.get(signedMaster, headers = playHeaders, timeout = 15_000L).text
+        } catch (e: Exception) {
+            Log.w(TAG, "master playlist fetch failed: ${e.message}")
+            null
+        }
+
+        val variants = masterText?.let { parseVariants(m3u8Url, it) } ?: emptyList()
+        if (variants.isNotEmpty()) {
+            for (variant in variants) {
+                val name = variant.quality?.let { "$label ${it}p" } ?: label
+                callback(
+                    newExtractorLink(name, name, signCdnUrl(variant.url), type = ExtractorLinkType.M3U8) {
+                        this.headers = playHeaders
+                        this.referer = "https://megaplay.buzz/"
+                        variant.quality?.let { this.quality = it }
+                    }
+                )
+            }
+        } else {
+            callback(
+                newExtractorLink(label, label, signedMaster, type = ExtractorLinkType.M3U8) {
+                    this.headers = playHeaders
+                    this.referer = "https://megaplay.buzz/"
+                }
+            )
+        }
         return true
+    }
+
+    private fun b64url(bytes: ByteArray): String =
+        Base64.encodeToString(bytes, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
+
+    // "<unix-expires>|<id1>/<id2>" signed with the cdn key; the server only
+    // rejects expired tokens so a long lifetime is fine
+    private fun signCdnUrl(url: String): String {
+        val match = cdnHexIdsRegex.find(url) ?: return url
+        val expires = System.currentTimeMillis() / 1000L + 7L * 24 * 60 * 60
+        val payload = "$expires|${match.groupValues[1].lowercase()}/${match.groupValues[2].lowercase()}"
+        val mac = Mac.getInstance("HmacSHA256")
+        mac.init(SecretKeySpec(cdnTokenKey.toByteArray(Charsets.UTF_8), "HmacSHA256"))
+        val signature = mac.doFinal(payload.toByteArray(Charsets.UTF_8))
+        val token = "${b64url(payload.toByteArray(Charsets.UTF_8))}.${b64url(signature)}"
+        val sep = if (url.contains('?')) "&" else "?"
+        return "$url${sep}token=$token"
+    }
+
+    private data class VariantEntry(val url: String, val quality: Int?)
+
+    // trick-play i-frame entries are inline attributes and get skipped naturally
+    private fun parseVariants(masterUrl: String, masterText: String): List<VariantEntry> {
+        val base = masterUrl.substringBefore('?').let { it.substringBeforeLast('/') + "/" }
+        val out = mutableListOf<VariantEntry>()
+        val lines = masterText.lines()
+        var i = 0
+        while (i < lines.size) {
+            if (lines[i].trim().startsWith("#EXT-X-STREAM-INF:")) {
+                val quality = Regex("""RESOLUTION=(\d+)x(\d+)""").find(lines[i])?.groupValues?.get(2)?.toIntOrNull()
+                var j = i + 1
+                while (j < lines.size && (lines[j].isBlank() || lines[j].startsWith("#"))) j++
+                if (j < lines.size) {
+                    val uri = lines[j].trim()
+                    if (uri.isNotEmpty()) {
+                        val absolute = if (uri.startsWith("http")) uri else base + uri
+                        out.add(VariantEntry(absolute, quality))
+                    }
+                    i = j
+                }
+            }
+            i++
+        }
+        return out
     }
 
     private fun migrateLegacyUrl(url: String, cdnOrigin: String?): String {
@@ -493,6 +566,122 @@ class TwoDHiveProvider : MainAPI() {
         return MegaPlayCipher.resolveEncStreamUrl(enc, "https://megaplay.buzz")
     }
 
+    // the embed redirects top level loads to an ad within a second, so wipe
+    // the page and drive the site's own api until the stream url is caught
+    private val babaSolverScript = """
+(function () {
+    if (window.__babaShell) return;
+    window.__babaShell = 1;
+
+    var tries = 0;
+    function poll() {
+        var t = "";
+        try { t = document.title || ""; } catch (e) {}
+        if (t === "video.mp4") { rebuild(); return; }
+        if (t === "Just a moment...") return;
+        if (tries++ < 300) setTimeout(poll, 10);
+    }
+
+    function rebuild() {
+        document.open();
+        document.write(
+            '<!doctype html><html><head><meta charset="utf-8"><title>baba</title>' +
+            '<script src="https://cdn.jsdelivr.net/npm/cap-widget@0.1.57"><\/script>' +
+            '</head><body><script>(' + driver.toString() + ')();<\/script></body></html>'
+        );
+        document.close();
+    }
+
+    function driver() {
+        function b64d(s) {
+            var b = atob(s), u = new Uint8Array(b.length);
+            for (var i = 0; i < b.length; i++) u[i] = b.charCodeAt(i);
+            return u;
+        }
+        function b64e(u) {
+            var s = "";
+            for (var i = 0; i < u.length; i++) s += String.fromCharCode(u[i]);
+            return btoa(s);
+        }
+        var keyPromise = null;
+        function key() {
+            if (!keyPromise) {
+                keyPromise = crypto.subtle.importKey(
+                    "raw", b64d(CFG.pk), { name: "AES-GCM" }, false, ["encrypt", "decrypt"]
+                );
+            }
+            return keyPromise;
+        }
+        async function seal(str) {
+            var iv = crypto.getRandomValues(new Uint8Array(12));
+            var ct = await crypto.subtle.encrypt(
+                { name: "AES-GCM", iv: iv }, await key(), new TextEncoder().encode(str)
+            );
+            var out = new Uint8Array(iv.length + ct.byteLength);
+            out.set(iv, 0);
+            out.set(new Uint8Array(ct), iv.length);
+            return b64e(out);
+        }
+        async function open(b64) {
+            var d = b64d(b64), iv = d.slice(0, 12), ct = d.slice(12);
+            var pt = await crypto.subtle.decrypt({ name: "AES-GCM", iv: iv }, await key(), ct);
+            return new TextDecoder().decode(pt);
+        }
+        async function call(route, payload) {
+            var body = { s: CFG.sid, d: await seal(JSON.stringify(payload)) };
+            var r = await fetch(route, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(body)
+            });
+            if (!r.ok) throw new Error("http " + r.status + " on " + route);
+            return JSON.parse(await open((await r.json()).d));
+        }
+
+        var attempts = 0;
+        async function run() {
+            var html = await (await fetch(location.href, { credentials: "same-origin" })).text();
+            var m = html.match(/var CFG = (\{[^;]+\});/);
+            if (!m) throw new Error("page config missing");
+            window.CFG = JSON.parse(m[1]);
+
+            var r = await call("/api/resolve", { ts: Date.now() });
+
+            if (r.t === "error" && r.m === "verify") {
+                if (!window.Cap) throw new Error("cap widget missing");
+                var solved = await new window.Cap({ apiEndpoint: CFG.cap }).solve();
+                var v = await call("/api/cap-verify", {
+                    ts: Date.now(), token: solved.token, mode: "invisible"
+                });
+                if (v.t !== "ok") throw new Error("cap rejected");
+                r = await call("/api/resolve", { ts: Date.now() });
+            }
+
+            if (!r.u) throw new Error(r.m || "no stream url");
+            var url = new URL(r.u, location.origin).href;
+            if (/\.(m3u8|mp4)([?#]|$)/i.test(url)) {
+                // the host app watches for media requests leaving the webview
+                fetch(url, { mode: "no-cors" }).catch(function () {});
+            } else {
+                // some titles hand back a third-party embed page instead, let
+                // that player load and ask for its own media
+                location.href = url;
+            }
+        }
+
+        (function attempt() {
+            attempts += 1;
+            if (attempts > 3) return;
+            run().catch(function () {
+                setTimeout(attempt, 5000);
+            });
+        })();
+    }
+
+    poll();
+})();
+""".trimIndent()
+
     private suspend fun resolveBabaStream(
         malId: Int, epNum: Int, type: String, epUrl: String,
         callback: (ExtractorLink) -> Unit
@@ -500,11 +689,10 @@ class TwoDHiveProvider : MainAPI() {
         val embedUrl = "https://babastream.top/embed/$malId/$epNum/$type"
         return try {
             val resolver = WebViewResolver(
-                interceptUrl = Regex("""(?i)\.(m3u8|mp4)(?:\?|$)"""),
-                additionalUrls = listOf(Regex("""(?i)\.(m3u8|mp4)(?:\?|$)""")),
-                script = """document.querySelector('button,[role="button"],.vjs-big-play-button,.jw-icon-display,.vds-play-button,[onclick]')?.click();""",
-                // the cloudflare challenge plus player handshake routinely take over a minute
-                useOkhttp = false, timeout = 90_000L
+                interceptUrl = Regex("""(?i)\.(m3u8|mp4)(?:[?#]|$)"""),
+                script = babaSolverScript,
+                // the cap pow solve alone can take half a minute on slow hardware
+                useOkhttp = false, timeout = 120_000L
             )
             val resolved = app.get(embedUrl, referer = epUrl, interceptor = resolver).url
             if (resolved.contains(".m3u8") || resolved.contains(".mp4")) {

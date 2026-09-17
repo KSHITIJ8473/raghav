@@ -74,7 +74,7 @@ class TheMoviesFlix : MainAPI() {
             titleRaw.contains("Series", true) ||
             titleRaw.contains("Web Series", true) ||
             titleRaw.contains("TV Show", true) ||
-            Regex("""\bS\d{1,2}\b""", RegexOption.IGNORE_CASE).containsMatchIn(titleRaw)
+            SEASON_REGEX.containsMatchIn(titleRaw)
 
         return if (isSeries) {
             newTvSeriesSearchResponse(title, href, TvType.TvSeries) {
@@ -131,11 +131,11 @@ class TheMoviesFlix : MainAPI() {
         val year = extractYear(entry) ?: extractYearFromTitle(titleRaw)
         val genres = extractListFromInfo(entry, "Genres")
         val cast = extractListFromInfo(entry, "Cast").map { ActorData(Actor(it)) }
-        val runtime = extractFieldFromInfo(entry, "Runtime")?.replace(Regex("[^0-9]"), "")?.toIntOrNull()
+        val runtime = extractFieldFromInfo(entry, "Runtime")?.replace(NON_DIGIT_REGEX, "")?.toIntOrNull()
 
         val imdbLink = entry.selectFirst("div.mfx-imdb a[href*=imdb]")?.attr("href") ?: ""
-        val imdbId = Regex("""title/(tt\d+)""").find(imdbLink)?.groupValues?.get(1)
-        val rating = Regex("""([\d.]+)/10""").find(
+        val imdbId = IMDB_TITLE_REGEX.find(imdbLink)?.groupValues?.get(1)
+        val rating = RATING_REGEX.find(
             entry.selectFirst("div.mfx-imdb a")?.text() ?: ""
         )?.groupValues?.get(1)?.toFloatOrNull()
 
@@ -151,7 +151,7 @@ class TheMoviesFlix : MainAPI() {
             allText.contains("Web Series", true) ||
             allText.contains("TV Show", true) ||
             allText.contains("Episode", true) ||
-            Regex("""\bS\d{1,2}\b""", RegexOption.IGNORE_CASE).containsMatchIn(allText)
+            SEASON_REGEX.containsMatchIn(allText)
 
         if (isSeries) {
             val episodes = mutableListOf<Episode>()
@@ -234,7 +234,7 @@ class TheMoviesFlix : MainAPI() {
                 val text = h4.text().trim()
                 if (!text.contains("Episode", true)) continue
 
-                val epNum = Regex("""Episode[s]?\s*:\s*0*(\d+)""", RegexOption.IGNORE_CASE)
+                val epNum = EPISODE_REGEX
                     .find(text)?.groupValues?.get(1)?.toIntOrNull() ?: continue
 
                 val links = mutableListOf<String>()
@@ -291,7 +291,7 @@ class TheMoviesFlix : MainAPI() {
             for (h4 in article.select("h4")) {
                 val text = h4.text().trim()
                 if (!text.contains("Episode", true)) continue
-                val epNum = Regex("""Episode[s]?\s*:\s*0*(\d+)""", RegexOption.IGNORE_CASE)
+                val epNum = EPISODE_REGEX
                     .find(text)?.groupValues?.get(1)?.toIntOrNull() ?: continue
                 if (epNum != episodeNum) continue
 
@@ -394,14 +394,14 @@ class TheMoviesFlix : MainAPI() {
 
     private fun extractYear(entry: Element): Int? =
         entry.selectFirst("div.mfx-info-box li:contains(Released Year)")?.text()
-            ?.let { Regex("""(\d{4})""").find(it)?.groupValues?.get(1)?.toIntOrNull() }
+            ?.let { YEAR_REGEX.find(it)?.groupValues?.get(1)?.toIntOrNull() }
 
     private fun extractYearFromTitle(title: String): Int? =
-        Regex("""(\d{4})""").find(title)?.groupValues?.get(1)?.toIntOrNull()
+        YEAR_REGEX.find(title)?.groupValues?.get(1)?.toIntOrNull()
 
     private fun extractSeasonNumber(text: String): Int? =
-        Regex("""Season\s*(\d+)""", RegexOption.IGNORE_CASE).find(text)?.groupValues?.get(1)?.toIntOrNull()
-            ?: Regex("""\bS(\d+)\b""", RegexOption.IGNORE_CASE).find(text)?.groupValues?.get(1)?.toIntOrNull()
+        SEASON_NUM_REGEX.find(text)?.groupValues?.get(1)?.toIntOrNull()
+            ?: SEASON_CODE_REGEX.find(text)?.groupValues?.get(1)?.toIntOrNull()
 
     private fun extractFieldFromInfo(entry: Element, fieldName: String): String? =
         entry.selectFirst("div.mfx-info-box li:contains($fieldName)")?.text()
@@ -410,4 +410,18 @@ class TheMoviesFlix : MainAPI() {
     private fun extractListFromInfo(entry: Element, fieldName: String): List<String> =
         extractFieldFromInfo(entry, fieldName)?.split(",")?.map { it.trim() }?.filter { it.isNotBlank() }
             ?: emptyList()
+
+    private companion object {
+        // Bolt Optimization: Pre-compile Regex patterns in companion object to avoid
+        // costly Regex re-compilation and unnecessary object allocations during HTML parsing & extraction loops.
+        val SEASON_REGEX = Regex("""\bS\d{1,2}\b""", RegexOption.IGNORE_CASE)
+        val DOWNLOAD_PREFIX_REGEX = Regex("""^Download\s+""", RegexOption.IGNORE_CASE)
+        val NON_DIGIT_REGEX = Regex("""[^0-9]""")
+        val IMDB_TITLE_REGEX = Regex("""title/(tt\d+)""")
+        val RATING_REGEX = Regex("""([\d.]+)/10""")
+        val EPISODE_REGEX = Regex("""Episode[s]?\s*:\s*0*(\d+)""", RegexOption.IGNORE_CASE)
+        val YEAR_REGEX = Regex("""(\d{4})""")
+        val SEASON_NUM_REGEX = Regex("""Season\s*(\d+)""", RegexOption.IGNORE_CASE)
+        val SEASON_CODE_REGEX = Regex("""\bS(\d+)\b""", RegexOption.IGNORE_CASE)
+    }
 }

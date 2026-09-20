@@ -5,16 +5,11 @@ import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.lagradost.api.Log
 import com.lagradost.cloudstream3.app
-import com.lagradost.cloudstream3.utils.ExtractorLink
-import com.lagradost.cloudstream3.utils.ExtractorLinkType
-import com.lagradost.cloudstream3.utils.newExtractorLink
 import javax.crypto.Cipher
 import javax.crypto.Mac
 import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
-// megaplay clones encrypt the enc field of their sources response; the key
-// material sits in lib/newclient.min.js, with pinned fallbacks
 object MegaPlayCipher {
     private const val TAG = "MegaPlay"
     private const val FALLBACK_KEY_SEED = "i?LMTAx0Q6,:}50U"
@@ -97,8 +92,6 @@ object MegaPlayBackup {
             return null
         }
 
-        // data-id is megaplay's own file with the full episode and the wider
-        // subtitle set, data-realid is their cut of the same episode
         val streamId = Regex("""data-id=["'](\d+)""").find(pageHtml)?.groupValues?.get(1)
             ?: Regex("""data-realid=["'](\d+)""").find(pageHtml)?.groupValues?.get(1)
             ?: Regex("""/stream/s-\d+/(\d+)/""").find(embedUrl)?.groupValues?.get(1)
@@ -169,8 +162,6 @@ object MegaPlayBackup {
         }
     }
 
-    // the cdn's openresty layer 403s master.m3u8 without a token; the web
-    // player signs for 90s but the server only rejects tokens already expired
     private const val TOKEN_KEY = "MpCdnT0k3n!9f2K#xQ7vL5mR8wN1pY4s"
     private const val TOKEN_LIFETIME_SECONDS = 7L * 24L * 60L * 60L
     private val hexIdsRegex = Regex("""/([a-f0-9]{32})/([a-f0-9]{32})/""", RegexOption.IGNORE_CASE)
@@ -188,83 +179,5 @@ object MegaPlayBackup {
         val token = "${b64url(payload.toByteArray(Charsets.UTF_8))}.${b64url(signature)}"
         val sep = if (url.contains('?')) "&" else "?"
         return "$url${sep}token=$token"
-    }
-
-    private data class VariantEntry(val url: String, val quality: Int?)
-
-    // i-frame entries only ever appear as attributes of
-    // #EXT-X-I-FRAME-STREAM-INF so they never match the line after
-    // #EXT-X-STREAM-INF and are skipped here
-    private fun parseVariants(masterUrl: String, masterText: String): List<VariantEntry> {
-        val base = masterUrl.substringBefore('?').let { it.substringBeforeLast('/') + "/" }
-        val out = mutableListOf<VariantEntry>()
-        val lines = masterText.lines()
-        var i = 0
-        while (i < lines.size) {
-            val line = lines[i].trim()
-            if (line.startsWith("#EXT-X-STREAM-INF:")) {
-                val res = Regex("""RESOLUTION=(\d+)x(\d+)""").find(line)
-                val quality = res?.groupValues?.get(2)?.toIntOrNull()
-                var j = i + 1
-                while (j < lines.size && (lines[j].isBlank() || lines[j].startsWith("#"))) j++
-                if (j < lines.size) {
-                    val uri = lines[j].trim()
-                    if (uri.isNotEmpty()) {
-                        val absolute = if (uri.startsWith("http")) uri else base + uri
-                        out.add(VariantEntry(absolute, quality))
-                    }
-                    i = j
-                }
-            }
-            i++
-        }
-        return out
-    }
-
-    // emits one signed link per quality variant of the master playlist, with
-    // the signed master itself as fallback when it cannot be fetched or parsed
-    suspend fun emitLinks(
-        source: String,
-        label: String,
-        m3u8: String,
-        referer: String,
-        callback: (ExtractorLink) -> Unit
-    ): Boolean {
-        val playHeaders = mapOf(
-            "User-Agent" to AniPMApi.USER_AGENT,
-            "Referer" to referer
-        )
-
-        val signedMaster = signUrl(m3u8)
-        val masterText = try {
-            app.get(signedMaster, headers = playHeaders, timeout = 15_000L).text
-        } catch (e: Exception) {
-            Log.d(TAG, "master playlist fetch failed: ${e.message}")
-            null
-        }
-
-        var found = false
-        val variants = masterText?.let { parseVariants(m3u8, it) } ?: emptyList()
-        if (variants.isNotEmpty()) {
-            for (v in variants) {
-                callback.invoke(
-                    newExtractorLink(source, label, signUrl(v.url), type = ExtractorLinkType.M3U8) {
-                        this.referer = referer
-                        v.quality?.let { quality = it }
-                        this.headers = playHeaders
-                    }
-                )
-                found = true
-            }
-        } else {
-            callback.invoke(
-                newExtractorLink(source, label, signedMaster, type = ExtractorLinkType.M3U8) {
-                    this.referer = referer
-                    this.headers = playHeaders
-                }
-            )
-            found = true
-        }
-        return found
     }
 }

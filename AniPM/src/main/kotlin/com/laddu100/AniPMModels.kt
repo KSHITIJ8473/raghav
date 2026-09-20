@@ -29,8 +29,6 @@ data class AniPMLatestItem(
     @JsonProperty("dub") val dub: Boolean? = null
 )
 
-// the api sends malId as a number and anilistId as a string, jackson coerces
-// both into String so the two shapes stay interchangeable
 @JsonIgnoreProperties(ignoreUnknown = true)
 data class AniPMTitle(
     @JsonProperty("id") val id: Int? = null,

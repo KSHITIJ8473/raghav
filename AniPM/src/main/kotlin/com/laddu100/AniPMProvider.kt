@@ -14,7 +14,6 @@ import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.TvType
 import com.lagradost.cloudstream3.addDubStatus
 import com.lagradost.cloudstream3.addEpisodes
-import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.mainPageOf
 import com.lagradost.cloudstream3.newAnimeLoadResponse
 import com.lagradost.cloudstream3.newAnimeSearchResponse
@@ -44,7 +43,6 @@ class AniPMProvider : MainAPI() {
         const val SETTLAR_REFERER = "https://embed.settlar.io/"
         const val MEGAPLAY_REFERER = "https://megaplay.buzz/"
 
-        // titles the site had no real name for, the episode number is enough
         val genericEpisodeTitle = Regex("""^Episode \d+(\.\d+)?$""")
     }
 
@@ -106,7 +104,6 @@ class AniPMProvider : MainAPI() {
         return AniPMApi.search(query).mapNotNull { titleResponse(it) }
     }
 
-    // filler entries are [n] or [first, last] pairs of episode numbers
     private fun expandRanges(ranges: List<List<Int>>?): Set<Int> {
         if (ranges.isNullOrEmpty()) return emptySet()
         val out = mutableSetOf<Int>()
@@ -152,8 +149,6 @@ class AniPMProvider : MainAPI() {
         val dubEpisodes = episodeList(dub = true)
 
         val format = series.type?.lowercase()
-        // the app hides the sub/dub switcher on movie types, so dual audio
-        // movies are typed as regular anime to keep both reachable
         val tvType = when {
             format == "movie" && dubEpisodes.isNotEmpty() -> TvType.Anime
             format == "movie" -> TvType.AnimeMovie
@@ -192,7 +187,6 @@ class AniPMProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        // data: "<mainUrl>|<seriesId>|<episode>|<sub|dub>"
         val parts = data.split("|")
         if (parts.size < 4) return false
         val seriesId = parts[parts.size - 3].toIntOrNull() ?: return false
@@ -234,8 +228,6 @@ class AniPMProvider : MainAPI() {
     ) {
         if (!url.startsWith("http")) return
         if (!seenUrls.add(url)) return
-        // settlar and its megaplay mirror carry the same track list under
-        // different urls, the label keeps one entry per language in the picker
         if (!seenLabels.add(label.trim().lowercase())) return
         try {
             subtitleCallback.invoke(newSubtitleFile(label, url) {
@@ -280,21 +272,10 @@ class AniPMProvider : MainAPI() {
             )
         }
 
-        // read the master once so the link carries its real resolution,
-        // an unreachable master still gets emitted and lets the player decide
-        val quality = try {
-            val text = app.get(master, headers = playHeaders, timeout = 15_000L).text
-            Regex("""RESOLUTION=\d+x(\d+)""").find(text)?.groupValues?.get(1)?.toIntOrNull()
-        } catch (e: Exception) {
-            Log.d(TAG, "settlar master fetch failed: ${e.message}")
-            null
-        }
-
         if (seenLinks.add(master)) {
             callback.invoke(
                 newExtractorLink(name, "AniPM", master, type = ExtractorLinkType.M3U8) {
                     referer = SETTLAR_REFERER
-                    quality?.let { this.quality = it }
                     headers = playHeaders
                 }
             )
@@ -323,15 +304,21 @@ class AniPMProvider : MainAPI() {
             return false
         }
 
-        val subHeaders = mapOf(
+        val playHeaders = mapOf(
             "User-Agent" to AniPMApi.USER_AGENT,
             "Referer" to MEGAPLAY_REFERER
         )
         for ((label, url) in stream.subtitles) {
-            emitSubtitle(label, url, subHeaders, seenSubUrls, seenSubLabels, subtitleCallback)
+            emitSubtitle(label, url, playHeaders, seenSubUrls, seenSubLabels, subtitleCallback)
         }
 
         if (!seenLinks.add(stream.m3u8)) return true
-        return MegaPlayBackup.emitLinks(name, "MegaPlay", stream.m3u8, MEGAPLAY_REFERER, callback)
+        callback.invoke(
+            newExtractorLink(name, "MegaPlay", MegaPlayBackup.signUrl(stream.m3u8), type = ExtractorLinkType.M3U8) {
+                referer = MEGAPLAY_REFERER
+                headers = playHeaders
+            }
+        )
+        return true
     }
 }

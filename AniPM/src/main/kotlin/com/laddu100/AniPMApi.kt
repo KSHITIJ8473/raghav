@@ -13,8 +13,6 @@ object AniPMApi {
     const val USER_AGENT =
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 
-    // every ani.pm and settlar edge 403s requests without a full browser ua,
-    // the referer is only there to look like the web app
     private fun headers(referer: String = "$MAIN_URL/"): Map<String, String> = mapOf(
         "User-Agent" to USER_AGENT,
         "Accept" to "application/json",
@@ -34,7 +32,6 @@ object AniPMApi {
         }
     }
 
-    // covers, banners and episode stills come back as /api/... paths
     fun absolute(url: String?): String? {
         if (url.isNullOrBlank()) return null
         return if (url.startsWith("http")) url else "$MAIN_URL$url"
@@ -98,8 +95,6 @@ object AniPMApi {
         }
     }
 
-    // lang falls back on the server side when the episode has no dub, the
-    // effectiveLanguage field in the response tells what actually came back
     suspend fun bootstrap(id: Int, episode: Int, lang: String, backup: Boolean = false): AniPMBootstrap? {
         val url = "$MAIN_URL/api/anime/playback-bootstrap/settlar/$id" +
             "?ep=$episode&lang=$lang" +

@@ -29,8 +29,6 @@ class RaghavAniPM : MainAPI() {
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
     }
 
-    // ani.pm keeps both an anilist-keyed and a site-keyed playback route, the
-    // anilist one avoids title matching entirely
     private class AniPMEntry(val anilistId: Int? = null, val seriesId: Int? = null)
 
     private fun headers(referer: String = "$mainUrl/"): Map<String, String> = mapOf(
@@ -105,8 +103,6 @@ class RaghavAniPM : MainAPI() {
             .trim()
     }
 
-    // kitsu catalogs occasionally carry no anilist mapping, a cleaned title
-    // match on the ani.pm search still finds those
     private suspend fun findSeriesByTitle(title: String?, jpTitle: String?): Int? {
         val queries = listOfNotNull(title, jpTitle).filter { it.isNotBlank() }
         if (queries.isEmpty()) return null
@@ -156,7 +152,6 @@ class RaghavAniPM : MainAPI() {
         val resolved = entry ?: return false
         val resolvedRoot = root ?: return false
 
-        // the server quietly serves sub when an episode has no dub
         if (resolvedRoot.path("effectiveLanguage").asText("") != channel) return false
 
         val found = AtomicBoolean(false)
@@ -199,8 +194,6 @@ class RaghavAniPM : MainAPI() {
     ) {
         if (!url.startsWith("http")) return
         if (!seenUrls.add(url)) return
-        // settlar and its megaplay mirror carry the same tracks under
-        // different urls, one entry per language is enough in the picker
         if (!seenLabels.add(label.trim().lowercase())) return
         try {
             subtitleCallback.invoke(newSubtitleFile(label, url) {
@@ -241,21 +234,10 @@ class RaghavAniPM : MainAPI() {
             )
         }
 
-        // read the master once so the link carries its real resolution, an
-        // unreachable master still gets emitted and lets the player decide
-        val quality = try {
-            val text = app.get(master, headers = playHeaders, timeout = 15_000L).text
-            Regex("""RESOLUTION=\d+x(\d+)""").find(text)?.groupValues?.get(1)?.toIntOrNull()
-        } catch (e: Exception) {
-            Log.e("RaghavAnime", "[AniPM] settlar master fetch failed: ${e.message}")
-            null
-        }
-
         if (!seenLinks.add(master)) return true
         callback.invoke(
             newExtractorLink(name, "AniPM", master, type = ExtractorLinkType.M3U8) {
                 referer = SETTLAR_REFERER
-                quality?.let { this.quality = it }
                 headers = playHeaders
             }
         )
@@ -280,19 +262,22 @@ class RaghavAniPM : MainAPI() {
 
         val stream = MegaPlayHelper.resolveStream(embedUrl, "$mainUrl/", "AniPM") ?: return false
 
-        val subHeaders = mapOf(
+        val playHeaders = mapOf(
             "User-Agent" to USER_AGENT,
             "Referer" to MEGAPLAY_REFERER
         )
         for ((label, url) in stream.subtitles) {
-            emitSubtitle(label, url, subHeaders, seenSubUrls, seenSubLabels, subtitleCallback)
+            emitSubtitle(label, url, playHeaders, seenSubUrls, seenSubLabels, subtitleCallback)
         }
 
         if (!seenLinks.add(stream.m3u8)) return true
-        return MegaPlayHelper.emitLinks(
-            name, "AniPM MegaPlay", stream.m3u8, MEGAPLAY_REFERER,
-            emptyList(), subtitleCallback, callback, withQualitySuffix = false
+        callback.invoke(
+            newExtractorLink(name, "MegaPlay", MegaPlayHelper.signUrl(stream.m3u8), type = ExtractorLinkType.M3U8) {
+                referer = MEGAPLAY_REFERER
+                headers = playHeaders
+            }
         )
+        return true
     }
 
     private fun encode(value: String): String =

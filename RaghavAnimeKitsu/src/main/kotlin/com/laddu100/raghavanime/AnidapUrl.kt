@@ -92,8 +92,6 @@ internal object AnidapUrl {
         return r
     }
 
-    fun transformSubtitle(url: String, providerId: String): String = url
-
     private val probeClient: OkHttpClient by lazy {
         app.baseClient.newBuilder()
             .connectTimeout(8, TimeUnit.SECONDS)

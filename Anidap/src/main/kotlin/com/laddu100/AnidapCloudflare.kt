@@ -9,11 +9,9 @@ import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
-import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
-import android.view.Window
 import android.webkit.CookieManager
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
@@ -25,7 +23,6 @@ import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
-import androidx.fragment.app.FragmentActivity
 import com.google.android.material.bottomsheet.BottomSheetBehavior
 import com.google.android.material.bottomsheet.BottomSheetDialog
 import com.google.android.material.bottomsheet.BottomSheetDialogFragment
@@ -48,7 +45,6 @@ private const val CHAD_HOST = "https://chad.anidap.lol"
 // Lightweight API endpoint the WebView loads to trigger cookie issuance
 private const val CF_TRIGGER_URL = "$CHAD_HOST/rest/api/servers?id=one-piece-p8k27&epNum=1"
 
-// Phrases that indicate the anti-bot blocked the request
 private val BLOCK_PHRASES = listOf(
     "bot_detected", "missing_ua", "access denied", "forbidden",
     "rate_limit", "blocked", "just a moment", "checking your browser",
@@ -61,8 +57,8 @@ private object AnidapCFStore {
     private const val KEY_UA = "cf_user_agent"
     private const val KEY_HOST = "cf_cookie_host"
     private const val KEY_TIMESTAMP = "cf_timestamp"
-    // _amx_id expires in 24h (set by server), but we refresh sooner to be safe
-    private const val COOKIE_TTL_MS = 45 * 60 * 1000L // 45 minutes
+    // _amx_id expires in 24h server side, refresh sooner to be safe
+    private const val COOKIE_TTL_MS = 45 * 60 * 1000L
 
     private var prefs: android.content.SharedPreferences? = null
     private var cachedCookies: String? = null
@@ -161,7 +157,7 @@ class AnidapCFDialog(
 
             when {
                 cookieStr.contains("_amx_id") -> {
-                    // Cookie issued — wait a moment for the WebView response to settle
+                    // let the WebView response settle before grabbing the cookie
                     if (pollElapsedMs >= 3000) saveCookiesAndDismiss(cookieStr)
                     else scheduleNextPoll()
                 }
@@ -175,7 +171,7 @@ class AnidapCFDialog(
 
     private fun scheduleNextPoll() {
         pollElapsedMs += POLL_INTERVAL_MS
-        updateStatus("Loading anidap.lol in browser… (${pollElapsedMs / 1000}s)")
+        updateStatus("Loading anidap.lol in browser... (${pollElapsedMs / 1000}s)")
         handler.postDelayed(cookiePollRunnable, POLL_INTERVAL_MS)
     }
 
@@ -212,24 +208,21 @@ class AnidapCFDialog(
             layoutParams = ViewGroup.LayoutParams(-1, -2)
         }
 
-        // Title
         root.addView(TextView(requireContext()).apply {
-            text = "Anidap – Anti-Bot Bypass"
+            text = "Anidap - Anti-Bot Bypass"
             textSize = 18f
             setTextColor(Color.WHITE)
             typeface = android.graphics.Typeface.DEFAULT_BOLD
             setPadding(0, 0, 0, (8 * dp).toInt())
         })
 
-        // Status text
         TextView(requireContext()).apply {
-            text = "Loading anidap.lol in browser…"
+            text = "Loading anidap.lol in browser..."
             textSize = 13f
             setTextColor(Color.parseColor("#A0A0B0"))
             setPadding(0, 0, 0, (4 * dp).toInt())
         }.also { statusText = it; root.addView(it) }
 
-        // Hint
         root.addView(TextView(requireContext()).apply {
             text = "This solves the 'bot_detected' 403 error. The dialog closes automatically once the cookie is captured."
             textSize = 11f
@@ -237,13 +230,11 @@ class AnidapCFDialog(
             setPadding(0, 0, 0, (12 * dp).toInt())
         })
 
-        // Progress bar
         ProgressBar(requireContext(), null, android.R.attr.progressBarStyleHorizontal).apply {
             isIndeterminate = true
             layoutParams = LinearLayout.LayoutParams(-1, -2).also { it.bottomMargin = (12 * dp).toInt() }
         }.also { progressBar = it; root.addView(it) }
 
-        // WebView container
         FrameLayout(requireContext()).apply {
             layoutParams = LinearLayout.LayoutParams(-1, webViewHeight)
             webView = buildWebView()
@@ -256,11 +247,9 @@ class AnidapCFDialog(
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
-        // Clear stale _amx_id cookies before loading
         CookieManager.getInstance().apply {
             setAcceptCookie(true)
             setAcceptThirdPartyCookies(webView, true)
-            // Clear stale anti-bot cookies
             listOf("_amx_id", "cf_clearance", "__ddg1_", "__ddg2_").forEach { name ->
                 setCookie(targetHost, "$name=; Max-Age=0; expires=Thu, 01 Jan 1970 00:00:00 GMT")
             }
@@ -287,7 +276,7 @@ class AnidapCFDialog(
             }
             webChromeClient = object : WebChromeClient() {
                 override fun onProgressChanged(view: WebView?, newProgress: Int) {
-                    if (!cookiesSaved) updateStatus("Loading… $newProgress%")
+                    if (!cookiesSaved) updateStatus("Loading... $newProgress%")
                 }
             }
             webViewClient = object : WebViewClient() {
@@ -297,10 +286,9 @@ class AnidapCFDialog(
                     if (cookiesSaved) return
                     val title = view?.title ?: ""
 
-                    updateStatus("Page loaded – checking cookies…")
+                    updateStatus("Page loaded - checking cookies...")
                     CookieManager.getInstance().flush()
 
-                    // Check cookies from the target host
                     val cookiesFromTarget = CookieManager.getInstance().getCookie(targetHost) ?: ""
                     val cookiesFromUrl = url?.let {
                         try {
@@ -317,7 +305,6 @@ class AnidapCFDialog(
 
                     if (bestCookies != null) {
                         handler.removeCallbacks(cookiePollRunnable)
-                        // Wait a moment to ensure the cookie is fully committed
                         handler.postDelayed({
                             if (!cookiesSaved) saveCookiesAndDismiss(bestCookies)
                         }, 1500)
@@ -406,10 +393,8 @@ suspend fun cfAppGet(
         "${uri.scheme}://${uri.host}"
     } catch (e: Exception) { url }
 
-    // Build headers with stored _amx_id cookies + WebView UA + browser fingerprint
     fun buildCfHeaders(): Map<String, String> {
         val h = headers.toMutableMap()
-        // Browser fingerprint headers
         if (!h.containsKey("Accept")) {
             h["Accept"] = "application/json, text/plain, */*"
         }
@@ -426,15 +411,13 @@ suspend fun cfAppGet(
         }
         h["sec-ch-ua-mobile"] = "?1"
         h["sec-ch-ua-platform"] = "\"Android\""
-        // Stored _amx_id cookies + the WebView UA the cookie was issued for
+        // the cookie is bound to the WebView UA it was issued for
         AnidapCFStore.getCookies()?.let { cookies ->
             h["Cookie"] = cookies
-            Log.d(TAG, "Using stored _amx_id cookies for $targetHost")
         }
         AnidapCFStore.getUserAgent()?.let { ua ->
             h["User-Agent"] = ua
         } ?: run {
-            // Default browser-like UA if no stored UA
             if (!h.containsKey("User-Agent")) {
                 h["User-Agent"] = "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
             }
@@ -442,17 +425,10 @@ suspend fun cfAppGet(
         return h
     }
 
-    // First attempt (with stored cookies if available)
-    var response = try {
-        app.get(url, headers = buildCfHeaders(), timeout = timeout)
-    } catch (e: Exception) {
-        Log.e(TAG, "Request failed: ${e.message}")
-        throw e
-    }
+    var response = app.get(url, headers = buildCfHeaders(), timeout = timeout)
 
     if (!isAnidapBlocked(response)) return response
 
-    // Blocked — need to bypass
     Log.e(TAG, "anti-bot blocked (HTTP ${response.code}), triggering bypass")
 
     // Use mutex so only ONE bypass dialog shows at a time
@@ -460,11 +436,10 @@ suspend fun cfAppGet(
         // Double-check: another coroutine may have already bypassed while we waited
         val cachedCookies = AnidapCFStore.getCookies()
         if (cachedCookies != null) {
-            response = try { app.get(url, headers = buildCfHeaders(), timeout = timeout) } catch (e: Exception) { throw e }
+            response = app.get(url, headers = buildCfHeaders(), timeout = timeout)
             if (!isAnidapBlocked(response)) return response
         }
 
-        // Clear stale cookies and show bypass dialog
         AnidapCFStore.clear()
         val bypassSuccess = showCFBypassDialogAndWait()
 
@@ -473,11 +448,9 @@ suspend fun cfAppGet(
             return@withLock // response is still the blocked one
         }
 
-        // Retry with new cookies (up to 2 attempts)
         for (attempt in 1..2) {
-            response = try { app.get(url, headers = buildCfHeaders(), timeout = timeout) } catch (e: Exception) { throw e }
+            response = app.get(url, headers = buildCfHeaders(), timeout = timeout)
             if (!isAnidapBlocked(response)) {
-                Log.d(TAG, "Request succeeded after Anidap CF bypass (attempt $attempt)")
                 return@withLock
             }
             Log.e(TAG, "Still blocked after retry $attempt")
@@ -489,5 +462,4 @@ suspend fun cfAppGet(
 
 fun initAnidapCFBypass(context: Context) {
     AnidapCFStore.init(context)
-    Log.d(TAG, "Anidap CF bypass initialized")
 }

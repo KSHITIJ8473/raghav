@@ -38,9 +38,8 @@ object FirebaseDomainHelper {
             }.toMap()
             lastLoadTime = now
             everLoadedSuccessfully = true
-            Log.d(TAG, "load: success, ${domains.size} domains cached")
         } catch (e: Exception) {
-            Log.d(TAG, "load: failed - ${e.message}")
+            Log.e(TAG, "load: failed - ${e.message}")
             lastLoadTime = now
         }
     }

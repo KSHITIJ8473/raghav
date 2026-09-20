@@ -1,4 +1,4 @@
-package com.laddu100.raghavanime
+package com.laddu100
 
 import com.lagradost.cloudstream3.app
 import okhttp3.OkHttpClient

@@ -172,7 +172,7 @@ class AnidapCFDialog(
 
     private fun scheduleNextPoll() {
         pollElapsedMs += POLL_INTERVAL_MS
-        updateStatus("Loading anidap.se in browser... (${pollElapsedMs / 1000}s)")
+        updateStatus("Loading anidap.lol in browser... (${pollElapsedMs / 1000}s)")
         handler.postDelayed(cookiePollRunnable, POLL_INTERVAL_MS)
     }
 
@@ -218,7 +218,7 @@ class AnidapCFDialog(
         })
 
         TextView(requireContext()).apply {
-            text = "Loading anidap.se in browser..."
+            text = "Loading anidap.lol in browser..."
             textSize = 13f
             setTextColor(Color.parseColor("#A0A0B0"))
             setPadding(0, 0, 0, (4 * dp).toInt())

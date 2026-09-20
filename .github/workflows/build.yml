@@ -45,7 +45,7 @@ jobs:
             git reset --hard origin/builds
           else
             git checkout --orphan builds
-            git rm -rf . || true
+            git rm -rf --ignore-unmatch .
           fi
           rm -f *.cs3 plugins.json
 

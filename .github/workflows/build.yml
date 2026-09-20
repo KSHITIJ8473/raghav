@@ -27,12 +27,27 @@ jobs:
 
       - name: Checkout Builds Branch
         uses: actions/checkout@v4
+        continue-on-error: true
         with:
           ref: "builds"
           path: "builds"
 
-      - name: Clean old builds
-        run: rm $GITHUB_WORKSPACE/builds/*.cs3 || true
+      - name: Setup Builds Directory
+        run: |
+          mkdir -p $GITHUB_WORKSPACE/builds
+          cd $GITHUB_WORKSPACE/builds
+          if [ ! -d ".git" ]; then
+            git init
+            git remote add origin "https://github.com/${{ github.repository }}.git"
+          fi
+          git fetch origin builds || true
+          if git checkout -B builds origin/builds 2>/dev/null; then
+            git reset --hard origin/builds
+          else
+            git checkout --orphan builds
+            git rm -rf --ignore-unmatch .
+          fi
+          rm -f *.cs3 plugins.json
 
       - name: Setup JDK 17
         uses: actions/setup-java@v4
@@ -58,8 +73,8 @@ jobs:
           git config --local user.name "GitHub Actions"
           git add .
           if [[ -n $(git status -s) ]]; then
-            git commit --amend -m "Build $GITHUB_SHA" || git commit -m "Build $GITHUB_SHA"
-            git push --force
+            git commit -m "Build $GITHUB_SHA"
+            git push origin builds --force
           else
             echo "No changes to push"
           fi

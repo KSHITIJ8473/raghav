@@ -21,7 +21,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Response
 
 class LIVETVLiveEventsProvider(
-    private val customName: String = "⚡LIVE TV Live Events",
+    private val customName: String = "LIVE TV Live Events",
     private val customCatLink: String? = null
 ) : MainAPI() {
 
@@ -57,9 +57,9 @@ class LIVETVLiveEventsProvider(
             val start = info.startTime?.let { fmt.parse(it)?.time }
             val end = info.endTime?.let { fmt.parse(it)?.time }
             when {
-                end != null && now >= end -> "✅"
-                start != null && now >= start -> "🔴"
-                start != null && now < start -> "🔜"
+                end != null && now >= end -> "[Ended]"
+                start != null && now >= start -> "[LIVE]"
+                start != null && now < start -> "[Upcoming]"
                 else -> ""
             }
         } catch (_: Exception) {
@@ -149,16 +149,6 @@ class LIVETVLiveEventsProvider(
 
         val pages = grouped
             .map { (category, catEvents) ->
-                val icon = when (category.lowercase()) {
-                    "cricket" -> "🏏"
-                    "football" -> "⚽"
-                    "basketball" -> "🏀"
-                    "ice hockey" -> "🏒"
-                    "boxing" -> "🥊"
-                    "motorsport" -> "🏎️"
-                    "tennis" -> "🎾"
-                    else -> "📺"
-                }
                 val items = catEvents
                     .sortedByDescending { isEventLive(it) }
                     .map { event ->
@@ -178,7 +168,7 @@ class LIVETVLiveEventsProvider(
                             this.posterUrl = poster
                         }
                     }
-                HomePageList("$icon $category", items, isHorizontalImages = true)
+                HomePageList(category, items, isHorizontalImages = true)
             }
             .sortedBy { list ->
                 when {
@@ -232,19 +222,19 @@ class LIVETVLiveEventsProvider(
         val info = data.eventInfo
         val plot = buildString {
             info?.let { i ->
-                i.eventType?.let { append("📌 $it\n") }
-                i.eventName?.let { append("🏆 $it\n") }
+                i.eventType?.let { append("$it\n") }
+                i.eventName?.let { append("$it\n") }
                 i.startTime?.let {
                     try {
                         val df = SimpleDateFormat("yyyy/MM/dd HH:mm:ss Z", Locale.US)
                         val disp = SimpleDateFormat("MMM dd, yyyy HH:mm", Locale.US)
-                        df.parse(it)?.let { d -> append("🕐 ${disp.format(d)}\n") }
+                        df.parse(it)?.let { d -> append("${disp.format(d)}\n") }
                     } catch (_: Exception) {
-                        append("🕐 $it\n")
+                        append("$it\n")
                     }
                 }
             }
-            append("\n📡 Available Servers: ${data.formats.size}")
+            append("\nAvailable Servers: ${data.formats.size}")
         }
         return newLiveStreamLoadResponse(data.title, url, url) {
             this.posterUrl = data.poster

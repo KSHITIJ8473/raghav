@@ -54,14 +54,14 @@ internal fun getSetting(key: String, default: Boolean): Boolean =
     try { CloudStreamApp.getKey(key) ?: default } catch (_: Throwable) { default }
 
 internal fun setSetting(key: String, value: Boolean) {
-    try { CloudStreamApp.setKey(key, value) } catch (e: Throwable) { e.message?.let { Log.d("Plugin", it) } }
+    try { CloudStreamApp.setKey(key, value) } catch (e: Throwable) { e.message?.let { Log.e("TorrentsV1", it) } }
 }
 
 internal fun getStringSetting(key: String): String =
     try { CloudStreamApp.getKey<String>(key) ?: "" } catch (_: Throwable) { "" }
 
 internal fun setStringSetting(key: String, value: String) {
-    try { CloudStreamApp.setKey(key, value) } catch (e: Throwable) { e.message?.let { Log.d("Plugin", it) } }
+    try { CloudStreamApp.setKey(key, value) } catch (e: Throwable) { e.message?.let { Log.e("TorrentsV1", it) } }
 }
 
 internal fun getStremioAddons(): List<StremioAddon> {
@@ -75,7 +75,7 @@ internal fun getStremioAddons(): List<StremioAddon> {
 
 internal fun saveStremioAddons(addons: List<StremioAddon>) {
     val raw = if (addons.isEmpty()) "" else addons.joinToString("\n") { "${it.name}|${it.url}|${it.type}" }
-    try { CloudStreamApp.setKey(KEY_STREMIO_ADDONS, raw) } catch (e: Throwable) { e.message?.let { Log.d("Plugin", it) } }
+    try { CloudStreamApp.setKey(KEY_STREMIO_ADDONS, raw) } catch (e: Throwable) { e.message?.let { Log.e("TorrentsV1", it) } }
 }
 
 data class StremioAddon(val name: String, val url: String, val type: String)
@@ -417,7 +417,7 @@ class TorrentsV1 : MainAPI() {
                             anilistQuery(ANILIST_SEARCH, mapOf("search" to query, "page" to 1, "perPage" to 15))
                         )
                         response.data?.Page?.media?.mapNotNull { it.toSearchResponse() }?.let { results.addAll(it) }
-                    } catch (e: Throwable) { e.message?.let { Log.d("Plugin", it) } }
+                    } catch (e: Throwable) { e.message?.let { Log.e("TorrentsV1", it) } }
                 }
             },
             {
@@ -430,7 +430,7 @@ class TorrentsV1 : MainAPI() {
                                 item.toSearchResponse(type)?.let { results.add(it) }
                             }
                         }
-                    } catch (e: Throwable) { e.message?.let { Log.d("Plugin", it) } }
+                    } catch (e: Throwable) { e.message?.let { Log.e("TorrentsV1", it) } }
                 }
             }
         )
@@ -644,10 +644,10 @@ class TorrentsV1 : MainAPI() {
         val hasDebrid = debridProvider.isNotBlank() && debridKey.isNotBlank() && debridProvider != "None"
 
         runAllAsync(
-            { if (torrentioOn) try { invokeTorrentio(stremioId, linkData, isMovie, hasDebrid, debridProvider, debridKey, callback) } catch (e: Throwable) { e.message?.let { Log.d("Plugin", it) } } },
-            { if (torrentsDbOn) try { invokeTorrentsDB(stremioId, linkData, isMovie, callback) } catch (e: Throwable) { e.message?.let { Log.d("Plugin", it) } } },
-            { if (animetoshoOn && linkData.source == "anilist") try { invokeAnimetosho(linkData, callback) } catch (e: Throwable) { e.message?.let { Log.d("Plugin", it) } } },
-            { try { invokeCustomStremioAddons(addons, stremioId, linkData, isMovie, subtitleCallback, callback) } catch (e: Throwable) { e.message?.let { Log.d("Plugin", it) } } }
+            { if (torrentioOn) try { invokeTorrentio(stremioId, linkData, isMovie, hasDebrid, debridProvider, debridKey, callback) } catch (e: Throwable) { e.message?.let { Log.e("TorrentsV1", it) } } },
+            { if (torrentsDbOn) try { invokeTorrentsDB(stremioId, linkData, isMovie, callback) } catch (e: Throwable) { e.message?.let { Log.e("TorrentsV1", it) } } },
+            { if (animetoshoOn && linkData.source == "anilist") try { invokeAnimetosho(linkData, callback) } catch (e: Throwable) { e.message?.let { Log.e("TorrentsV1", it) } } },
+            { try { invokeCustomStremioAddons(addons, stremioId, linkData, isMovie, subtitleCallback, callback) } catch (e: Throwable) { e.message?.let { Log.e("TorrentsV1", it) } } }
         )
         return true
     }
@@ -722,7 +722,7 @@ class TorrentsV1 : MainAPI() {
                 if (addon.type.contains("SUBTITLE", ignoreCase = true)) {
                     fetchStremioSubtitles("$base/subtitles/$resourcePath.json", subtitleCallback)
                 }
-            } catch (e: Throwable) { e.message?.let { Log.d("Plugin", it) } }
+            } catch (e: Throwable) { e.message?.let { Log.e("TorrentsV1", it) } }
         }
     }
 
@@ -803,7 +803,7 @@ class TorrentsV1 : MainAPI() {
                                 streamUrl = location
                             }
                         }
-                    } catch (e: Throwable) { e.message?.let { Log.d("Plugin", it) } }
+                    } catch (e: Throwable) { e.message?.let { Log.e("TorrentsV1", it) } }
                 }
                 val bh = stream.behaviorHints
                 val headers = mutableMapOf<String, String>()

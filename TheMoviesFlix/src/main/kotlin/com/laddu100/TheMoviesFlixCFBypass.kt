@@ -203,7 +203,6 @@ private class TMFCFDialog(
         handler.removeCallbacksAndMessages(null)
         val ua = webView?.settings?.userAgentString ?: ""
         TMFCFStore.save(cookieStr, ua, targetHost)
-        Log.d(TAG, "Cookies saved (len=${cookieStr.length}) host=$targetHost")
         try { webView?.destroy() } catch (e: Exception) { Log.e(TAG, "destroy: ${e.message}") }
         try { (webView?.getTag() as? Dialog)?.dismiss() } catch (e: Exception) {}
         try { onFinished?.invoke(true) } catch (e: Exception) { Log.e(TAG, "onFinished: ${e.message}") }
@@ -589,7 +588,7 @@ suspend fun tmfGet(
 
     if (!isCloudflareBlocked(response)) return response
 
-    Log.d(TAG, "Cloudflare blocked (HTTP ${response.code}) for $url - triggering bypass")
+    Log.e(TAG, "Cloudflare blocked (HTTP ${response.code}) - triggering bypass")
 
     cfBypassMutex.withLock {
         val cachedCookies = TMFCFStore.getCookies()

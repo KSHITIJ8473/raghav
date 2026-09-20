@@ -396,9 +396,9 @@ class SettingsFragment(
                 val params = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
                 params.bottomMargin = 6.dp(); layoutParams = params
             }
-            val icon = when (addon.type.uppercase()) { "TORRENT" -> "🧲"; "DEBRID" -> "☁️"; "SUBTITLE" -> "📝"; else -> "🔌" }
+            val typeLabel = when (addon.type.uppercase()) { "TORRENT" -> "[Torrent]"; "DEBRID" -> "[Debrid]"; "SUBTITLE" -> "[Subs]"; else -> "[Addon]" }
             row.addView(TextView(ctx).apply {
-                text = "$icon  ${addon.name}\n${addon.url}"; textSize = 13f; setTextColor(cText)
+                text = "$typeLabel  ${addon.name}\n${addon.url}"; textSize = 13f; setTextColor(cText)
                 layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
             })
             row.addView(ImageButton(ctx).apply {

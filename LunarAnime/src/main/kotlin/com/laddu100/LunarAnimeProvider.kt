@@ -187,35 +187,20 @@ class LunarAnimeProvider : MainAPI() {
         @JsonProperty("redirect_uri") val redirectUri: String
     )
 
-    /**
-     * Derive the title-slug from the full id (which has a 5-char suffix).
-     * "one-piece-p8k27" -> "one-piece"
-     * "demon-slayer-kimetsu-no-yaiba-j2hzd" -> "demon-slayer-kimetsu-no-yaiba"
-     */
+    // ids carry a 5-char random suffix: one-piece-p8k27 -> one-piece
     private fun deriveSlug(fullId: String): String {
         val lastDashIndex = fullId.lastIndexOf('-')
         if (lastDashIndex >= 0 && lastDashIndex < fullId.length - 1) {
             val suffix = fullId.substring(lastDashIndex + 1)
             if (suffix.matches(Regex("^[a-z0-9]{5}$"))) {
-                val slug = fullId.substring(0, lastDashIndex)
-                Log.d(TAG, "deriveSlug: stripped suffix '$suffix' -> slug='$slug'")
-                return slug
+                return fullId.substring(0, lastDashIndex)
             }
         }
-        Log.d(TAG, "deriveSlug: no valid suffix found, returning fullId as-is")
         return fullId
     }
 
-    /**
-     * Extract anilistId from the URL passed by CloudStream.
-     * CloudStream prepends mainUrl to our search data, so:
-     *   "21" -> "https://lunaranime.ru/21"
-     * We need to extract "21" from this URL.
-     */
     private fun extractAnilistId(url: String): Int? {
-        // Try direct parse first (in case it's just the number)
         url.toIntOrNull()?.let {
-            Log.d(TAG, "extractAnilistId: direct parse OK -> $it")
             return it
         }
         // Extract the last path segment and parse as int
@@ -248,7 +233,6 @@ class LunarAnimeProvider : MainAPI() {
             }
 
             val items = feed.items ?: emptyList()
-            Log.d(TAG, "getMainPage: feed '$feedName' has ${items.size} items")
 
             val home = items.mapNotNull { it.toSearchResult() }
             Log.d(TAG, "getMainPage: '${request.name}' -> ${home.size} search results (from ${items.size} items)")
@@ -287,7 +271,6 @@ class LunarAnimeProvider : MainAPI() {
 
             val parsed = parseJson<LunarSearchResponse>(res.text)
             val items = parsed.items ?: emptyList()
-            Log.d(TAG, "search: parsed ${items.size} items (currentPage=${parsed.currentPage}, totalPages=${parsed.totalPages})")
 
             val results = items.mapNotNull { it.toSearchResult() }
             Log.d(TAG, "search END: '$query' -> ${results.size} results")
@@ -371,7 +354,6 @@ class LunarAnimeProvider : MainAPI() {
                 }
             } else emptyList()
 
-            Log.d(TAG, "load: episodes built: sub=${subEpisodes.size} dub=${dubEpisodes.size}")
 
             val response = newAnimeLoadResponse(title, url, tvType) {
                 this.posterUrl = poster
@@ -453,7 +435,6 @@ class LunarAnimeProvider : MainAPI() {
                     if (loaded) {
                         found = true
                     } else {
-                        Log.d(TAG, "loadLinks: loadExtractor returned false for '${hoster.hoster}' ($languageLabel)")
                     }
                 } catch (e: Exception) {
                     Log.e(TAG, "loadLinks: FAILED loadExtractor '${hoster.hoster}' ($languageLabel): ${e.message}")

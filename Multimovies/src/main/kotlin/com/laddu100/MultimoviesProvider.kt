@@ -66,7 +66,7 @@ class MultimoviesProvider : MainAPI() {
             }
             if (ok) mainUrl = remote
         } catch (e: Exception) {
-            Log.d(TAG, "refreshDomain: ${e.message}")
+            Log.e(TAG, "refreshDomain: ${e.message}")
         }
     }
 
@@ -86,7 +86,7 @@ class MultimoviesProvider : MainAPI() {
             val hasNext = doc.selectFirst("a[href*='/page/${page + 1}/'], a.next.page-numbers") != null
             newHomePageResponse(request.name, items, hasNext = hasNext && items.isNotEmpty())
         } catch (e: Exception) {
-            Log.d(TAG, "getMainPage: ${e.message}")
+            Log.e(TAG, "getMainPage: ${e.message}")
             newHomePageResponse(request.name, emptyList(), hasNext = false)
         }
     }
@@ -99,7 +99,7 @@ class MultimoviesProvider : MainAPI() {
             doc.select(".result-item article").mapNotNull { it.toSearchResult() }
                 .distinctBy { it.url }
         } catch (e: Exception) {
-            Log.d(TAG, "search: ${e.message}")
+            Log.e(TAG, "search: ${e.message}")
             emptyList()
         }
     }
@@ -171,7 +171,7 @@ class MultimoviesProvider : MainAPI() {
                 }
             }
         } catch (e: Exception) {
-            Log.d(TAG, "load: ${e.message}")
+            Log.e(TAG, "load: ${e.message}")
             null
         }
     }
@@ -299,11 +299,11 @@ class MultimoviesProvider : MainAPI() {
                     any = any || handled
                 } catch (e: Exception) {
                     // one broken source must not kill the rest
-                    Log.d(TAG, "loadLinks $label: ${e.message}")
+                    Log.e(TAG, "loadLinks $label: ${e.message}")
                 }
             }
         } catch (e: Exception) {
-            Log.d(TAG, "loadLinks: ${e.message}")
+            Log.e(TAG, "loadLinks: ${e.message}")
             return any
         }
         return any

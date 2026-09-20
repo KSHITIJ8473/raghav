@@ -18,28 +18,10 @@ import java.net.URLEncoder
 import java.security.MessageDigest
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 
-/**
- * NetNaija — netnaija.film
- *
- * WeFeed platform (same architecture as MovieBox, different deployment).
- *
- * API: h5-api.aoneroom.com (wefeed-h5api-bff)
- * CDN: bcdnxw.hakunaymatata.com (video), cacdn.hakunaymatata.com (subtitles)
- *
- * Auth flow:
- *   1. ANY API request returns `x-user` response header with JSON: {"token":"eyJ..."}
- *   2. Extract JWT from x-user header, cache it, use as Authorization: Bearer {jwt}
- *   3. If no JWT yet, use X-Client-Token: {timestamp},{md5(reversed_timestamp)}
- *   4. Play API requires X-Source: webNetnaijaSite header (CRITICAL)
- *
- * Stream API returns:
- *   - streams[]: MP4 files (360p, 480p, 720p, 1080p)
- *   - dash[]: DASH manifest (adaptive quality)
- *   - hls[]: HLS playlist (when available)
- *
- * MP4 URLs require Referer: https://netnaija.film/ header for playback.
- * Subtitles: 12+ languages via /subject/caption endpoint.
- */
+// wefeed platform (same as moviebox, different deployment).
+// any api response carries an x-user jwt used as bearer auth; until one shows
+// up a timestamp+md5 client token is sent instead. the play api also rejects
+// requests without X-Source: webNetnaijaSite, and mp4 urls want the site referer.
 class NetNaija : MainAPI() {
     override var mainUrl = "https://netnaija.film"
     override var name = "NetNaija"

@@ -42,7 +42,7 @@ class LIVETVPlugin : Plugin() {
                 val title = p["title"] as String
                 val catLink = p["catLink"] as String
                 val type = p["type"] as? String ?: "custom"
-                val displayTitle = "📺 $title"
+                val displayTitle = title
                 if (type == "custom") {
                     registerMainAPI(LIVETVLiveEventsProvider(displayTitle, catLink))
                 } else {

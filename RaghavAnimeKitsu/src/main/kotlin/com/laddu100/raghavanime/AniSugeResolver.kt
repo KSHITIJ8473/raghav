@@ -34,13 +34,13 @@ object AniSugeMapper {
                 timeout = 15_000L
             ).text
         } catch (e: Exception) {
-            Log.d("AniSuge", "mapper fetch failed: ${e.message}")
+            Log.e("AniSuge", "mapper fetch failed: ${e.message}")
             return null
         }
         val root = try {
             json.readTree(text)
         } catch (e: Exception) {
-            Log.d("AniSuge", "mapper response not json: ${e.message}")
+            Log.e("AniSuge", "mapper response not json: ${e.message}")
             return null
         }
         if (!root.isObject) return null
@@ -96,7 +96,7 @@ object PaheDownloadResolver {
                 timeout = 15_000L
             ).text
         } catch (e: Exception) {
-            Log.d("AniSuge", "pahe page failed: ${e.message}")
+            Log.e("AniSuge", "pahe page failed: ${e.message}")
             return null
         }
 
@@ -110,7 +110,7 @@ object PaheDownloadResolver {
             val loc = res.headers["location"]
             if (loc != null && loc.startsWith("http")) loc else null
         } catch (e: Exception) {
-            Log.d("AniSuge", "workers redirect failed: ${e.message}")
+            Log.e("AniSuge", "workers redirect failed: ${e.message}")
             null
         }
     }
@@ -159,7 +159,7 @@ class KwikExtractor : ExtractorApi() {
                 timeout = 20_000L
             )
         } catch (e: Exception) {
-            Log.d("Kwik", "page fetch failed: ${e.message}")
+            Log.e("Kwik", "page fetch failed: ${e.message}")
             return null
         }
         val html = page.text
@@ -168,7 +168,7 @@ class KwikExtractor : ExtractorApi() {
             val packed = Jsoup.parse(html).selectFirst("script:containsData(function(p,a,c,k,e,d))")?.data()
             packed?.let { getAndUnpack(it) }
         } catch (e: Exception) {
-            Log.d("Kwik", "unpack failed: ${e.message}")
+            Log.e("Kwik", "unpack failed: ${e.message}")
             null
         }
 
@@ -211,7 +211,7 @@ class KwikExtractor : ExtractorApi() {
                 code = res.code
                 if (code == 302) location = res.headers["location"] ?: ""
             } catch (e: Exception) {
-                Log.d("Kwik", "post attempt failed: ${e.message}")
+                Log.e("Kwik", "post attempt failed: ${e.message}")
             }
             tries++
         }

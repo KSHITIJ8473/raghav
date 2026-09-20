@@ -258,7 +258,7 @@ class TheMoviesFlix : MainAPI() {
             }
             episodes
         } catch (e: Exception) {
-            Log.d(TAG, "resolveNexdriveEpisodes: ${e.message}")
+            Log.e(TAG, "resolveNexdriveEpisodes: ${e.message}")
             emptyList()
         }
     }
@@ -277,7 +277,7 @@ class TheMoviesFlix : MainAPI() {
             }
             links.toList()
         } catch (e: Exception) {
-            Log.d(TAG, "resolveRedirectPage: ${e.message}")
+            Log.e(TAG, "resolveRedirectPage: ${e.message}")
             emptyList()
         }
     }
@@ -321,7 +321,7 @@ class TheMoviesFlix : MainAPI() {
             }
             allLinks
         } catch (e: Exception) {
-            Log.d(TAG, "resolveNexdriveEpisodeLinks: ${e.message}")
+            Log.e(TAG, "resolveNexdriveEpisodeLinks: ${e.message}")
             emptyList()
         }
     }
@@ -348,7 +348,7 @@ class TheMoviesFlix : MainAPI() {
                 try {
                     allLinks.addAll(resolveNexdriveEpisodeLinks(nexdriveUrl, episodeNum))
                 } catch (e: Exception) {
-                    Log.d(TAG, "loadLinks TV: ${e.message}")
+                    Log.e(TAG, "loadLinks TV: ${e.message}")
                 }
             }
         } else {
@@ -357,7 +357,7 @@ class TheMoviesFlix : MainAPI() {
                 try {
                     allLinks.addAll(resolveRedirectPage(redirectUrl))
                 } catch (e: Exception) {
-                    Log.d(TAG, "loadLinks: ${e.message}")
+                    Log.e(TAG, "loadLinks: ${e.message}")
                 }
             }
         }
@@ -374,7 +374,7 @@ class TheMoviesFlix : MainAPI() {
                                 try {
                                     loadExtractor(link, "https://nexdrive.fit/", subtitleCallback, callback)
                                 } catch (e: Exception) {
-                                    Log.d(TAG, "extractor: ${e.message}")
+                                    Log.e(TAG, "extractor: ${e.message}")
                                     false
                                 }
                             }
@@ -386,7 +386,7 @@ class TheMoviesFlix : MainAPI() {
                 foundAny = results.any { it }
             }
         } catch (e: Exception) {
-            Log.d(TAG, "loadLinks: ${e.message}")
+            Log.e(TAG, "loadLinks: ${e.message}")
         }
 
         return foundAny

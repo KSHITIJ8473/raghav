@@ -1,19 +1,18 @@
 package com.laddu100.raghavanime
 
 import com.lagradost.api.Log
-import com.fasterxml.jackson.annotation.JsonIgnoreProperties
-import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.app
-import com.lagradost.cloudstream3.newSubtitleFile
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
-import com.lagradost.cloudstream3.utils.AppUtils.toJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.Qualities
-import com.lagradost.cloudstream3.utils.newExtractorLink
 import com.lagradost.cloudstream3.utils.loadExtractor
-import java.net.URLEncoder
+import com.lagradost.cloudstream3.utils.newExtractorLink
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicBoolean
 
 class RaghavAnidap : MainAPI() {
     override var mainUrl = "https://anidap.lol"
@@ -23,213 +22,237 @@ class RaghavAnidap : MainAPI() {
 
     private val chadHost get() = mainUrl.replace("://", "://chad.")
     private val chadUrl get() = "$chadHost/rest/api"
-    private val TAG = "RaghavAnidap"
-    private val baseHeaders get() = mapOf("Referer" to "$mainUrl/home")
+    private val baseHeaders get() = mapOf("Referer" to "$mainUrl/home", "Accept" to "application/json")
+    private val chadHeaders get() = mapOf("Referer" to "$mainUrl/", "Accept" to "application/json")
 
-    @JsonIgnoreProperties(ignoreUnknown = true)
-    data class SearchResponseData(
-        @JsonProperty("results") val results: List<AnimeItem>? = null
+    private fun proxyHeaders(): Map<String, String> = mapOf(
+        "User-Agent" to "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36",
+        "Accept" to "*/*",
+        "Accept-Language" to "en-US,en;q=0.9",
+        "Origin" to mainUrl,
+        "Referer" to "$mainUrl/",
+        "Sec-Fetch-Dest" to "empty",
+        "Sec-Fetch-Mode" to "cors",
+        "Sec-Fetch-Site" to "cross-site",
     )
 
-    @JsonIgnoreProperties(ignoreUnknown = true)
-    data class AnimeItem(
-        @JsonProperty("id") val id: String,
-        @JsonProperty("title") val title: AnimeTitle? = null,
-        @JsonProperty("image") val image: String? = null
-    )
-
-    @JsonIgnoreProperties(ignoreUnknown = true)
-    data class AnimeTitle(
-        @JsonProperty("romaji") val romaji: String? = null,
-        @JsonProperty("english") val english: String? = null,
-        @JsonProperty("userPreferred") val userPreferred: String? = null
-    )
-
-    @JsonIgnoreProperties(ignoreUnknown = true)
-    data class AnimeDetail(
-        @JsonProperty("id") val id: String? = null,
-        @JsonProperty("title") val title: AnimeTitle? = null,
-        @JsonProperty("titleEnglish") val titleEnglish: String? = null,
-        @JsonProperty("coverImage") val coverImage: CoverImage? = null,
-        @JsonProperty("episodes") val episodes: Int? = null,
-        @JsonProperty("totalEpisodes") val totalEpisodes: Int? = null,
-        @JsonProperty("slug") val slug: String? = null,
-        @JsonProperty("format") val format: String? = null
-    )
-
-    @JsonIgnoreProperties(ignoreUnknown = true)
-    data class CoverImage(
-        @JsonProperty("large") val large: String? = null,
-        @JsonProperty("extraLarge") val extraLarge: String? = null
-    )
-
-    @JsonIgnoreProperties(ignoreUnknown = true)
-    data class ServersResponse(
-        @JsonProperty("subProviders") val subProviders: List<Provider>? = null,
-        @JsonProperty("dubProviders") val dubProviders: List<Provider>? = null
-    )
-
-    @JsonIgnoreProperties(ignoreUnknown = true)
-    data class Provider(
-        @JsonProperty("id") val id: String,
-        @JsonProperty("default") val default: Boolean? = null,
-        @JsonProperty("tip") val tip: String? = null
-    )
-
-    @JsonIgnoreProperties(ignoreUnknown = true)
-    data class SourcesResponse(
-        @JsonProperty("sources") val sources: List<Source>? = null,
-        @JsonProperty("tracks") val tracks: List<Track>? = null,
-        @JsonProperty("headers") val headers: Map<String, String>? = null
-    )
-
-    @JsonIgnoreProperties(ignoreUnknown = true)
-    data class Source(
-        @JsonProperty("url") val url: String? = null,
-        @JsonProperty("quality") val quality: String? = null,
-        @JsonProperty("type") val type: String? = null
-    )
-
-    @JsonIgnoreProperties(ignoreUnknown = true)
-    data class Track(
-        @JsonProperty("url") val url: String? = null,
-        @JsonProperty("label") val label: String? = null,
-        @JsonProperty("kind") val kind: String? = null,
-        @JsonProperty("lang") val lang: String? = null
-    )
-
-    private fun cleanTitle(s: String): String {
-        return s.lowercase()
-            .replace(Regex("[^a-z0-9\\s]"), "")
-            .replace(Regex("\\s+"), " ")
-            .trim()
+    private fun normalizeTip(tip: String?): String? {
+        if (tip.isNullOrBlank()) return null
+        return tip.replace("Hard sub", "Hardsub")
+            .replace("Soft sub", "Soft Sub")
     }
 
-    private fun parseQuality(qualityStr: String?): Int {
-        if (qualityStr.isNullOrBlank() || qualityStr.equals("auto", ignoreCase = true)) {
-            return Qualities.Unknown.value
-        }
-        val match = Regex("(\\d{3,4})").find(qualityStr)
-        val height = match?.groupValues?.get(1)?.toIntOrNull() ?: return Qualities.Unknown.value
+    private fun isHardsubProvider(tip: String?): Boolean =
+        tip?.contains("Hard", ignoreCase = true) == true
+
+    private fun qualityFromHeight(height: Int?): Int {
+        val h = height ?: return Qualities.Unknown.value
         return when {
-            height >= 2160 -> Qualities.P2160.value
-            height >= 1440 -> Qualities.P1440.value
-            height >= 1080 -> Qualities.P1080.value
-            height >= 720 -> Qualities.P720.value
-            height >= 600 -> Qualities.P720.value
-            height >= 480 -> Qualities.P480.value
-            height >= 360 -> Qualities.P360.value
+            h >= 2160 -> Qualities.P2160.value
+            h >= 1440 -> Qualities.P1440.value
+            h >= 1080 -> Qualities.P1080.value
+            h >= 720 -> Qualities.P720.value
+            h >= 480 -> Qualities.P480.value
+            h >= 360 -> Qualities.P360.value
             else -> Qualities.Unknown.value
         }
     }
 
-    private fun buildLabel(providerId: String, quality: String?): String {
-        val q = if (!quality.isNullOrBlank() && !quality.equals("auto", ignoreCase = true)) " $quality" else ""
-        return "$name - $providerId$q"
+    private fun parseQualityToken(qualityStr: String?): Int {
+        if (qualityStr.isNullOrBlank() || qualityStr.equals("auto", ignoreCase = true)) {
+            return Qualities.Unknown.value
+        }
+        val height = Regex("(\\d{3,4})").find(qualityStr)?.groupValues?.get(1)?.toIntOrNull()
+            ?: return Qualities.Unknown.value
+        return qualityFromHeight(height)
+    }
+
+    private fun unwrapArray(root: com.fasterxml.jackson.databind.JsonNode): com.fasterxml.jackson.databind.JsonNode {
+        if (root.isArray) return root
+        val d = root.path("data")
+        if (d.isArray) return d
+        if (d.isObject && d.path("data").isArray) return d.path("data")
+        if (root.path("results").isArray) return root
+        return root
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
-
+        mainUrl = FirebaseDomainHelper.getDomain("anidap") ?: mainUrl
         if (query.length < 2) return emptyList()
-        val encoded = URLEncoder.encode(query, "UTF-8")
-        val url = "$mainUrl/api/anime/search?q=$encoded"
-
-        var lastError: String? = null
-        for (attempt in 1..3) {
-            try {
-                val res = app.get(url, headers = baseHeaders, timeout = 15_000L)
-                val body = res.text
-                if (body.contains("error", ignoreCase = true) && !body.contains("results")) {
-                    lastError = "server error response"
-                    kotlinx.coroutines.delay(2000L * attempt)
-                    continue
+        return try {
+            val encoded = java.net.URLEncoder.encode(query, "UTF-8")
+            val res = app.get("$mainUrl/api/anime/search?q=$encoded", headers = baseHeaders, timeout = 30_000L)
+            val root = parseJson<com.fasterxml.jackson.databind.JsonNode>(res.text)
+            val results = root.path("results")
+            if (!results.isArray) emptyList()
+            else results.mapNotNull { node ->
+                val id = node.path("id").asText("")
+                if (id.isBlank()) return@mapNotNull null
+                val title = node.path("title").let { t ->
+                    t.path("userPreferred").asText("").ifBlank { null }
+                        ?: t.path("english").asText("").ifBlank { null }
+                        ?: t.path("romaji").asText("").ifBlank { null }
+                } ?: return@mapNotNull null
+                newAnimeSearchResponse(title, "$mainUrl|$id", TvType.Anime) {
+                    this.posterUrl = node.path("image").asText("").ifBlank { null }
+                    addDubStatus(dubExist = true, subExist = true)
                 }
-                val parsed = parseJson<SearchResponseData>(body)
-                val results = parsed.results ?: emptyList()
-                return results.mapNotNull { item ->
-                    val title = item.title?.userPreferred ?: item.title?.english ?: item.title?.romaji
-                        ?: return@mapNotNull null
-                    if (title == "Unknown") return@mapNotNull null
-                    val data = "$mainUrl|${item.id}"
-                    newAnimeSearchResponse(title, data, TvType.Anime) {
-                        this.posterUrl = item.image
-                        addDubStatus(dubExist = true, subExist = true)
-                    }
-                }
-            } catch (e: Exception) {
-                lastError = e.message
-                Log.e("RaghavAnimeKitsu", "[Anidap] search attempt $attempt failed: ${e.message}")
-                kotlinx.coroutines.delay(2000L * attempt)
             }
+        } catch (e: Exception) {
+            Log.e("RaghavAnime", "[Anidap] search failed: ${e.message}")
+            emptyList()
         }
-        Log.e("RaghavAnimeKitsu", "[Anidap] search failed after 3 attempts: $lastError")
-        return emptyList()
     }
 
     override suspend fun load(url: String): LoadResponse? {
-
-        val animeId = url.removePrefix("$mainUrl/").removePrefix("$mainUrl|").trim()
+        mainUrl = FirebaseDomainHelper.getDomain("anidap") ?: mainUrl
+        val animeId = url.substringAfterLast("|").substringAfterLast("/").trim()
+        if (animeId.isBlank()) return null
 
         return try {
-
             val detailRes = app.get("$mainUrl/api/anime/$animeId", headers = baseHeaders, timeout = 30_000L)
-            val detailRoot = parseJson<com.fasterxml.jackson.databind.JsonNode>(detailRes.text)
-            val dataNode = detailRoot.path("data")
-            val detail = parseJson<AnimeDetail>(dataNode.toString())
+            val root = parseJson<com.fasterxml.jackson.databind.JsonNode>(detailRes.text)
+            val data = root.path("data").let { if (it.isObject && it.size() > 0) it else root }
 
-            val slug = detail.slug ?: detail.id ?: animeId
-            val title = detail.title?.userPreferred ?: detail.title?.english ?: detail.titleEnglish ?: "Unknown"
-            val poster = detail.coverImage?.extraLarge ?: detail.coverImage?.large
-            val totalEps = detail.episodes ?: detail.totalEpisodes ?: 0
+            // the detail id is the slug chad expects (e.g. one-piece-p8k27)
+            val slug = data.path("id").asText("").ifBlank { animeId }
+            val titles = data.path("titles")
+            val title = titles.path("en").asText("").ifBlank { null }
+                ?: data.path("titleEnglish").asText("").ifBlank { null }
+                ?: data.path("titleRomaji").asText("").ifBlank { null }
+                ?: titles.path("ja").asText("").ifBlank { null }
+                ?: "Unknown"
 
-            val serversUrl = "$chadUrl/servers?id=$slug&epNum=1"
-            val serversRes = cfAppGetAnidap(
-                serversUrl,
-                headers = mapOf("Referer" to "$mainUrl/", "Accept" to "application/json")
+            val cover = data.path("coverImage")
+            val poster = cover.path("extraLarge").asText("").ifBlank { null }
+                ?: cover.path("large").asText("").ifBlank { null }
+            val banner = data.path("bannerImage").asText("").ifBlank { null }
+            val plot = data.path("description").asText("").takeIf { it.isNotBlank() }
+            val year = data.path("seasonYear").asInt(0).takeIf { it > 0 }
+            val duration = data.path("duration").asInt(0).takeIf { it > 0 }
+            val genres = data.path("genres")
+                .mapNotNull { g -> g.path("name").asText("").takeIf { it.isNotBlank() } }
+            val format = data.path("format").asText(data.path("type").asText("")).uppercase()
+
+            data class Ep(
+                val number: Int,
+                val name: String?,
+                val thumb: String?,
+                val description: String?,
+                val isFiller: Boolean,
+                val hasSub: Boolean?,
+                val hasDub: Boolean?,
             )
 
-            val servers = if (serversRes.code == 200 && !serversRes.text.contains("bot_detected") && !serversRes.text.contains("\"error\"")) {
-                try { parseJson<ServersResponse>(serversRes.text) } catch (e: Exception) { ServersResponse() }
-            } else ServersResponse()
+            val episodes: List<Ep>? = try {
+                val epsRes = cfAppGetAnidap("$chadUrl/episodes?id=$slug", headers = chadHeaders)
+                if (epsRes.code == 200) {
+                    val arr = unwrapArray(parseJson<com.fasterxml.jackson.databind.JsonNode>(epsRes.text))
+                    if (arr.isArray) arr.mapNotNull { e ->
+                        val num = e.path("number").asInt(-1)
+                        if (num < 1) null else Ep(
+                            number = num,
+                            name = e.path("titles").let { t ->
+                                t.path("en").asText("").ifBlank { null }
+                                    ?: t.path("x-jat").asText("").ifBlank { null }
+                                    ?: t.path("ja").asText("").ifBlank { null }
+                            },
+                            thumb = e.path("img").asText("").ifBlank { null },
+                            description = e.path("description").asText("").takeIf { it.isNotBlank() },
+                            isFiller = e.path("isFiller").asBoolean(false),
+                            hasSub = if (e.has("hasSub")) e.path("hasSub").asBoolean() else null,
+                            hasDub = if (e.has("hasDub")) e.path("hasDub").asBoolean() else null,
+                        )
+                    } else null
+                } else null
+            } catch (e: Exception) {
+                Log.e("RaghavAnime", "[Anidap] episodes fetch failed: ${e.message}")
+                null
+            }
 
-            val subProviders = servers.subProviders?.filter { it.id.isNotBlank() } ?: emptyList()
-            val dubProviders = servers.dubProviders?.filter { it.id.isNotBlank() } ?: emptyList()
-
-            if (totalEps <= 0) return null
-
-            val subEpisodes = if (subProviders.isNotEmpty()) (1..totalEps).map { epNum ->
-                val ids = subProviders.joinToString(",") { it.id }
-                val tips = subProviders.joinToString(";;") { it.id + "=" + (it.tip ?: "") }
-                newEpisode("$mainUrl|$slug|$epNum|sub|$ids|$tips") {
-                    this.episode = epNum
-                    this.name = "Episode $epNum"
+            // sub/dub flags can be missing per episode, ep1 servers covers those
+            var ep1HasSub: Boolean? = null
+            var ep1HasDub: Boolean? = null
+            if (episodes == null || episodes.any { it.hasSub == null || it.hasDub == null }) {
+                try {
+                    val serversRes = cfAppGetAnidap("$chadUrl/servers?id=$slug&epNum=1", headers = chadHeaders)
+                    if (serversRes.code == 200) {
+                        val sRoot = parseJson<com.fasterxml.jackson.databind.JsonNode>(serversRes.text)
+                        ep1HasSub = sRoot.path("subProviders").size() > 0
+                        ep1HasDub = sRoot.path("dubProviders").size() > 0
+                    }
+                } catch (e: Exception) {
+                    Log.e("RaghavAnime", "[Anidap] servers probe failed: ${e.message}")
                 }
-            } else emptyList()
+            }
 
-            val dubEpisodes = if (dubProviders.isNotEmpty()) (1..totalEps).map { epNum ->
-                val ids = dubProviders.joinToString(",") { it.id }
-                val tips = dubProviders.joinToString(";;") { it.id + "=" + (it.tip ?: "") }
-                newEpisode("$mainUrl|$slug|$epNum|dub|$ids|$tips") {
-                    this.episode = epNum
-                    this.name = "Episode $epNum"
+            val totalEps = episodes?.maxOfOrNull { it.number }
+                ?: data.path("episodeCount").asInt(0).takeIf { it > 0 }
+                ?: data.path("episodes").asInt(0).takeIf { it > 0 }
+                ?: 0
+
+            val epByNumber = episodes?.associateBy { it.number } ?: emptyMap()
+
+            fun episodeList(dub: Boolean): List<Episode> {
+                val numbers: List<Int> = if (episodes != null) {
+                    episodes.map { it.number }.filter { n ->
+                        val e = epByNumber[n]
+                        if (e == null) true
+                        else if (dub) e.hasDub ?: (ep1HasDub ?: false)
+                        else e.hasSub ?: (ep1HasSub ?: true)
+                    }
+                } else if (totalEps > 0) {
+                    val anyEps = if (dub) ep1HasDub ?: false else ep1HasSub ?: true
+                    if (anyEps) (1..totalEps).toList() else emptyList()
+                } else emptyList()
+
+                return numbers.map { n ->
+                    val info = epByNumber[n]
+                    val filler = if (info?.isFiller == true) " (Filler)" else ""
+                    newEpisode("$mainUrl|$slug|$n|${if (dub) "dub" else "sub"}") {
+                        this.name = info?.name?.let { "$it$filler" } ?: "Episode $n$filler"
+                        this.episode = n
+                        this.posterUrl = info?.thumb
+                        this.description = info?.description
+                    }
                 }
-            } else emptyList()
+            }
+
+            val subEpisodes = episodeList(dub = false)
+            val dubEpisodes = episodeList(dub = true)
+
+            if (subEpisodes.isEmpty() && dubEpisodes.isEmpty()) {
+                return newAnimeLoadResponse(title, url, TvType.Anime) {
+                    this.posterUrl = poster
+                    this.backgroundPosterUrl = banner
+                    this.plot = plot
+                    this.tags = genres
+                    this.year = year
+                    this.duration = duration
+                }
+            }
 
             // the app hides the sub/dub switcher on movie types, so dual audio
             // movies are typed as regular anime to keep both reachable
-            val tvType = when (detail.format) {
-                "MOVIE" -> if (dubEpisodes.isNotEmpty()) TvType.Anime else TvType.AnimeMovie
-                "OVA", "ONA" -> TvType.OVA
+            val tvType = when {
+                format == "MOVIE" && dubEpisodes.isNotEmpty() -> TvType.Anime
+                format == "MOVIE" -> TvType.AnimeMovie
+                format == "OVA" || format == "ONA" || format == "SPECIAL" -> TvType.OVA
                 else -> TvType.Anime
             }
 
-            return newAnimeLoadResponse(title, url, tvType) {
+            newAnimeLoadResponse(title, url, tvType) {
                 this.posterUrl = poster
+                this.backgroundPosterUrl = banner
+                this.plot = plot
+                this.tags = genres
+                this.year = year
+                this.duration = duration
                 if (subEpisodes.isNotEmpty()) addEpisodes(DubStatus.Subbed, subEpisodes)
                 if (dubEpisodes.isNotEmpty()) addEpisodes(DubStatus.Dubbed, dubEpisodes)
             }
         } catch (e: Exception) {
-            Log.e("RaghavAnimeKitsu", "[Anidap] load failed: ${e.message}")
+            Log.e("RaghavAnime", "[Anidap] load failed: ${e.message}")
             null
         }
     }
@@ -241,89 +264,18 @@ class RaghavAnidap : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        try {
+        mainUrl = FirebaseDomainHelper.getDomain("anidap") ?: mainUrl
+        return try {
             val detailRes = app.get("$mainUrl/api/anime/$anilistId", headers = baseHeaders, timeout = 15_000L)
-            val detailRoot = parseJson<com.fasterxml.jackson.databind.JsonNode>(detailRes.text)
-            val dataNode = detailRoot.path("data")
-            if (dataNode.isMissingNode) {
-                Log.e("RaghavAnimeKitsu", "[Anidap] detail data missing for anilist=$anilistId")
-                return false
-            }
-            val detail = parseJson<AnimeDetail>(dataNode.toString())
-            val slug = detail.slug ?: detail.id ?: return false
-
-            val serversUrl = "$chadUrl/servers?id=$slug&epNum=$episode"
-            val serversRes = cfAppGetAnidap(serversUrl, headers = mapOf("Referer" to "$mainUrl/", "Accept" to "application/json"))
-            if (serversRes.code != 200 || serversRes.text.contains("bot_detected") || serversRes.text.contains("\"error\"")) {
-                Log.e("RaghavAnimeKitsu", "[Anidap] servers failed: code=${serversRes.code}")
-                return false
-            }
-            val servers = try { parseJson<ServersResponse>(serversRes.text) } catch (e: Exception) { ServersResponse() }
-            val providers = if (isDub) servers.dubProviders?.filter { it.id.isNotBlank() } ?: emptyList()
-                           else servers.subProviders?.filter { it.id.isNotBlank() } ?: emptyList()
-
-            if (providers.isEmpty()) return false
-
-            val type = if (isDub) "dub" else "sub"
-            var found = false
-            for (provider in providers) {
-                try {
-                    val sourcesUrl = "$chadUrl/sources?id=$slug&epNum=$episode&type=$type&providerId=${provider.id}"
-                    val sourcesRes = cfAppGetAnidap(sourcesUrl, headers = mapOf("Referer" to "$mainUrl/", "Accept" to "application/json"))
-                    if (sourcesRes.code != 200 || sourcesRes.text.contains("bot_detected") || sourcesRes.text.contains("\"error\"")) continue
-                    val sourcesData = try { parseJson<SourcesResponse>(sourcesRes.text) } catch (e: Exception) { continue }
-                    val sources = sourcesData.sources ?: emptyList()
-                    val tracks = sourcesData.tracks ?: emptyList()
-                    val apiHeaders: Map<String, String> = sourcesData.headers ?: emptyMap()
-                    if (sources.isEmpty()) continue
-
-                    for (track in tracks) {
-                        var trackUrl = track.url ?: continue
-                        if (trackUrl.isBlank()) continue
-                        trackUrl = trackUrl.replace("https:///", "https://").replace("http:///", "http://")
-                        if (!trackUrl.startsWith("http")) trackUrl = "$chadHost/${trackUrl.removePrefix("/")}"
-                        val label = track.label ?: track.lang ?: "Subtitle"
-                        if (track.kind == "captions" || track.kind == "subtitles" || track.kind == "metadata") {
-                            val subHeaders = when {
-                                trackUrl.contains("lostproject.club") -> mapOf("Referer" to "https://megaplay.buzz/")
-                                trackUrl.contains("megaplay.buzz") -> mapOf("Referer" to "https://megaplay.buzz/")
-                                else -> apiHeaders
-                            }
-                            subtitleCallback.invoke(newSubtitleFile(label, trackUrl) { this.headers = subHeaders })
-                        }
-                    }
-
-                    for (source in sources) {
-                        val sourceUrl = source.url ?: continue
-                        if (sourceUrl.isBlank()) continue
-                        val sourceType = source.type ?: ""
-                        val quality = source.quality ?: "auto"
-                        val qualityInt = parseQuality(quality)
-                        val label = buildLabel(provider.id, quality)
-                        val isM3u8 = sourceUrl.contains(".m3u8") || sourceType.contains("mpegurl", ignoreCase = true) || sourceType.contains("m3u8", ignoreCase = true)
-                        if (isM3u8) {
-                            callback.invoke(newExtractorLink("Anidap", label, sourceUrl, type = ExtractorLinkType.M3U8) {
-                                this.quality = qualityInt
-                                this.referer = apiHeaders["Referer"] ?: "$mainUrl/"
-                                this.headers = apiHeaders
-                            })
-                        } else {
-                            callback.invoke(newExtractorLink("Anidap", label, sourceUrl, type = ExtractorLinkType.VIDEO) {
-                                this.quality = qualityInt
-                                this.referer = apiHeaders["Referer"] ?: "$mainUrl/"
-                                this.headers = apiHeaders
-                            })
-                        }
-                        found = true
-                    }
-                } catch (e: Exception) {
-                    Log.e("RaghavAnimeKitsu", "[Anidap] provider ${provider.id} failed: ${e.message}")
-                }
-            }
-            return found
+            val root = parseJson<com.fasterxml.jackson.databind.JsonNode>(detailRes.text)
+            val data = root.path("data").let { if (it.isObject && it.size() > 0) it else root }
+            val slug = data.path("id").asText("").ifBlank {
+                data.path("slug").asText("")
+            }.ifBlank { return false }
+            resolveLinks(slug, episode.toString(), if (isDub) "dub" else "sub", subtitleCallback, callback)
         } catch (e: Exception) {
-            Log.e("RaghavAnimeKitsu", "[Anidap] loadLinksByAnilistId failed: ${e.message}")
-            return false
+            Log.e("RaghavAnime", "[Anidap] anilist $anilistId resolve failed: ${e.message}")
+            false
         }
     }
 
@@ -333,134 +285,315 @@ class RaghavAnidap : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val cleanData = data.removePrefix("$mainUrl/").removePrefix("$mainUrl|").trim()
-        val parts = cleanData.split("|")
-        if (parts.size < 5) {
-            Log.w("RaghavAnimeKitsu", "[Anidap] loadLinks: malformed data")
+        mainUrl = FirebaseDomainHelper.getDomain("anidap") ?: mainUrl
+        // data: "<mainUrl>|<slug>|<epNum>|<type>"
+        val rawParts = data.trim().split("|")
+        val parts = if (rawParts.firstOrNull()?.startsWith("http") == true) rawParts.drop(1) else rawParts
+        if (parts.size < 3) {
+            Log.e("RaghavAnime", "[Anidap] loadLinks: invalid data")
             return false
         }
         val slug = parts[0]
         val epNum = parts[1]
-        val type = parts[2]
-        val providerIds = parts[3].split(",").filter { it.isNotBlank() }
-        val tipsMap: Map<String, String> = if (parts[4].isNotBlank()) {
-            parts[4].split(";;").mapNotNull { entry ->
-                val eqIdx = entry.indexOf('=')
-                if (eqIdx > 0) entry.substring(0, eqIdx) to entry.substring(eqIdx + 1)
-                else null
-            }.toMap()
-        } else emptyMap()
+        val type = if (parts[2] == "dub") "dub" else "sub"
+        return resolveLinks(slug, epNum, type, subtitleCallback, callback)
+    }
 
-        if (providerIds.isEmpty()) return false
+    private data class ServerProvider(val id: String, val tip: String?)
 
-        var found = false
-        for (providerId in providerIds) {
-            val tip = tipsMap[providerId]
-            try {
-                val sourcesUrl = "$chadUrl/sources?id=$slug&epNum=$epNum&type=$type&providerId=$providerId"
-                val sourcesRes = cfAppGetAnidap(
-                    sourcesUrl,
-                    headers = mapOf("Referer" to "$mainUrl/", "Accept" to "application/json")
+    // providers differ per episode, cache per slug|ep
+    private val serversCache = ConcurrentHashMap<String, Pair<Long, Map<String, List<ServerProvider>>>>()
+
+    private suspend fun serversForEpisode(slug: String, epNum: String): Map<String, List<ServerProvider>> {
+        val key = "$slug|$epNum"
+        val cached = serversCache[key]
+        if (cached != null && System.currentTimeMillis() - cached.first < 10 * 60_000L) {
+            return cached.second
+        }
+        val out = try {
+            val res = cfAppGetAnidap("$chadUrl/servers?id=$slug&epNum=$epNum", headers = chadHeaders)
+            if (res.code == 200) {
+                val root = parseJson<com.fasterxml.jackson.databind.JsonNode>(res.text)
+                fun parseList(field: String): List<ServerProvider> {
+                    val arr = root.path(field)
+                    if (!arr.isArray) return emptyList()
+                    return arr.mapNotNull { node ->
+                        when {
+                            node.isTextual -> ServerProvider(node.asText(), null)
+                            node.isObject -> {
+                                val id = node.path("id").asText("")
+                                if (id.isBlank()) null else ServerProvider(id, node.path("tip").asText(""))
+                            }
+                            else -> null
+                        }
+                    }
+                }
+                // chad never lists the site's own adp server, the web client
+                // puts it first in every list - do the same or those streams
+                // never get requested
+                fun withAdp(list: List<ServerProvider>): List<ServerProvider> =
+                    if (list.any { it.id == "adp" }) list
+                    else listOf(ServerProvider("adp", null)) + list
+                mapOf(
+                    "sub" to withAdp(parseList("subProviders")),
+                    "dub" to withAdp(parseList("dubProviders")),
                 )
+            } else emptyMap()
+        } catch (e: Exception) {
+            Log.e("RaghavAnime", "[Anidap] servers fetch failed: ${e.message}")
+            emptyMap()
+        }
+        serversCache[key] = System.currentTimeMillis() to out
+        return out
+    }
 
-                if (sourcesRes.code != 200 || sourcesRes.text.contains("bot_detected") || sourcesRes.text.contains("\"error\"")) {
-                    Log.w("RaghavAnimeKitsu", "[Anidap] provider=$providerId sources bad response: code=${sourcesRes.code} len=${sourcesRes.text.length}")
-                    continue
+    private data class SourcesPayload(
+        val sources: List<Triple<String, String?, String?>>,
+        val tracks: List<Triple<String, String, String>>,
+        val headers: Map<String, String>,
+    )
+
+    private suspend fun fetchSources(
+        slug: String, epNum: String, type: String, providerId: String
+    ): SourcesPayload? {
+        return try {
+            val res = cfAppGetAnidap(
+                "$chadUrl/sources?id=$slug&epNum=$epNum&type=$type&providerId=$providerId",
+                headers = chadHeaders
+            )
+            if (res.code != 200) return null
+            val root = parseJson<com.fasterxml.jackson.databind.JsonNode>(res.text)
+            val node = if (root.isObject && root.path("data").isObject &&
+                root.path("data").has("sources")
+            ) root.path("data") else root
+
+            val srcArr = node.path("sources")
+            if (!srcArr.isArray || srcArr.size() == 0) return null
+
+            val sources = srcArr.mapNotNull { s ->
+                val u = s.path("url").asText("")
+                if (u.isBlank()) null else Triple(
+                    u,
+                    s.path("quality").asText("").ifBlank { null },
+                    s.path("type").asText("").ifBlank { null },
+                )
+            }
+            if (sources.isEmpty()) return null
+
+            val tracks = node.path("tracks").let { t ->
+                if (!t.isArray) node.path("subtitles") else t
+            }
+            val trackList = if (tracks.isArray) tracks.mapNotNull { t ->
+                val u = t.path("url").asText("")
+                if (u.isBlank()) null else Triple(
+                    u,
+                    t.path("label").asText(t.path("lang").asText("Subtitle")),
+                    t.path("kind").asText("captions"),
+                )
+            } else emptyList()
+
+            val headers = HashMap<String, String>()
+            val headersNode = node.path("headers")
+            if (headersNode.isObject) {
+                headersNode.fieldNames().forEach { k ->
+                    val value = headersNode.path(k).asText("")
+                    if (value.isNotBlank()) headers[k] = value
                 }
+            }
 
-                val sourcesData = try { parseJson<SourcesResponse>(sourcesRes.text) } catch (e: Exception) {
-                    Log.e("RaghavAnimeKitsu", "[Anidap] provider=$providerId sources parse failed: ${e.message}")
-                    continue
-                }
+            SourcesPayload(sources, trackList, headers)
+        } catch (e: Exception) {
+            Log.e("RaghavAnime", "[Anidap] sources $providerId failed: ${e.message}")
+            null
+        }
+    }
 
-                val sources = sourcesData.sources ?: emptyList()
-                val tracks = sourcesData.tracks ?: emptyList()
-                val apiHeaders: Map<String, String> = sourcesData.headers ?: emptyMap()
+    // walks master -> best variant -> first segment so dead hosts drop out
+    // before the player ever sees them
+    private fun validateHls(
+        masterUrl: String,
+        headers: Map<String, String>,
+    ): List<AnidapUrl.Variant>? {
+        val master = AnidapUrl.fetchText(masterUrl, headers) ?: return null
+        if (!master.contains("#EXTM3U")) return null
+        val variants = AnidapUrl.parseMaster(master, masterUrl)
 
-                if (sources.isEmpty()) continue
+        val probeTarget = variants.maxByOrNull { it.quality ?: 0 }?.url ?: masterUrl
+        val playlist = AnidapUrl.fetchText(probeTarget, headers) ?: return null
+        if (!playlist.contains("#EXTM3U")) return null
 
-                for (track in tracks) {
-                    var trackUrl = track.url ?: continue
-                    if (trackUrl.isBlank()) continue
-                    trackUrl = trackUrl.replace("https:///", "https://").replace("http:///", "http://")
-                    if (!trackUrl.startsWith("http")) {
-                        trackUrl = "$chadHost/${trackUrl.removePrefix("/")}"
-                    }
-                    val label = track.label ?: track.lang ?: "Subtitle"
-                    if (track.kind == "captions" || track.kind == "subtitles" || track.kind == "metadata") {
-                        val subHeaders = when {
-                            trackUrl.contains("lostproject.club") -> mapOf("Referer" to "https://megaplay.buzz/")
-                            trackUrl.contains("megaplay.buzz") -> mapOf("Referer" to "https://megaplay.buzz/")
-                            else -> apiHeaders
-                        }
-                        subtitleCallback.invoke(newSubtitleFile(label, trackUrl) {
-                            this.headers = subHeaders
-                        })
-                    }
-                }
+        val seg = AnidapUrl.firstSegment(playlist, probeTarget) ?: return null
+        val bytes = AnidapUrl.fetchBytes(seg, headers) ?: return null
+        if (!AnidapUrl.isVideoBytes(bytes)) return null
 
-                for (source in sources) {
-                    val sourceUrl = source.url ?: continue
-                    if (sourceUrl.isBlank()) continue
-                    val sourceType = source.type ?: ""
-                    val quality = source.quality ?: "auto"
-                    val qualityInt = parseQuality(quality)
-                    val label = buildLabel(providerId, quality)
+        return if (variants.isEmpty()) listOf(AnidapUrl.Variant(null, masterUrl)) else variants
+    }
 
-                    val isM3u8 = sourceUrl.contains(".m3u8") ||
-                        sourceType.contains("mpegurl", ignoreCase = true) ||
-                        sourceType.contains("m3u8", ignoreCase = true)
-                    val isMp4 = sourceUrl.contains(".mp4") || sourceUrl.contains(".webm") ||
-                        sourceType.contains("mp4", ignoreCase = true) ||
-                        sourceType.contains("webm", ignoreCase = true)
-
-                    when {
-                        isM3u8 -> {
-                            callback.invoke(
-                                newExtractorLink(label, label, sourceUrl, type = ExtractorLinkType.M3U8) {
-                                    this.headers = apiHeaders
-                                    this.quality = qualityInt
-                                }
-                            )
-                            found = true
-                        }
-                        isMp4 -> {
-                            callback.invoke(
-                                newExtractorLink(label, label, sourceUrl, type = ExtractorLinkType.VIDEO) {
-                                    this.headers = apiHeaders
-                                    this.quality = qualityInt
-                                }
-                            )
-                            found = true
-                        }
-                        else -> {
-                            val referer = apiHeaders["Referer"] ?: apiHeaders["referer"] ?: "$mainUrl/"
-                            val loaded = try {
-                                loadExtractor(sourceUrl, referer, subtitleCallback, callback)
-                            } catch (e: Exception) {
-                                Log.e("RaghavAnimeKitsu", "[Anidap] loadExtractor threw: ${e.message}")
-                                false
-                            }
-                            if (loaded) {
-                                found = true
-                            } else {
-                                Log.w("RaghavAnimeKitsu", "[Anidap] loadExtractor failed, emitting raw: $label")
-                                callback.invoke(
-                                    newExtractorLink(label, label, sourceUrl, type = ExtractorLinkType.VIDEO) {
-                                        this.headers = apiHeaders
-                                        this.quality = qualityInt
-                                    }
-                                )
-                                found = true
-                            }
-                        }
-                    }
-                }
+    private suspend fun emitSubtitles(
+        payload: SourcesPayload,
+        seen: MutableSet<String>,
+        subtitleCallback: (SubtitleFile) -> Unit
+    ) {
+        for ((rawUrl, label, kind) in payload.tracks) {
+            val l = label.lowercase()
+            if (kind.lowercase() == "thumbnails" || l == "thumbnails" || l == "thumbnail") continue
+            var url = rawUrl
+                .replace("https:///", "https://")
+                .replace("http:///", "http://")
+            if (!url.startsWith("http")) continue
+            if (!seen.add(url)) continue
+            val subHeaders = when {
+                url.contains("lostproject.club") || url.contains("megaplay.buzz") ||
+                    url.contains("vyrnex.top") ->
+                    mapOf(
+                        "Origin" to "https://megaplay.buzz",
+                        "Referer" to "https://megaplay.buzz/",
+                    )
+                else -> payload.headers
+            }
+            try {
+                subtitleCallback.invoke(newSubtitleFile(label, url) {
+                    this.headers = subHeaders
+                })
             } catch (e: Exception) {
-                Log.e("RaghavAnimeKitsu", "[Anidap] loadLinks provider=$providerId failed: ${e.message}")
+                Log.e("RaghavAnime", "[Anidap] subtitle emit failed: ${e.message}")
             }
         }
+    }
 
-        return found
+    private suspend fun resolveLinks(
+        slug: String,
+        epNum: String,
+        type: String,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
+        val providers = serversForEpisode(slug, epNum)[type] ?: emptyList()
+        if (providers.isEmpty()) return false
+
+        val found = AtomicBoolean(false)
+        val subSeen = ConcurrentHashMap.newKeySet<String>()
+        coroutineScope {
+            providers.map { provider ->
+                async {
+                    try {
+                        val payload = fetchSources(slug, epNum, type, provider.id) ?: return@async
+                        val tip = normalizeTip(provider.tip)
+                        val hardsub = isHardsubProvider(tip)
+                        val referer = payload.headers["Referer"] ?: payload.headers["referer"]
+
+                        emitSubtitles(payload, subSeen, subtitleCallback)
+
+                        for ((srcUrl, qualityToken, srcType) in payload.sources) {
+                            val proxyUrl = AnidapUrl.transform(srcUrl, provider.id, referer)
+                            val label = buildString {
+                                append(name)
+                                append(" - ")
+                                append(provider.id)
+                                if (hardsub) append(" (Hardsub)")
+                            }
+
+                            when {
+                                AnidapUrl.looksLikeDash(srcUrl, srcType) -> {
+                                    val bytes = AnidapUrl.fetchBytes(srcUrl, payload.headers, 1023)
+                                    if (bytes != null && bytes.size > 512) {
+                                        callback.invoke(
+                                            newExtractorLink(name, label, srcUrl, type = ExtractorLinkType.VIDEO) {
+                                                this.headers = payload.headers
+                                                this.quality = parseQualityToken(qualityToken)
+                                            }
+                                        )
+                                        found.set(true)
+                                    }
+                                }
+
+                                AnidapUrl.looksLikeHls(srcUrl, srcType) -> {
+                                    // native apps can send the provider headers a browser cannot,
+                                    // so try the raw url first and only then the site proxy
+                                    var variants = validateHls(srcUrl, payload.headers)
+                                    var headers = payload.headers
+                                    if (variants == null && proxyUrl != srcUrl) {
+                                        val proxied = validateHls(proxyUrl, proxyHeaders())
+                                        if (proxied != null) {
+                                            variants = proxied
+                                            headers = proxyHeaders()
+                                        }
+                                    }
+                                    if (variants == null) continue
+
+                                    for (v in variants) {
+                                        val q = v.quality ?: parseQualityToken(qualityToken).takeIf {
+                                            it != Qualities.Unknown.value
+                                        }
+                                        val labelWithQ = if (q != null) "$label ${q}p" else label
+                                        callback.invoke(
+                                            newExtractorLink(name, labelWithQ, v.url, type = ExtractorLinkType.M3U8) {
+                                                this.headers = headers
+                                                this.quality = qualityFromHeight(q)
+                                            }
+                                        )
+                                    }
+                                    found.set(true)
+                                }
+
+                                AnidapUrl.looksLikeMp4(srcUrl, srcType) -> {
+                                    val bytes = AnidapUrl.fetchBytes(srcUrl, payload.headers, 2047)
+                                    if (AnidapUrl.isVideoBytes(bytes)) {
+                                        callback.invoke(
+                                            newExtractorLink(name, label, srcUrl, type = ExtractorLinkType.VIDEO) {
+                                                this.headers = payload.headers
+                                                this.quality = parseQualityToken(qualityToken)
+                                            }
+                                        )
+                                        found.set(true)
+                                    } else if (proxyUrl != srcUrl) {
+                                        val bytes2 = AnidapUrl.fetchBytes(proxyUrl, proxyHeaders(), 2047)
+                                        if (AnidapUrl.isVideoBytes(bytes2)) {
+                                            callback.invoke(
+                                                newExtractorLink(name, label, proxyUrl, type = ExtractorLinkType.VIDEO) {
+                                                    this.headers = proxyHeaders()
+                                                    this.quality = parseQualityToken(qualityToken)
+                                                }
+                                            )
+                                            found.set(true)
+                                        }
+                                    }
+                                }
+
+                                else -> {
+                                    // embed page or something unknown - let the built-in
+                                    // extractors try, fall back to a direct probe
+                                    val refererForExtractor = payload.headers["Referer"]
+                                        ?: payload.headers["referer"] ?: "$mainUrl/"
+                                    val loaded = try {
+                                        loadExtractor(srcUrl, refererForExtractor, subtitleCallback, callback)
+                                    } catch (e: Exception) {
+                                        false
+                                    }
+                                    if (loaded) {
+                                        found.set(true)
+                                    } else {
+                                        val bytes = AnidapUrl.fetchBytes(srcUrl, payload.headers, 2047)
+                                        if (AnidapUrl.isVideoBytes(bytes)) {
+                                            callback.invoke(
+                                                newExtractorLink(name, label, srcUrl, type = ExtractorLinkType.VIDEO) {
+                                                    this.headers = payload.headers
+                                                    this.quality = parseQualityToken(qualityToken)
+                                                }
+                                            )
+                                            found.set(true)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    } catch (e: Exception) {
+                        Log.e("RaghavAnime", "[Anidap] provider ${provider.id} failed: ${e.message}")
+                    }
+                }
+            }.forEach { it.await() }
+        }
+
+        return found.get()
     }
 }

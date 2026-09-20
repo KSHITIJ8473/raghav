@@ -95,15 +95,8 @@ class AnimoTvSlashProvider : MainAPI() {
         @JsonProperty("id") val id: Int? = null
     )
 
-    /**
-     * Extract animeId and slug from the URL passed by CloudStream.
-     * CloudStream prepends mainUrl to our search data, so:
-     *   "https://animotvslash.org|12345|my-slug" → (12345, "my-slug")
-     *   "12345|my-slug" → (12345, "my-slug")
-     */
+    // cloudstream prepends mainUrl to the search data, accept both shapes
     private fun parseLoadUrl(url: String): Pair<Int, String>? {
-        Log.d(TAG, "parseLoadUrl START: url='$url'")
-        // Strip mainUrl prefix if present (CloudStream may prepend https://animotvslash.org/)
         val cleanUrl = url
             .removePrefix("$mainUrl/")
             .removePrefix("$mainUrl|")
@@ -119,7 +112,6 @@ class AnimoTvSlashProvider : MainAPI() {
             Log.e(TAG, "parseLoadUrl: animeId parse failed or slug empty (id='${parts[0]}', slug='$slug')")
             return null
         }
-        Log.d(TAG, "parseLoadUrl: OK animeId=$animeId slug='$slug'")
         return Pair(animeId, slug)
     }
 
@@ -137,7 +129,6 @@ class AnimoTvSlashProvider : MainAPI() {
             } else {
                 // wp/v2/anime with _embed returns [{id, slug, title, _embedded.wp:featuredmedia[0].source_url}]
                 val items = parseJson<List<WpAnimeList>>(res.text)
-                Log.d(TAG, "getMainPage: parsed ${items.size} items from wp/v2/anime")
                 items.mapNotNull { it.toSearchResult() }
             }
 
@@ -153,7 +144,6 @@ class AnimoTvSlashProvider : MainAPI() {
     private fun SearchAnimeResponse.toSearchResult(): SearchResponse? {
         if (title.isBlank()) return null
         val isDub = slug.endsWith("-dub") || title.contains("(Dub)", ignoreCase = true)
-        Log.d(TAG, "toSearchResult: id=$id slug=$slug title='$title' isDub=$isDub")
         // Data format: "$mainUrl|$id|$slug" — prefix with mainUrl so CloudStream doesn't prepend it
         return newAnimeSearchResponse(title, "$mainUrl|$id|$slug", TvType.Anime) {
             addDubStatus(dubExist = isDub, subExist = !isDub)
@@ -180,7 +170,6 @@ class AnimoTvSlashProvider : MainAPI() {
             val res = app.get(url, timeout = 30_000L)
 
             val items = parseJson<List<SearchAnimeResponse>>(res.text)
-            Log.d(TAG, "search: parsed ${items.size} items")
             val results = items.mapNotNull { it.toSearchResult() }
             Log.d(TAG, "search END: '$query' -> ${results.size} results")
             results
@@ -290,7 +279,6 @@ class AnimoTvSlashProvider : MainAPI() {
             // 3. Build episode list
             val isDub = slug.endsWith("-dub") || title.contains("(Dub)", ignoreCase = true)
             val tvType = TvType.Anime
-            Log.d(TAG, "load: [3/3] isDub=$isDub tvType=$tvType")
 
             val episodes = episodePostIds.toList().sortedBy { it.first }.map { (epNum, postId) ->
                 // Data format: "$mainUrl|$postId|$epNum|$isDub"
@@ -452,11 +440,8 @@ class AnimoTvSlashProvider : MainAPI() {
                     // Log any videas.fr URLs
                     val videasUrls = Regex("""https?://[^\s"'<>]*videas\.fr[^\s"'<>]*""").findAll(html)
                         .map { it.value }.distinct().toList()
-                    Log.d(TAG, "loadLinks: [2/3] videas.fr URLs: ${videasUrls.size}")
-                    videasUrls.take(3).forEach { Log.d(TAG, "  videas: $it") }
                     // Log any video-related tags
                     val videoTags = doc.select("video, video-js, iframe")
-                    Log.d(TAG, "loadLinks: [2/3] video/iframe tags: ${videoTags.size}")
                     videoTags.take(3).forEach { }
                 }
             } else {
@@ -466,7 +451,6 @@ class AnimoTvSlashProvider : MainAPI() {
             // 3. If static HTML parsing found nothing, use WebViewResolver to render the page
             //    and intercept .mp4/.m3u8 URLs (video.js injects them via JavaScript)
             if (!found) {
-                Log.d(TAG, "loadLinks: [3/3] static parsing found nothing — using WebViewResolver to intercept stream")
                 try {
                     val resolver = com.lagradost.cloudstream3.network.WebViewResolver(
                         interceptUrl = Regex("""(?i)\.(mp4|m3u8)(?:\?|$)"""),
@@ -492,8 +476,7 @@ class AnimoTvSlashProvider : MainAPI() {
                             }
                         )
                         found = true
-                        Log.d(TAG, "loadLinks: [3/3] WebViewResolver found stream URL")
-                    } else {
+                        } else {
                         Log.e(TAG, "loadLinks: [3/3] WebViewResolver did not intercept .mp4/.m3u8 URL (got: $resolvedUrl)")
                     }
                 } catch (e: Exception) {

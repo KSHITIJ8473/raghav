@@ -56,7 +56,6 @@ class ReplayZoneProvider : MainAPI() {
         cachedReplays?.let { return it }
         return try {
             val res = app.get(dataUrl, timeout = 30_000L)
-            Log.d(TAG, "fetchReplays: HTTP ${res.code}, size=${res.text.length}")
             val text = res.text
             val replays = mutableListOf<Replay>()
             var current: Replay? = null
@@ -113,7 +112,6 @@ class ReplayZoneProvider : MainAPI() {
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         mainUrl = FirebaseDomainHelper.getDomain("replayzone") ?: mainUrl
-        Log.d(TAG, "getMainPage START: section='${request.name}' page=$page")
         val lists = mutableListOf<HomePageList>()
 
         try {
@@ -132,7 +130,7 @@ class ReplayZoneProvider : MainAPI() {
                     val recent = sorted.take(30)
                     if (recent.isNotEmpty()) {
                         val items = recent.mapNotNull { it.toSearchResponse() }
-                        lists.add(HomePageList("🕐 Recently Added", items, isHorizontalImages = true))
+                        lists.add(HomePageList("Recently Added", items, isHorizontalImages = true))
                     }
 
                     // Group by category
@@ -140,24 +138,17 @@ class ReplayZoneProvider : MainAPI() {
                     for (cat in categories) {
                         val catReplays = sorted.filter { it.category == cat }.take(30)
                         if (catReplays.isNotEmpty()) {
-                            val emoji = when (cat) {
-                                "Football" -> "⚽"
-                                "Baseball" -> "⚾"
-                                "Rugby" -> "🏉"
-                                "Motorsport" -> "🏎"
-                                else -> "📺"
-                            }
                             val items = catReplays.mapNotNull { it.toSearchResponse() }
-                            lists.add(HomePageList("$emoji $cat", items, isHorizontalImages = true))
+                            lists.add(HomePageList(cat, items, isHorizontalImages = true))
                         }
                     }
                 }
             }
         } catch (e: Exception) {
-            Log.e(TAG, "getMainPage FAILED: ${e.message}")
+            Log.e(TAG, "main page failed: ${e.message}")
         }
 
-        Log.d(TAG, "getMainPage END: ${lists.size} sections, ${lists.sumOf { it.list.size }} items")
+        Log.d(TAG, "main page: ${lists.size} sections, ${lists.sumOf { it.list.size }} items")
         return newHomePageResponse(lists, hasNext = false)
     }
 
@@ -175,14 +166,13 @@ class ReplayZoneProvider : MainAPI() {
 
     override suspend fun search(query: String): List<SearchResponse> {
         mainUrl = FirebaseDomainHelper.getDomain("replayzone") ?: mainUrl
-        Log.d(TAG, "search START: query='$query'")
         if (query.isBlank()) return emptyList()
         return try {
             val replays = fetchReplays()
             val results = replays
                 .filter { it.title.contains(query, ignoreCase = true) }
                 .mapNotNull { it.toSearchResponse() }
-            Log.d(TAG, "search END: '$query' -> ${results.size} results")
+            Log.d(TAG, "search '$query' -> ${results.size} results")
             results
         } catch (e: Exception) {
             Log.e(TAG, "search FAILED: ${e.message}")
@@ -192,10 +182,8 @@ class ReplayZoneProvider : MainAPI() {
 
     override suspend fun load(url: String): LoadResponse? {
         mainUrl = FirebaseDomainHelper.getDomain("replayzone") ?: mainUrl
-        Log.d(TAG, "load START: url='$url'")
         return try {
             val loadData = parseJson<LoadData>(url)
-            Log.d(TAG, "load: title='${loadData.title}' embeds=${loadData.embeds.size}")
 
             newLiveStreamLoadResponse(loadData.title, url, this.name) {
                 this.posterUrl = loadData.posterUrl
@@ -368,7 +356,7 @@ class ReplayZoneProvider : MainAPI() {
             }
         }
 
-        Log.d(TAG, "loadLinks END: found=$found")
+        Log.d(TAG, "loadLinks found=$found")
         return found
     }
 }

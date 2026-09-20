@@ -41,7 +41,7 @@ import kotlin.coroutines.resume
 
 private const val TAG = "Anidap_CFBypass"
 
-private const val CHAD_HOST = "https://chad.anidap.se"
+private const val CHAD_HOST = "https://chad.anidap.lol"
 
 private const val CF_TRIGGER_URL = "$CHAD_HOST/rest/api/servers?id=one-piece-p8k27&epNum=1"
 
@@ -163,7 +163,7 @@ class AnidapCFDialog(
                     else scheduleNextPoll()
                 }
                 pollElapsedMs >= POLL_TIMEOUT_MS -> {
-                    updateStatus("Timed out. Try opening anidap.se in a browser, then tap Bypass again.")
+                    updateStatus("Timed out. Try opening anidap.lol in a browser, then tap Bypass again.")
                 }
                 else -> scheduleNextPoll()
             }
@@ -349,7 +349,7 @@ class AnidapCFDialog(
         activity?.runOnUiThread {
             statusText?.apply {
                 text = msg
-                if (msg.startsWith("")) {
+                if (msg.startsWith("Done")) {
                     setTextColor(Color.parseColor("#4CAF50"))
                     progressBar?.visibility = View.GONE
                 } else {

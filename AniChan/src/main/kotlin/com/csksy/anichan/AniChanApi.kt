@@ -26,7 +26,7 @@ object AniChanApi {
         try {
             mapper.readValue(text, T::class.java)
         } catch (e: Exception) {
-            Log.d(TAG, "parse failed: ${e.message}")
+            Log.e(TAG, "parse failed: ${e.message}")
             null
         }
 
@@ -34,7 +34,7 @@ object AniChanApi {
         val resp = app.get(url, headers = BASE_HEADERS)
         if (resp.isSuccessful) resp.text else null
     } catch (e: Exception) {
-        Log.d(TAG, "GET $url failed: ${e.message}")
+        Log.e(TAG, "GET $url failed: ${e.message}")
         null
     }
 
@@ -79,7 +79,7 @@ object AniChanApi {
             }
             null
         } catch (e: Exception) {
-            Log.d(TAG, "watch session failed: ${e.message}")
+            Log.e(TAG, "watch session failed: ${e.message}")
             null
         }
     }
@@ -98,7 +98,7 @@ object AniChanApi {
                         return parse<ServersEnvelope>(resp.text)?.servers ?: emptyList()
                     }
                 } catch (e: Exception) {
-                    Log.d(TAG, "watch servers failed: ${e.message}")
+                    Log.e(TAG, "watch servers failed: ${e.message}")
                 }
             }
             delay(400)

@@ -302,7 +302,6 @@ class KdesaProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        Log.d(TAG, "loadLinks: data=$data")
         val parts = payloadParts(data)
         val type = parts.getOrNull(0) ?: return false
         val tmdbId = parts.getOrNull(1)?.toIntOrNull() ?: return false

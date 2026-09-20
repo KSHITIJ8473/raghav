@@ -195,7 +195,7 @@ object MiruroCloudflare {
                     return
                 }
             } catch (e: Exception) {
-                Log.d(TAG, "liveness check failed: ${e.message}")
+                Log.e(TAG, "liveness check failed: ${e.message}")
             }
         }
 
@@ -226,7 +226,7 @@ object MiruroCloudflare {
                                 sessionReadyTime = System.currentTimeMillis()
                                 Log.d(TAG, "warmup done in ${System.currentTimeMillis() - start}ms")
                             } else {
-                                Log.d(TAG, "warmup failed after ${System.currentTimeMillis() - start}ms")
+                                Log.e(TAG, "warmup failed after ${System.currentTimeMillis() - start}ms")
                                 try { webView?.destroy() } catch (_: Exception) {}
                                 sessionWebView = null
                             }
@@ -292,13 +292,13 @@ object MiruroCloudflare {
                             finish(false)
                         }, 25000)
                     } catch (e: Exception) {
-                        Log.d(TAG, "warmup exception: ${e.message}")
+                        Log.e(TAG, "warmup exception: ${e.message}")
                         finish(false)
                     }
                 }
             }
         } catch (e: Exception) {
-            Log.d(TAG, "warmup outer exception: ${e.message}")
+            Log.e(TAG, "warmup outer exception: ${e.message}")
             sessionReady = false
         }
     }
@@ -356,7 +356,7 @@ object MiruroCloudflare {
                     try {
                         wv.evaluateJavascript(js) {}
                     } catch (e: Exception) {
-                        Log.d(TAG, "inject failed: ${e.message}")
+                        Log.e(TAG, "inject failed: ${e.message}")
                         finish(null)
                         return@suspendCancellableCoroutine
                     }
@@ -392,7 +392,7 @@ object MiruroCloudflare {
                                     }
                                 }
                             } catch (e: Exception) {
-                                Log.d(TAG, "poll failed: ${e.message}")
+                                Log.e(TAG, "poll failed: ${e.message}")
                                 finish(null)
                             }
                         }
@@ -412,7 +412,7 @@ object MiruroCloudflare {
         try {
             ensureSession(context, domain)
         } catch (e: Exception) {
-            Log.d(TAG, "ensureSession failed: ${e.message}")
+            Log.e(TAG, "ensureSession failed: ${e.message}")
             return null
         }
         if (!sessionReady) return null
@@ -429,7 +429,7 @@ object MiruroCloudflare {
                 return fetchViaSession(pipeUrl, domain)
             }
         } catch (e: Exception) {
-            Log.d(TAG, "retry failed: ${e.message}")
+            Log.e(TAG, "retry failed: ${e.message}")
         }
         return null
     }

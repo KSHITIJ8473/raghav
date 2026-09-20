@@ -72,7 +72,9 @@ class DamiTVProvider : MainAPI() {
                     }
                 }
             }
-        } catch (e: Exception) { e.message?.let { Log.d("Plugin", it) } }
+        } catch (e: Exception) {
+            Log.e("DamiTV", "request failed - ${e.message}")
+        }
         return emptyList()
     }
 
@@ -85,13 +87,8 @@ class DamiTVProvider : MainAPI() {
         }
     }
 
-    /**
-     * Resolve the domain in a URL to an IP address via DoH, then rewrite the
-     * URL to use the IP directly. This is needed because ExoPlayer's
-     * CronetDataSource uses the system DNS, which may be blocked by ISPs.
-     * The Host header is set to the original domain so the server knows which
-     * virtual host to serve.
-     */
+    // exoplayer resolves through the system DNS which ISPs can block, so
+    // connect by IP resolved over DoH and keep the Host header for the origin
     private fun resolveStreamUrlDns(url: String): String {
         try {
             val domain = Regex("""https?://([^/]+)""").find(url)?.groupValues?.get(1) ?: return url
@@ -99,12 +96,13 @@ class DamiTVProvider : MainAPI() {
             if (ips.isNotEmpty()) {
                 dnsCache[domain] = ips
                 val ip = ips[0].hostAddress
-                // Rewrite URL: https://domain.com/path → https://IP/path
                 val rewritten = url.replace("//$domain", "//$ip")
-                Log.d("DamiTV", "DamiTV: DNS bypass — $domain → $ip")
+                Log.d("DamiTV", "DNS bypass: $domain -> $ip")
                 return rewritten
             }
-        } catch (e: Exception) { e.message?.let { Log.d("Plugin", it) } }
+        } catch (e: Exception) {
+            Log.e("DamiTV", "dns resolve failed - ${e.message}")
+        }
         return url
     }
 
@@ -128,7 +126,7 @@ class DamiTVProvider : MainAPI() {
                 isUrlLoaded = true
             }
         } catch (e: Exception) {
-            Log.d("DamiTV", "DamiTV: Failed to load Firebase URL - ${e.message}")
+            Log.e("DamiTV", "firebase url load failed - ${e.message}")
         }
     }
 
@@ -270,7 +268,7 @@ class DamiTVProvider : MainAPI() {
                 val resp = parseJson<ExtractUrlResponse>(text)
                 if (resp.success) return resp
             } catch (e: Exception) {
-                Log.d("DamiTV", "DamiTV: extract-url attempt ${attempt + 1} failed for $id - ${e.message}")
+                Log.e("DamiTV", "extract-url attempt ${attempt + 1} failed for $id - ${e.message}")
             }
         }
         return null
@@ -349,7 +347,7 @@ class DamiTVProvider : MainAPI() {
             }
             if (liveMatches.isNotEmpty()) {
                 val items = liveMatches.map { matchToSearchResponse(it) }
-                lists.add(HomePageList("🟢 Live Sports Events", items, isHorizontalImages = true))
+                lists.add(HomePageList("Live Sports Events", items, isHorizontalImages = true))
             }
 
             // 2. Upcoming Matches
@@ -360,7 +358,7 @@ class DamiTVProvider : MainAPI() {
             }
             if (upcomingMatches.isNotEmpty()) {
                 val items = upcomingMatches.map { matchToUpcomingSearchResponse(it) }
-                lists.add(HomePageList("📅 Upcoming Matches (Live soon)", items, isHorizontalImages = true))
+                lists.add(HomePageList("Upcoming Matches (Live soon)", items, isHorizontalImages = true))
             }
 
             // 3. 24/7 Channels & Live TV (previously filtered out — now surfaced)
@@ -370,10 +368,10 @@ class DamiTVProvider : MainAPI() {
             }
             if (channels.isNotEmpty()) {
                 val items = channels.map { matchToSearchResponse(it) }
-                lists.add(HomePageList("📡 24/7 Channels & Live TV", items, isHorizontalImages = true))
+                lists.add(HomePageList("24/7 Channels & Live TV", items, isHorizontalImages = true))
             }
         } catch (e: Exception) {
-            Log.d("DamiTV", "DamiTV: Failed to load matches - ${e.message}")
+            Log.e("DamiTV", "matches load failed - ${e.message}")
         }
 
         return newHomePageResponse(lists, hasNext = false)
@@ -398,7 +396,7 @@ class DamiTVProvider : MainAPI() {
                 }
             }
         } catch (e: Exception) {
-            Log.d("DamiTV", "DamiTV: Search failed - ${e.message}")
+            Log.e("DamiTV", "search failed - ${e.message}")
             emptyList()
         }
     }
@@ -443,7 +441,7 @@ class DamiTVProvider : MainAPI() {
                 }
             }
         } catch (e: Exception) {
-            Log.d("DamiTV", "DamiTV: Load failed to query extract-url - ${e.message}")
+            Log.e("DamiTV", "extract-url query failed - ${e.message}")
         }
 
         val streamedSourcesList = eventData.sources ?: eventData.streamedSources
@@ -471,7 +469,7 @@ class DamiTVProvider : MainAPI() {
                         addedStreamedSources = true
                     }
                 } catch (e: Exception) {
-                    Log.d("DamiTV", "DamiTV: Failed to load streamed source - ${e.message}")
+                    Log.e("DamiTV", "streamed source load failed - ${e.message}")
                 }
             }
         }
@@ -676,13 +674,13 @@ class DamiTVProvider : MainAPI() {
                             try {
                                 loadExtractor(response.embedUrl, "$mainUrl/", subtitleCallback, callback)
                             } catch (extractError: Exception) {
-                                Log.d("DamiTV", "DamiTV: loadExtractor failed for ${stream.name} - ${extractError.message}")
+                                Log.e("DamiTV", "loadExtractor failed for ${stream.name} - ${extractError.message}")
                             }
                         }
                     }
                 }
             } catch (e: Exception) {
-                Log.d("DamiTV", "DamiTV: Failed to load stream link for ${stream.name} - ${e.message}")
+                Log.e("DamiTV", "stream link load failed for ${stream.name} - ${e.message}")
             }
         }
 

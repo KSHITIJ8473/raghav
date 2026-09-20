@@ -83,7 +83,6 @@ private object AnidapCFStore {
     fun getCookies(): String? {
         if (cachedCookies.isNullOrBlank()) return null
         if (System.currentTimeMillis() - cachedTimestamp > COOKIE_TTL_MS) {
-            Log.d(TAG, "Stored cookies expired (age=${(System.currentTimeMillis() - cachedTimestamp) / 1000}s)")
             clear()
             return null
         }
@@ -104,7 +103,6 @@ private object AnidapCFStore {
             putString(KEY_HOST, host)
             putLong(KEY_TIMESTAMP, cachedTimestamp)
         }?.apply()
-        Log.d(TAG, "Saved _amx_id cookies for $host (UA=${userAgent.take(50)}...)")
     }
 
     fun clear() {
@@ -122,7 +120,6 @@ fun isAnidapBlocked(response: NiceResponse): Boolean {
     if (response.code != 403 && response.code != 503) return false
     val body = response.text.lowercase()
     if (response.text.length < 200) {
-        Log.d(TAG, "Blocked response (code=${response.code}, size=${response.text.length}): ${response.text.take(100)}")
         return BLOCK_PHRASES.any { body.contains(it) } || body.contains("error")
     }
     return BLOCK_PHRASES.any { body.contains(it) }
@@ -161,7 +158,6 @@ class AnidapCFDialog(
             if (cookiesSaved || !isAdded) return
             CookieManager.getInstance().flush()
             val cookieStr = CookieManager.getInstance().getCookie(targetHost) ?: ""
-            Log.d(TAG, "Poll [${pollElapsedMs}ms] cookies for $targetHost → ${cookieStr.take(100)}")
 
             when {
                 cookieStr.contains("_amx_id") -> {
@@ -300,7 +296,6 @@ class AnidapCFDialog(
                 override fun onPageFinished(view: WebView?, url: String?) {
                     if (cookiesSaved) return
                     val title = view?.title ?: ""
-                    Log.d(TAG, "onPageFinished title='$title' url=$url")
 
                     updateStatus("Page loaded – checking cookies…")
                     CookieManager.getInstance().flush()
@@ -340,7 +335,6 @@ class AnidapCFDialog(
         val ua = webView?.settings?.userAgentString ?: ""
         AnidapCFStore.save(cookieStr, ua, targetHost)
 
-        Log.d(TAG, "Saved _amx_id cookies: ${cookieStr.take(120)}")
         updateStatus("Done! Cookie captured.")
 
         webView?.postDelayed({
@@ -459,7 +453,7 @@ suspend fun cfAppGet(
     if (!isAnidapBlocked(response)) return response
 
     // Blocked — need to bypass
-    Log.d(TAG, "Anidap anti-bot blocked (HTTP ${response.code}) for $url — triggering bypass")
+    Log.e(TAG, "anti-bot blocked (HTTP ${response.code}), triggering bypass")
 
     // Use mutex so only ONE bypass dialog shows at a time
     cfBypassMutex.withLock {

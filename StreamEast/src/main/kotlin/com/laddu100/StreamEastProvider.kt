@@ -1,5 +1,7 @@
 package com.laddu100
 
+import com.lagradost.api.Log
+
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
@@ -138,6 +140,7 @@ class StreamEastProvider : MainAPI() {
                 }
             }
         } catch (e: Exception) {
+            Log.e("StreamEast", "dns resolve failed - ${e.message}")
         }
 
         return emptyList()
@@ -172,6 +175,7 @@ class StreamEastProvider : MainAPI() {
                     return html
                 }
             } catch (e: Exception) {
+                Log.e("StreamEast", "fetch attempt failed - ${e.message}")
             }
             attempts++
             if (attempts < maxAttempts) {
@@ -304,13 +308,14 @@ class StreamEastProvider : MainAPI() {
                 }
             }
         } catch (e: Exception) {
+            Log.e("StreamEast", "main page load failed - ${e.message}")
         }
 
         if (liveItems.isNotEmpty()) {
-            lists.add(HomePageList("🟢 StreamEast - Live Games", liveItems, isHorizontalImages = true))
+            lists.add(HomePageList("StreamEast - Live Games", liveItems, isHorizontalImages = true))
         }
         if (upcomingItems.isNotEmpty()) {
-            lists.add(HomePageList("📅 StreamEast - Upcoming Games", upcomingItems, isHorizontalImages = true))
+            lists.add(HomePageList("StreamEast - Upcoming Games", upcomingItems, isHorizontalImages = true))
         }
 
         if (lists.isEmpty()) {
@@ -346,6 +351,7 @@ class StreamEastProvider : MainAPI() {
                 }
             }
         } catch (e: Exception) {
+            Log.e("StreamEast", "search failed - ${e.message}")
         }
         return results
     }
@@ -386,6 +392,7 @@ class StreamEastProvider : MainAPI() {
                 }
             }
         } catch (e: Exception) {
+            Log.e("StreamEast", "stream list parse failed - ${e.message}")
         }
 
         val streamData = StreamLoadData(title, streamsList)
@@ -434,6 +441,7 @@ class StreamEastProvider : MainAPI() {
                     }
                 )
             } catch (e: Exception) {
+                Log.e("StreamEast", "link emit failed - ${e.message}")
             }
         }
 

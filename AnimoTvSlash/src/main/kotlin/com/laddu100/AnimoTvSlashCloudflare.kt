@@ -172,7 +172,7 @@ class AnimoTvSlashCFDialog(
                     }
                 }
                 pollElapsedMs >= POLL_TIMEOUT_MS -> {
-                    updateStatus("⏱️ Timed out. Try solving the CAPTCHA then tap Bypass again.")
+                    updateStatus("Timed out. Try solving the CAPTCHA then tap Bypass again.")
                 }
                 else -> scheduleNextPoll()
             }
@@ -219,7 +219,7 @@ class AnimoTvSlashCFDialog(
         }
 
         root.addView(TextView(requireContext()).apply {
-            text = "🛡️ ANIMOTVSLASH – Cloudflare Bypass"
+            text = "ANIMOTVSLASH - Cloudflare Bypass"
             textSize = 18f
             setTextColor(Color.WHITE)
             typeface = android.graphics.Typeface.DEFAULT_BOLD
@@ -310,11 +310,11 @@ class AnimoTvSlashCFDialog(
                     Log.d(CF_TAG, "onPageFinished title='$title' url=$url")
 
                     if (isChallengeTitle(title)) {
-                        updateStatus("🔄 Challenge active – solve the CAPTCHA above")
+                        updateStatus("Challenge active - solve the CAPTCHA above")
                         return
                     }
 
-                    updateStatus("✏️ Page loaded – checking cookies…")
+                    updateStatus("Page loaded - checking cookies...")
                     CookieManager.getInstance().flush()
 
                     val cookiesFromTarget = CookieManager.getInstance().getCookie(targetHost) ?: ""
@@ -348,7 +348,7 @@ class AnimoTvSlashCFDialog(
         val ua = webView?.settings?.userAgentString ?: ""
         AnimoTvSlashCFStore.save(cookieStr, ua, targetHost)
 
-        updateStatus("✅ Done! Cookies saved.")
+        updateStatus("Done! Cookies saved.")
 
         webView?.postDelayed({
             if (isAdded) {
@@ -370,7 +370,7 @@ class AnimoTvSlashCFDialog(
         activity?.runOnUiThread {
             statusText?.apply {
                 text = msg
-                if (msg.startsWith("✅")) {
+                if (msg.startsWith("Done")) {
                     setTextColor(Color.parseColor("#4CAF50"))
                     progressBar?.visibility = View.GONE
                 } else {

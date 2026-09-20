@@ -247,7 +247,8 @@ object MegaPlayHelper {
         referer: String,
         subtitles: List<Pair<String, String>>,
         subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (com.lagradost.cloudstream3.utils.ExtractorLink) -> Unit
+        callback: (com.lagradost.cloudstream3.utils.ExtractorLink) -> Unit,
+        withQualitySuffix: Boolean = true
     ): Boolean {
         val playHeaders = mapOf(
             "User-Agent" to USER_AGENT,
@@ -266,7 +267,7 @@ object MegaPlayHelper {
         val variants = masterText?.let { parseVariants(m3u8, it) } ?: emptyList()
         if (variants.isNotEmpty()) {
             for (v in variants) {
-                val suffix = v.quality?.let { "${it}p" } ?: ""
+                val suffix = if (withQualitySuffix) v.quality?.let { "${it}p" } ?: "" else ""
                 callback.invoke(
                     newExtractorLink(
                         source,

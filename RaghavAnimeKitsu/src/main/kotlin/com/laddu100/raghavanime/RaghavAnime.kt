@@ -538,6 +538,12 @@ class RaghavAnime : MainAPI() {
                 }
             },
             {
+                runSource("AniPM", subtitleCallback, callback) { cSub, cLink ->
+                    val anipm = RaghavAniPM()
+                    anipm.loadLinksByAnilistId(aniId, title, jpTitle, episode, isDub, cSub, cLink)
+                }
+            },
+            {
                 runSource("Senshi", subtitleCallback, callback) { cSub, cLink ->
                     val senshi = RaghavSenshi()
                     val searchTitles = listOfNotNull(title, jpTitle).filter { it.isNotBlank() }

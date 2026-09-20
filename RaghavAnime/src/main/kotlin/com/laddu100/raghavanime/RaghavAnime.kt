@@ -580,6 +580,14 @@ class RaghavAnime : MainAPI() {
             },
             {
                 try {
+                    val anipm = RaghavAniPM()
+                    anipm.loadLinksByAnilistId(aniId, title, jpTitle, episode, isDub, subtitleCallback, callback)
+                } catch (e: Throwable) {
+                    Log.e("RaghavAnime", "[AniPM] failed: ${e.message}")
+                }
+            },
+            {
+                try {
                     val senshi = RaghavSenshi()
                     val searchTitles = listOfNotNull(title, jpTitle).filter { it.isNotBlank() }
                     val epData = findEpisodeData(searchTitles, listOfNotNull(title, jpTitle), episode, isDub, year = linkData.year,

@@ -2,7 +2,12 @@ package com.netnaija
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties
 import com.fasterxml.jackson.annotation.JsonProperty
+import com.fasterxml.jackson.databind.JsonNode
+import com.fasterxml.jackson.databind.ObjectMapper
+import com.fasterxml.jackson.databind.node.ArrayNode
+import com.fasterxml.jackson.databind.node.ObjectNode
 import com.lagradost.cloudstream3.*
+import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
 import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.AppUtils.toJson
@@ -12,16 +17,22 @@ import com.lagradost.cloudstream3.utils.M3u8Helper
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.newExtractorLink
 import com.lagradost.cloudstream3.newSubtitleFile
+import com.lagradost.api.Log
+import android.os.Looper
+import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.net.URLEncoder
 import java.security.MessageDigest
-import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.TimeUnit
 
-// wefeed platform (same as moviebox, different deployment).
-// any api response carries an x-user jwt used as bearer auth; until one shows
-// up a timestamp+md5 client token is sent instead. the play api also rejects
-// requests without X-Source: webNetnaijaSite, and mp4 urls want the site referer.
 class NetNaija : MainAPI() {
     override var mainUrl = "https://netnaija.film"
     override var name = "NetNaija"
@@ -37,9 +48,13 @@ class NetNaija : MainAPI() {
     )
 
     private val apiUrl = "https://h5-api.aoneroom.com"
+    private val bff = "$apiUrl/wefeed-h5api-bff"
+    private val TAG = "NetNaija"
+
+    private val ua = "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
 
     private val baseHeaders = mapOf(
-        "User-Agent" to "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36",
+        "User-Agent" to ua,
         "Accept" to "application/json",
         "Origin" to mainUrl,
         "Referer" to "$mainUrl/",
@@ -50,12 +65,23 @@ class NetNaija : MainAPI() {
     private val playHeaders = mapOf(
         "Referer" to "$mainUrl/",
         "Origin" to mainUrl,
-        "User-Agent" to "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
+        "User-Agent" to ua
     )
 
-    private var jwtToken: String? = null
+    // browse channels used by the site's movies / tv-series / animated-series pages
+    private val moviesChannel = 1
+    private val seriesChannel = 2
+    private val animeChannel = 1006
 
-    /** Generate X-Client-Token: {timestamp},{md5(reversed_timestamp)}. */
+    // ranking menu ids from the site's ranking-list page
+    private val trendingAnimeRanking = "62133389738001440"
+    private val top100AnimeRanking = "1513079728666723416"
+
+    private val mapper: ObjectMapper = jacksonObjectMapper()
+
+    private var jwtToken: String? = null
+    private val tokenMutex = Mutex()
+
     private fun generateXClientToken(): String {
         val ts = System.currentTimeMillis() / 1000
         val reversed = ts.toString().reversed()
@@ -64,67 +90,239 @@ class NetNaija : MainAPI() {
         return "$ts,$md5"
     }
 
-    /** Extract JWT from x-user response header (JSON: {"token":"eyJ..."}). */
     private fun extractTokenFromResponse(response: com.lagradost.nicehttp.NiceResponse): String? {
         try {
             val xUser = response.headers?.get("x-user") ?: return null
             if (xUser.isBlank()) return null
-            val token = jacksonObjectMapper().readTree(xUser)["token"]?.asText()
+            val token = mapper.readTree(xUser)["token"]?.asText()
             if (!token.isNullOrBlank()) {
                 jwtToken = token
                 return token
             }
         } catch (e: Exception) {
+            Log.d(TAG, "x-user parse failed: ${e.message}")
         }
         return null
     }
 
-    /** Ensure we have a JWT token; fetch one if needed. */
+    // rows all want a token at once, single flight on the lightest list endpoint
     private suspend fun ensureToken(): String {
         jwtToken?.let { return it }
-        return try {
-            val headers = baseHeaders.toMutableMap()
-            headers["X-Client-Token"] = generateXClientToken()
-            val response = app.get("$apiUrl/wefeed-h5api-bff/home", headers = headers)
-            extractTokenFromResponse(response) ?: ""
-        } catch (e: Exception) {
-            ""
+        return tokenMutex.withLock {
+            jwtToken?.let { return@withLock it }
+            try {
+                val headers = baseHeaders.toMutableMap()
+                headers["X-Client-Token"] = generateXClientToken()
+                val response = app.get("$bff/subject/trending?page=1&perPage=1", headers = headers)
+                extractTokenFromResponse(response) ?: ""
+            } catch (e: Exception) {
+                Log.d(TAG, "token bootstrap failed: ${e.message}")
+                ""
+            }
         }
     }
 
-    /** Build auth headers with BOTH Cookie and Bearer (play needs Cookie, search needs Bearer). */
+    // play calls need the cookie, list calls need the bearer
     private suspend fun authHeaders(extra: Map<String, String> = emptyMap()): Map<String, String> {
         val token = ensureToken()
         val headers = baseHeaders.toMutableMap()
         if (token.isNotEmpty()) {
-            // Send BOTH — play API uses Cookie, search API uses Bearer
             headers["Cookie"] = "token=$token"
             headers["Authorization"] = "Bearer $token"
         } else {
-            // Fallback: use X-Client-Token if no JWT yet
             headers["X-Client-Token"] = generateXClientToken()
         }
         headers.putAll(extra)
         return headers
     }
 
-    override val mainPage = mainPageOf(
-        Pair("trending", "Trending Now")
+    // one /home response holds every section and the rows load in parallel,
+    // so cache it behind the mutex and share across them
+    private val homeMutex = Mutex()
+    private val homeCacheTtl = 10 * 60_000L
+
+    @Volatile
+    private var homeSectionsCache: Map<String, List<NetNaijaSubject>> = emptyMap()
+
+    @Volatile
+    private var homeCacheTime = 0L
+
+    // /home sections are region targeted, build the rows from whatever it returns
+    @Volatile
+    private var dynamicRows: List<MainPageData> = emptyList()
+
+    @Volatile
+    private var homeRowsFuture: CompletableFuture<Unit>? = null
+
+    private val doneFuture = CompletableFuture.completedFuture(Unit)
+
+    private fun homeRowsFresh(): Boolean =
+        homeSectionsCache.isNotEmpty() && System.currentTimeMillis() - homeCacheTime < homeCacheTtl
+
+    @Synchronized
+    private fun refreshHomeRowsAsync(): CompletableFuture<Unit> {
+        if (homeRowsFresh()) return doneFuture
+        homeRowsFuture?.let { return it }
+        val future = CompletableFuture<Unit>()
+        homeRowsFuture = future
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                homeSections()
+            } catch (e: Exception) {
+                Log.d(TAG, "home refresh failed: ${e.message}")
+            } finally {
+                homeRowsFuture = null
+                future.complete(Unit)
+            }
+        }
+        return future
+    }
+
+    // block briefly for the first /home on worker threads, never on the ui thread
+    private fun awaitHomeRows() {
+        if (homeRowsFresh()) return
+        try {
+            refreshHomeRowsAsync().get(4000, TimeUnit.MILLISECONDS)
+        } catch (e: Exception) {
+            Log.d(TAG, "home rows wait failed: ${e.message}")
+        }
+    }
+
+    private fun buildDynamicRows(byTitle: Map<String, List<NetNaijaSubject>>): List<MainPageData> {
+        val used = HashSet<String>()
+        val rows = ArrayList<MainPageData>(byTitle.size)
+        byTitle.forEach { (rawTitle, _) ->
+            val display = cleanSectionTitle(rawTitle).ifBlank { rawTitle }
+            if (used.add(display.lowercase())) {
+                rows.add(MainPageData(name = display, data = "home:$rawTitle"))
+            }
+        }
+        return rows
+    }
+
+    private suspend fun homeSections(): Map<String, List<NetNaijaSubject>> {
+        if (homeRowsFresh()) return homeSectionsCache
+        return homeMutex.withLock {
+            if (homeRowsFresh()) return@withLock homeSectionsCache
+            val sections = try {
+                val response = app.get("$bff/home", headers = authHeaders())
+                extractTokenFromResponse(response)
+                parseJson<NetNaijaHomeResponse>(response.text).data?.operatingList.orEmpty()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.d(TAG, "home fetch failed: ${e.message}")
+                emptyList()
+            }
+            val byTitle = LinkedHashMap<String, List<NetNaijaSubject>>()
+            sections.forEach { section ->
+                val subjects = section.subjects.orEmpty()
+                    .filter { !it.title.isNullOrBlank() && !it.detailPath.isNullOrBlank() }
+                if (subjects.isNotEmpty()) {
+                    byTitle[section.title ?: return@forEach] = subjects
+                }
+            }
+            if (byTitle.isNotEmpty()) {
+                homeSectionsCache = byTitle
+                homeCacheTime = System.currentTimeMillis()
+                val rows = buildDynamicRows(byTitle)
+                // keep the old list when unchanged so row indexes stay stable for pagination
+                if (rows.map { it.data } != dynamicRows.map { it.data }) {
+                    dynamicRows = rows
+                }
+            }
+            byTitle
+        }
+    }
+
+    fun warmUp() {
+        refreshHomeRowsAsync()
+    }
+
+    private val staticMainPage = mainPageOf(
+        "trending" to "Trending Now",
+        "filter:$moviesChannel:Latest" to "Latest Movies",
+        "filter:$seriesChannel:Latest" to "Latest Series",
+        "filter:$animeChannel:Hottest" to "Anime",
+        "filter:$animeChannel:Latest" to "Latest Anime",
+        "rank:$trendingAnimeRanking" to "Trending Anime",
+        "rank:$top100AnimeRanking" to "Top 100 Anime",
     )
+
+    override val mainPage: List<MainPageData>
+        get() {
+            if (Looper.myLooper() === Looper.getMainLooper()) {
+                refreshHomeRowsAsync()
+            } else {
+                awaitHomeRows()
+            }
+            val used = HashSet<String>()
+            staticMainPage.forEach { used.add(it.name.lowercase()) }
+            val rows = ArrayList<MainPageData>(staticMainPage.size + dynamicRows.size)
+            rows.add(staticMainPage.first())
+            dynamicRows.forEach { row ->
+                if (used.add(row.name.lowercase())) rows.add(row)
+            }
+            rows.addAll(staticMainPage.drop(1))
+            return rows
+        }
+
+    // the site decorates section titles with emoji and symbols
+    private fun cleanSectionTitle(title: String): String =
+        title.replace(Regex("[^\\p{L}\\p{N} &+\\[\\]().'-]"), "").trim()
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         mainUrl = FirebaseDomainHelper.getDomain("netnaija") ?: mainUrl
+        val key = request.data
         return try {
-            val headers = authHeaders()
-            val response = app.get(
-                "$apiUrl/wefeed-h5api-bff/subject/trending?page=$page&perPage=20",
-                headers = headers
-            )
-            extractTokenFromResponse(response)
-            val data = parseJson<NetNaijaTrendingResponse>(response.text)
-            val items = data.data?.subjectList?.mapNotNull { it.toSearchResponse() } ?: emptyList()
-            newHomePageResponse(request.name, items, hasNext = data.data?.pager?.hasMore ?: false)
+            when {
+                key == "trending" -> {
+                    val response = app.get("$bff/subject/trending?page=$page&perPage=24", headers = authHeaders())
+                    extractTokenFromResponse(response)
+                    val data = parseJson<NetNaijaTrendingResponse>(response.text).data
+                    val items = data?.subjectList.orEmpty().mapNotNull { it.toSearchResponse() }
+                    newHomePageResponse(request.name, items, hasNext = data?.pager?.hasMore == true)
+                }
+
+                key.startsWith("filter:") -> {
+                    val parts = key.split(":")
+                    val channelId = parts.getOrNull(1)?.toIntOrNull() ?: return newHomePageResponse(request.name, emptyList(), hasNext = false)
+                    val sort = parts.getOrNull(2) ?: "Hottest"
+                    val body = """{"page":$page,"perPage":24,"channelId":$channelId,"sort":"$sort"}"""
+                    val response = app.post(
+                        "$bff/subject/filter",
+                        headers = authHeaders(mapOf("Content-Type" to "application/json")),
+                        requestBody = body.toRequestBody("application/json".toMediaType())
+                    )
+                    extractTokenFromResponse(response)
+                    val data = parseJson<NetNaijaListResponse>(response.text).data
+                    val items = data?.items.orEmpty().mapNotNull { it.toSearchResponse() }
+                    newHomePageResponse(request.name, items, hasNext = data?.pager?.hasMore == true)
+                }
+
+                key.startsWith("rank:") -> {
+                    val listId = key.removePrefix("rank:")
+                    val response = app.get("$bff/ranking-list/content?id=$listId&page=$page&perPage=24", headers = authHeaders())
+                    extractTokenFromResponse(response)
+                    val data = parseJson<NetNaijaRankingResponse>(response.text).data
+                    val items = data?.subjectList.orEmpty().mapNotNull { it.toSearchResponse() }
+                    newHomePageResponse(request.name, items, hasNext = data?.pager?.hasMore == true)
+                }
+
+                key.startsWith("home:") -> {
+                    // curated site sections carry a fixed set of items
+                    if (page > 1) return newHomePageResponse(request.name, emptyList(), hasNext = false)
+                    val rawTitle = key.removePrefix("home:")
+                    val items = homeSections()[rawTitle].orEmpty().mapNotNull { it.toSearchResponse() }
+                    newHomePageResponse(request.name, items, hasNext = false)
+                }
+
+                else -> newHomePageResponse(request.name, emptyList(), hasNext = false)
+            }
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
+            Log.d(TAG, "main page $key failed: ${e.message}")
             newHomePageResponse(request.name, emptyList(), hasNext = false)
         }
     }
@@ -132,21 +330,84 @@ class NetNaija : MainAPI() {
     override suspend fun search(query: String): List<SearchResponse> {
         mainUrl = FirebaseDomainHelper.getDomain("netnaija") ?: mainUrl
         if (query.isBlank()) return emptyList()
+        // subject/search rejects anonymous tokens, the site reads the rendered page
         return try {
-            val headers = authHeaders(mapOf("Content-Type" to "application/json"))
-            val encoded = URLEncoder.encode(query, "UTF-8")
-            val body = """{"keyword":"$encoded","page":1,"perPage":30,"subjectType":0}"""
-            val response = app.post(
-                "$apiUrl/wefeed-h5api-bff/subject/search",
-                headers = headers,
-                requestBody = body.toRequestBody("application/json".toMediaType())
-            )
-            extractTokenFromResponse(response) // Capture token for later
-            val data = parseJson<NetNaijaSearchResponse>(response.text)
-            data.data?.items?.mapNotNull { it.toSearchResponse() } ?: emptyList()
+            val html = app.get(
+                "$mainUrl/search-result?keyword=${URLEncoder.encode(query, "UTF-8")}",
+                headers = mapOf("User-Agent" to ua)
+            ).text
+            parseSearchPage(html)
         } catch (e: Exception) {
+            Log.d(TAG, "search failed: ${e.message}")
             emptyList()
         }
+    }
+
+    private val nuxtDataRegex = Regex(
+        """<script[^>]*id="__NUXT_DATA__"[^>]*>(.*?)</script>""",
+        RegexOption.DOT_MATCHES_ALL
+    )
+
+    private fun parseSearchPage(html: String): List<SearchResponse> {
+        val match = nuxtDataRegex.find(html) ?: return emptyList()
+        val root = try {
+            mapper.readTree(match.groupValues[1])
+        } catch (e: Exception) {
+            Log.d(TAG, "search page json failed: ${e.message}")
+            return emptyList()
+        }
+        if (root !is ArrayNode) return emptyList()
+        for (i in 0 until root.size()) {
+            val node = root.get(i)
+            if (node is ObjectNode && node.has("items") && node.has("pager") && node.get("items").isNumber) {
+                val resolved = resolveNuxtNode(root, node.get("items").asInt(), 0) as? List<*> ?: continue
+                return resolved.mapNotNull { entry ->
+                    try {
+                        mapper.convertValue(entry, NetNaijaSubject::class.java).toSearchResponse()
+                    } catch (e: Exception) {
+                        null
+                    }
+                }
+            }
+        }
+        return emptyList()
+    }
+
+    // nuxt flattens the page state into one array of indexes, resolve one level at a time
+    private fun resolveNuxtNode(arr: ArrayNode, idx: Int, depth: Int): Any? {
+        if (idx < 0 || idx >= arr.size() || depth > 8) return null
+        return when (val node = arr.get(idx)) {
+            is ObjectNode -> {
+                val out = LinkedHashMap<String, Any?>()
+                val fields = node.fields()
+                while (fields.hasNext()) {
+                    val field = fields.next()
+                    out[field.key] = resolveNuxtValue(arr, field.value, depth)
+                }
+                out
+            }
+
+            is ArrayNode -> {
+                val out = ArrayList<Any?>(node.size())
+                for (i in 0 until node.size()) {
+                    out.add(resolveNuxtValue(arr, node.get(i), depth))
+                }
+                out
+            }
+
+            else -> plainNuxtValue(node)
+        }
+    }
+
+    private fun resolveNuxtValue(arr: ArrayNode, value: JsonNode, depth: Int): Any? =
+        if (value.isNumber) resolveNuxtNode(arr, value.asInt(), depth + 1) else plainNuxtValue(value)
+
+    private fun plainNuxtValue(node: JsonNode): Any? = when {
+        node.isTextual -> node.asText()
+        node.isBoolean -> node.asBoolean()
+        node.isInt || node.isLong -> node.asLong()
+        node.isNumber -> node.asDouble()
+        else -> null
     }
 
     override suspend fun load(url: String): LoadResponse? {
@@ -155,20 +416,24 @@ class NetNaija : MainAPI() {
             ?: return null
 
         return try {
-            val headers = authHeaders()
-            val response = app.get(
-                "$apiUrl/wefeed-h5api-bff/detail?detailPath=$detailPath",
-                headers = headers
-            )
+            val response = app.get("$bff/detail?detailPath=$detailPath", headers = authHeaders())
             extractTokenFromResponse(response)
             val data = parseJson<NetNaijaDetailResponse>(response.text).data ?: return null
             val subject = data.subject ?: return null
             val title = subject.title ?: return null
 
             val poster = subject.cover?.url
-            val plot = subject.description
-            val genres = subject.genre?.split(",")?.map { it.trim() }?.filter { it.isNotEmpty() }
+            val plot = subject.description?.takeIf { it.isNotBlank() }
+            val genres = subject.genre?.split(",")?.map { it.trim() }?.filter { it.isNotEmpty() }.orEmpty()
             val year = subject.releaseDate?.substringBefore("-")?.toIntOrNull()
+            val score = subject.imdbRatingValue?.takeIf { it.isNotBlank() }
+                ?.let { runCatching { Score.from10(it) }.getOrNull() }
+            val runtime = subject.duration?.takeIf { it > 0 }?.let { it / 60 }
+            val cast = data.stars.orEmpty().mapNotNull { staff ->
+                staff.name?.let { ActorData(Actor(it, staff.avatarUrl)) }
+            }.take(15)
+            val trailer = subject.trailer?.videoAddress?.url?.takeIf { it.isNotBlank() }
+            val recommendations = fetchRecommendations(subject.subjectId, detailPath)
 
             val tvType = when (subject.subjectType) {
                 1 -> TvType.Movie
@@ -177,21 +442,32 @@ class NetNaija : MainAPI() {
             }
 
             val seasons = data.resource?.seasons ?: emptyList()
-            // Collect all audio/subtitle variants (dubs)
-            val dubs = subject.dubs ?: emptyList()
+            val dubs = subject.dubs.orEmpty().ifEmpty {
+                listOf(
+                    NetNaijaDub(
+                        subjectId = subject.subjectId ?: "",
+                        detailPath = detailPath,
+                        lanName = "Original Audio",
+                        lanCode = "en",
+                        type = 0,
+                        original = true
+                    )
+                )
+            }
 
             if (tvType == TvType.Movie || seasons.isEmpty()) {
-                // Movie — store all dub subjectIds so loadLinks can fetch each audio
-                val movieData = NetNaijaEpisodeData(
-                    dubs = dubs.ifEmpty { listOf(NetNaijaDub(subjectId = subject.subjectId ?: "", detailPath = detailPath, lanName = "Original", lanCode = "en", type = 0)) },
-                    season = 0,
-                    episode = 0
-                ).toJson()
+                // Movie - store all dub subjectIds so loadLinks can fetch each audio
+                val movieData = NetNaijaEpisodeData(dubs = dubs, season = 0, episode = 0).toJson()
                 return newMovieLoadResponse(title, url, tvType, movieData) {
                     this.posterUrl = poster
                     this.plot = plot
                     this.tags = genres
                     this.year = year
+                    this.score = score
+                    this.duration = runtime
+                    this.actors = cast
+                    this.recommendations = recommendations
+                    if (trailer != null) addTrailer(trailer)
                 }
             } else {
                 val episodes = mutableListOf<Episode>()
@@ -199,11 +475,7 @@ class NetNaija : MainAPI() {
                     val seasonNum = season.se ?: return@forEach
                     val maxEp = season.maxEp ?: 0
                     for (ep in 1..maxEp) {
-                        val epData = NetNaijaEpisodeData(
-                            dubs = dubs.ifEmpty { listOf(NetNaijaDub(subjectId = subject.subjectId ?: "", detailPath = detailPath, lanName = "Original", lanCode = "en", type = 0)) },
-                            season = seasonNum,
-                            episode = ep
-                        ).toJson()
+                        val epData = NetNaijaEpisodeData(dubs = dubs, season = seasonNum, episode = ep).toJson()
                         episodes.add(newEpisode(epData) {
                             this.season = seasonNum
                             this.episode = ep
@@ -216,10 +488,31 @@ class NetNaija : MainAPI() {
                     this.plot = plot
                     this.tags = genres
                     this.year = year
+                    this.score = score
+                    this.duration = runtime
+                    this.actors = cast
+                    this.recommendations = recommendations
+                    if (trailer != null) addTrailer(trailer)
                 }
             }
         } catch (e: Exception) {
+            Log.d(TAG, "load failed: ${e.message}")
             null
+        }
+    }
+
+    private suspend fun fetchRecommendations(subjectId: String?, detailPath: String): List<SearchResponse> {
+        if (subjectId.isNullOrBlank()) return emptyList()
+        return try {
+            val response = app.get(
+                "$bff/subject/detail-rec?subjectId=$subjectId&detailPath=$detailPath",
+                headers = authHeaders()
+            )
+            val items = parseJson<NetNaijaListResponse>(response.text).data?.items.orEmpty()
+            items.filter { it.detailPath != detailPath }.mapNotNull { it.toSearchResponse() }.take(12)
+        } catch (e: Exception) {
+            Log.d(TAG, "recommendations failed: ${e.message}")
+            emptyList()
         }
     }
 
@@ -232,26 +525,22 @@ class NetNaija : MainAPI() {
         val epData = try {
             parseJson<NetNaijaEpisodeData>(data)
         } catch (e: Exception) {
+            Log.d(TAG, "episode data parse failed: ${e.message}")
             return false
         }
 
         val dubs = epData.dubs
-
         var found = false
-        var subtitlesLoaded = false
 
-        // Each dub (audio language) is a separate source, labeled with language name.
-        // This follows the same pattern as MovieBox (phisher98).
-        // CloudStream's audioTracks field uses SingleSampleMediaSource which only
-        // works with single-file audio URLs (like YouTube), NOT DASH manifests.
-        // So we must use separate sources for each audio language.
+        // soft subs only hang off the original audio stream, pull them once at the end
+        var captionStream: Triple<String, String, String>? = null
+
+        // one source per audio track, cloudstream's audioTracks can't handle dash manifests
         dubs.forEach { dub ->
             val dubSubjectId = dub.subjectId ?: return@forEach
             val dubDetailPath = dub.detailPath ?: return@forEach
-            val lanName = dub.lanName ?: "Original"
-            val isDub = dub.type == 0 // type 0 = dub, type 1 = sub
-            val audioLabel = if (isDub) lanName.replace("dub", "Audio").replace("Dub", "Audio")
-                             else lanName.replace("sub", "Sub").replace("Sub", "Sub")
+            val label = sourceLabel(dub)
+            if (label == null) return@forEach
 
             val playReferer = "$mainUrl/videoPlayPage/$dubDetailPath"
             val headers = authHeaders(mapOf(
@@ -259,7 +548,7 @@ class NetNaija : MainAPI() {
                 "Referer" to playReferer
             ))
 
-            val playUrl = "$apiUrl/wefeed-h5api-bff/subject/play?subjectId=$dubSubjectId" +
+            val playUrl = "$bff/subject/play?subjectId=$dubSubjectId" +
                 "&se=${epData.season}&ep=${epData.episode}&detailPath=$dubDetailPath"
 
             val playData = try {
@@ -267,14 +556,16 @@ class NetNaija : MainAPI() {
                 extractTokenFromResponse(resp)
                 parseJson<NetNaijaPlayResponse>(resp.text).data
             } catch (e: Exception) {
+                Log.d(TAG, "play fetch failed for $label: ${e.message}")
                 return@forEach
             } ?: return@forEach
 
-            // MP4 streams
             val mp4Streams = playData.streams ?: emptyList()
             mp4Streams.forEach { stream ->
                 val url = stream.url ?: return@forEach
                 val resolution = stream.resolutions ?: return@forEach
+                if (stream.vipLocked == true) return@forEach
+
                 val qualityInt = resolution.toIntOrNull()
                 val qualityLabel = when (qualityInt) {
                     360 -> Qualities.P360.value
@@ -288,8 +579,8 @@ class NetNaija : MainAPI() {
 
                 callback.invoke(
                     newExtractorLink(
-                        "NetNaija $audioLabel",
-                        "$audioLabel ${resolution}p${sizeLabel}",
+                        "NetNaija $label",
+                        "$label ${resolution}p${sizeLabel}",
                         url,
                         type = ExtractorLinkType.VIDEO
                     ) {
@@ -299,27 +590,20 @@ class NetNaija : MainAPI() {
                     }
                 )
                 found = true
+            }
 
-                // Fetch subtitles only once (from first dub's first stream)
-                if (!subtitlesLoaded && stream == mp4Streams.first()) {
-                    fetchSubtitles(
-                        streamId = stream.id ?: return@forEach,
-                        subjectId = dubSubjectId,
-                        detailPath = dubDetailPath,
-                        headers = headers,
-                        subtitleCallback = subtitleCallback
-                    )
-                    subtitlesLoaded = true
+            if ((dub.original == true || captionStream == null) && mp4Streams.isNotEmpty()) {
+                mp4Streams.first().id?.let { streamId ->
+                    captionStream = Triple(streamId, dubSubjectId, dubDetailPath)
                 }
             }
 
-            // DASH stream
             playData.dash?.forEach { dashStream ->
                 val url = dashStream.url ?: return@forEach
                 callback.invoke(
                     newExtractorLink(
-                        "NetNaija $audioLabel",
-                        "$audioLabel DASH (Adaptive)",
+                        "NetNaija $label",
+                        "$label DASH (Adaptive)",
                         url,
                         type = ExtractorLinkType.DASH
                     ) {
@@ -330,13 +614,12 @@ class NetNaija : MainAPI() {
                 found = true
             }
 
-            // HLS stream
             playData.hls?.forEach { hlsStream ->
                 val url = hlsStream.url ?: return@forEach
                 val resolution = hlsStream.resolutions ?: "0"
                 try {
                     M3u8Helper.generateM3u8(
-                        "NetNaija $audioLabel HLS ${resolution}p",
+                        "NetNaija $label HLS ${resolution}p",
                         url,
                         "$mainUrl/",
                         headers = playHeaders
@@ -345,8 +628,8 @@ class NetNaija : MainAPI() {
                 } catch (e: Exception) {
                     callback.invoke(
                         newExtractorLink(
-                            "NetNaija $audioLabel",
-                            "$audioLabel HLS ${resolution}p",
+                            "NetNaija $label",
+                            "$label HLS ${resolution}p",
                             url,
                             type = ExtractorLinkType.M3U8
                         ) {
@@ -359,21 +642,37 @@ class NetNaija : MainAPI() {
             }
         }
 
+        captionStream?.let { (streamId, subjectId, detailPath) ->
+            fetchSubtitles(streamId, subjectId, detailPath, subtitleCallback)
+        }
+
         return found
     }
 
-    /** Fetch and emit all available subtitles. */
+    // "English dub" -> English Dub, "Arabic sub" -> Arabic Hardsub
+    private fun sourceLabel(dub: NetNaijaDub): String? {
+        val lanName = dub.lanName ?: return null
+        if (dub.original == true) return "Original"
+        val base = lanName.substringBefore(" dub").substringBefore(" sub").trim()
+        if (base.isEmpty()) return null
+        val pretty = when (base.lowercase()) {
+            "ptbr" -> "PT-BR"
+            "esla" -> "ES-LA"
+            else -> base.replaceFirstChar { it.uppercase() }
+        }
+        return if (dub.type == 1) "$pretty Hardsub" else "$pretty Dub"
+    }
+
     private suspend fun fetchSubtitles(
         streamId: String,
         subjectId: String,
         detailPath: String,
-        headers: Map<String, String>,
         subtitleCallback: (SubtitleFile) -> Unit
     ) {
         try {
-            val captionUrl = "$apiUrl/wefeed-h5api-bff/subject/caption" +
+            val captionUrl = "$bff/subject/caption" +
                 "?format=MP4&id=$streamId&subjectId=$subjectId&detailPath=$detailPath"
-            val response = app.get(captionUrl, headers = headers)
+            val response = app.get(captionUrl, headers = authHeaders(mapOf("X-Source" to "webNetnaijaSite")))
             val data = parseJson<NetNaijaCaptionResponse>(response.text).data
             data?.captions?.forEach { caption ->
                 val url = caption.url ?: return@forEach
@@ -381,6 +680,7 @@ class NetNaija : MainAPI() {
                 subtitleCallback.invoke(newSubtitleFile(lang, url))
             }
         } catch (e: Exception) {
+            Log.d(TAG, "caption fetch failed: ${e.message}")
         }
     }
 
@@ -408,7 +708,8 @@ data class NetNaijaDub(
     @JsonProperty("detailPath") val detailPath: String? = null,
     @JsonProperty("lanName") val lanName: String? = null,
     @JsonProperty("lanCode") val lanCode: String? = null,
-    @JsonProperty("type") val type: Int? = null
+    @JsonProperty("type") val type: Int? = null,
+    @JsonProperty("original") val original: Boolean? = null
 )
 
 data class NetNaijaEpisodeData(
@@ -435,7 +736,26 @@ data class NetNaijaSubject(
     @JsonProperty("countryName") val countryName: String? = null,
     @JsonProperty("dubs") val dubs: List<NetNaijaDub>? = null,
     @JsonProperty("imdbRatingValue") val imdbRatingValue: String? = null,
+    @JsonProperty("trailer") val trailer: NetNaijaTrailer? = null,
     @JsonProperty("detailPath") val detailPath: String? = null
+)
+
+@JsonIgnoreProperties(ignoreUnknown = true)
+data class NetNaijaTrailer(
+    @JsonProperty("videoAddress") val videoAddress: NetNaijaTrailerVideo? = null
+)
+
+@JsonIgnoreProperties(ignoreUnknown = true)
+data class NetNaijaTrailerVideo(
+    @JsonProperty("url") val url: String? = null
+)
+
+@JsonIgnoreProperties(ignoreUnknown = true)
+data class NetNaijaStaff(
+    @JsonProperty("staffId") val staffId: String? = null,
+    @JsonProperty("name") val name: String? = null,
+    @JsonProperty("character") val character: String? = null,
+    @JsonProperty("avatarUrl") val avatarUrl: String? = null
 )
 
 @JsonIgnoreProperties(ignoreUnknown = true)
@@ -477,15 +797,28 @@ data class NetNaijaHomeResponse(
 )
 
 @JsonIgnoreProperties(ignoreUnknown = true)
-data class NetNaijaSearchData(
+data class NetNaijaListData(
     @JsonProperty("items") val items: List<NetNaijaSubject>? = null,
     @JsonProperty("pager") val pager: NetNaijaPager? = null
 )
 
 @JsonIgnoreProperties(ignoreUnknown = true)
-data class NetNaijaSearchResponse(
+data class NetNaijaListResponse(
     @JsonProperty("code") val code: Int? = null,
-    @JsonProperty("data") val data: NetNaijaSearchData? = null
+    @JsonProperty("data") val data: NetNaijaListData? = null
+)
+
+@JsonIgnoreProperties(ignoreUnknown = true)
+data class NetNaijaRankingData(
+    @JsonProperty("title") val title: String? = null,
+    @JsonProperty("subjectList") val subjectList: List<NetNaijaSubject>? = null,
+    @JsonProperty("pager") val pager: NetNaijaPager? = null
+)
+
+@JsonIgnoreProperties(ignoreUnknown = true)
+data class NetNaijaRankingResponse(
+    @JsonProperty("code") val code: Int? = null,
+    @JsonProperty("data") val data: NetNaijaRankingData? = null
 )
 
 @JsonIgnoreProperties(ignoreUnknown = true)
@@ -509,7 +842,8 @@ data class NetNaijaResource(
 @JsonIgnoreProperties(ignoreUnknown = true)
 data class NetNaijaDetailData(
     @JsonProperty("subject") val subject: NetNaijaSubject? = null,
-    @JsonProperty("resource") val resource: NetNaijaResource? = null
+    @JsonProperty("resource") val resource: NetNaijaResource? = null,
+    @JsonProperty("stars") val stars: List<NetNaijaStaff>? = null
 )
 
 @JsonIgnoreProperties(ignoreUnknown = true)

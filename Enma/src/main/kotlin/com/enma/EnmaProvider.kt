@@ -6,15 +6,14 @@ import com.google.gson.JsonParser
 import com.lagradost.api.Log
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.app
-import com.lagradost.cloudstream3.network.WebViewResolver
 import com.lagradost.cloudstream3.newSubtitleFile
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.AppUtils.toJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
-import com.lagradost.cloudstream3.utils.M3u8Helper
 import com.lagradost.cloudstream3.utils.loadExtractor
 import com.lagradost.cloudstream3.utils.newExtractorLink
+import kotlinx.coroutines.delay
 import java.net.URLEncoder
 
 class EnmaProvider : MainAPI() {
@@ -28,7 +27,7 @@ class EnmaProvider : MainAPI() {
     private val apiUrl = "https://api.enma.lol/api"
 
     private val headers = mapOf(
-        "User-Agent" to "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36",
+        "User-Agent" to EnmaDecryptor.USER_AGENT,
         "Accept" to "application/json, text/plain, */*",
         "Referer" to "$mainUrl/",
         "Origin" to mainUrl,
@@ -36,6 +35,7 @@ class EnmaProvider : MainAPI() {
 
     override val mainPage = mainPageOf(
         "$apiUrl/top-airing" to "Top Airing",
+        "$apiUrl/most-popular" to "Most Popular",
         "$apiUrl/most-favorite" to "Most Favorite",
         "$apiUrl/recently-added" to "Recently Added",
         "$apiUrl/recently-updated" to "Recently Updated",
@@ -54,25 +54,8 @@ class EnmaProvider : MainAPI() {
     @JsonIgnoreProperties(ignoreUnknown = true)
     data class EnmaAnimeItem(
         @JsonProperty("id") val id: String? = null,
-        @JsonProperty("data_id") val dataId: String? = null,
-        @JsonProperty("anilistId") val anilistId: Int? = null,
-        @JsonProperty("malId") val malId: Int? = null,
         @JsonProperty("title") val title: String? = null,
-        @JsonProperty("japanese_title") val japaneseTitle: String? = null,
-        @JsonProperty("poster") val poster: String? = null,
-        @JsonProperty("description") val description: String? = null,
-        @JsonProperty("tvInfo") val tvInfo: EnmaTvInfo? = null,
-        @JsonProperty("adultContent") val adultContent: Boolean? = null
-    )
-    @JsonIgnoreProperties(ignoreUnknown = true)
-    data class EnmaTvInfo(
-        @JsonProperty("quality") val quality: String? = null,
-        @JsonProperty("sub") val sub: Int? = null,
-        @JsonProperty("dub") val dub: Int? = null,
-        @JsonProperty("eps") val eps: Int? = null,
-        @JsonProperty("rating") val rating: String? = null,
-        @JsonProperty("showType") val showType: String? = null,
-        @JsonProperty("duration") val duration: String? = null
+        @JsonProperty("poster") val poster: String? = null
     )
     @JsonIgnoreProperties(ignoreUnknown = true)
     data class EnmaInfoResponse(
@@ -81,28 +64,21 @@ class EnmaProvider : MainAPI() {
     )
     @JsonIgnoreProperties(ignoreUnknown = true)
     data class EnmaInfoResults(
-        @JsonProperty("data") val data: EnmaInfoData? = null,
-        @JsonProperty("seasons") val seasons: List<Any>? = null
+        @JsonProperty("data") val data: EnmaInfoData? = null
     )
     @JsonIgnoreProperties(ignoreUnknown = true)
     data class EnmaInfoData(
         @JsonProperty("id") val id: String? = null,
         @JsonProperty("title") val title: String? = null,
-        @JsonProperty("japanese_title") val japaneseTitle: String? = null,
         @JsonProperty("poster") val poster: String? = null,
-        @JsonProperty("animeInfo") val animeInfo: EnmaAnimeInfo? = null,
-        @JsonProperty("adultContent") val adultContent: Boolean? = null
+        @JsonProperty("showType") val showType: String? = null,
+        @JsonProperty("animeInfo") val animeInfo: EnmaAnimeInfo? = null
     )
     @JsonIgnoreProperties(ignoreUnknown = true)
     data class EnmaAnimeInfo(
         @JsonProperty("Overview") val overview: String? = null,
-        @JsonProperty("tvInfo") val tvInfo: EnmaTvInfo? = null,
-        @JsonProperty("Studio") val studio: List<String>? = null,
         @JsonProperty("Genres") val genres: List<String>? = null,
-        @JsonProperty("Aired") val aired: String? = null,
-        @JsonProperty("Rating") val rating: String? = null,
-        @JsonProperty("Status") val status: String? = null,
-        @JsonProperty("Episodes") val episodes: String? = null
+        @JsonProperty("Status") val status: String? = null
     )
     @JsonIgnoreProperties(ignoreUnknown = true)
     data class EnmaEpisodesResponse(
@@ -111,8 +87,6 @@ class EnmaProvider : MainAPI() {
     )
     @JsonIgnoreProperties(ignoreUnknown = true)
     data class EnmaEpisodesResults(
-        @JsonProperty("totalEpisodes") val totalEpisodes: Int? = null,
-        @JsonProperty("airedEpisodes") val airedEpisodes: Int? = null,
         @JsonProperty("episodes") val episodes: List<EnmaEpisode>? = null
     )
     @JsonIgnoreProperties(ignoreUnknown = true)
@@ -120,9 +94,7 @@ class EnmaProvider : MainAPI() {
         @JsonProperty("episode_no") val episodeNo: Int? = null,
         @JsonProperty("id") val id: String? = null,
         @JsonProperty("title") val title: String? = null,
-        @JsonProperty("filler") val filler: Boolean? = null,
-        @JsonProperty("recap") val recap: Boolean? = null,
-        @JsonProperty("airDate") val airDate: String? = null
+        @JsonProperty("filler") val filler: Boolean? = null
     )
     @JsonIgnoreProperties(ignoreUnknown = true)
     data class EnmaServersResponse(
@@ -132,8 +104,7 @@ class EnmaProvider : MainAPI() {
     @JsonIgnoreProperties(ignoreUnknown = true)
     data class EnmaServer(
         @JsonProperty("type") val type: String? = null,
-        @JsonProperty("serverName") val serverName: String? = null,
-        @JsonProperty("data_id") val dataId: String? = null
+        @JsonProperty("serverName") val serverName: String? = null
     )
     @JsonIgnoreProperties(ignoreUnknown = true)
     data class EnmaStreamResponse(
@@ -142,16 +113,11 @@ class EnmaProvider : MainAPI() {
     )
     @JsonIgnoreProperties(ignoreUnknown = true)
     data class EnmaStreamResults(
-        @JsonProperty("streamingLink") val streamingLink: EnmaStreamingLink? = null,
-        @JsonProperty("servers") val servers: List<EnmaServer>? = null
+        @JsonProperty("streamingLink") val streamingLink: EnmaStreamingLink? = null
     )
     @JsonIgnoreProperties(ignoreUnknown = true)
     data class EnmaStreamingLink(
-        @JsonProperty("anilistId") val anilistId: String? = null,
-        @JsonProperty("episodeNum") val episodeNum: String? = null,
-        @JsonProperty("type") val type: String? = null,
-        @JsonProperty("iframe") val iframe: String? = null,
-        @JsonProperty("server") val server: String? = null
+        @JsonProperty("iframe") val iframe: String? = null
     )
 
     data class EpisodeLoadData(
@@ -161,27 +127,24 @@ class EnmaProvider : MainAPI() {
         val type: String
     )
 
-    private val mobileUA =
-        "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
-
     private suspend fun fetchApi(url: String): String? {
         return EnmaDecryptor.fetchAndDecrypt(url, headers)
     }
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val url = "${request.data}?page=$page"
         val response = try {
-            fetchApi(url)
+            fetchApi("${request.data}?page=$page")
         } catch (e: Exception) {
+            Log.e("Enma", "getMainPage ${request.name} fetch failed: ${e.message}")
             return newHomePageResponse(request.name, emptyList())
         } ?: return newHomePageResponse(request.name, emptyList())
 
-        val parsed = try {
-            parseJson<EnmaSearchResponse>(response)
+        val items = try {
+            parseJson<EnmaSearchResponse>(response).results?.data
         } catch (e: Exception) {
-            return newHomePageResponse(request.name, emptyList())
-        }
-        val items = parsed.results?.data?.mapNotNull { it.toSearchResult() } ?: emptyList()
+            Log.e("Enma", "getMainPage ${request.name} parse failed: ${e.message}")
+            null
+        }?.mapNotNull { it.toSearchResult() } ?: emptyList()
         return newHomePageResponse(request.name, items)
     }
 
@@ -190,15 +153,16 @@ class EnmaProvider : MainAPI() {
         val response = try {
             fetchApi("$apiUrl/search?keyword=$encoded&page=1")
         } catch (e: Exception) {
+            Log.e("Enma", "search fetch failed: ${e.message}")
             return emptyList()
         } ?: return emptyList()
 
-        val parsed = try {
-            parseJson<EnmaSearchResponse>(response)
+        return try {
+            parseJson<EnmaSearchResponse>(response).results?.data
         } catch (e: Exception) {
-            return emptyList()
-        }
-        return parsed.results?.data?.mapNotNull { it.toSearchResult() } ?: emptyList()
+            Log.e("Enma", "search parse failed: ${e.message}")
+            emptyList()
+        }?.mapNotNull { it.toSearchResult() } ?: emptyList()
     }
 
     private fun EnmaAnimeItem.toSearchResult(): AnimeSearchResponse? {
@@ -216,26 +180,25 @@ class EnmaProvider : MainAPI() {
         val infoText = try {
             fetchApi("$apiUrl/info?id=$animeId")
         } catch (e: Exception) {
+            Log.e("Enma", "info fetch failed for $animeId: ${e.message}")
             return null
         } ?: return null
 
         val info = try {
             parseJson<EnmaInfoResponse>(infoText).results?.data
         } catch (e: Exception) {
-            return null
+            Log.e("Enma", "info parse failed for $animeId: ${e.message}")
+            null
         } ?: return null
 
         val title = info.title ?: return null
-        val poster = info.poster
-        val plot = info.animeInfo?.overview
-        val genres = info.animeInfo?.genres ?: emptyList()
         val status = info.animeInfo?.status
         val showStatus = when {
             status?.contains("Currently", ignoreCase = true) == true -> ShowStatus.Ongoing
             status?.contains("Finished", ignoreCase = true) == true -> ShowStatus.Completed
             else -> null
         }
-        val tvType = when (info.animeInfo?.tvInfo?.showType) {
+        val tvType = when (info.showType) {
             "Movie" -> TvType.AnimeMovie
             "OVA", "ONA" -> TvType.OVA
             else -> TvType.Anime
@@ -244,26 +207,16 @@ class EnmaProvider : MainAPI() {
         val epsText = try {
             fetchApi("$apiUrl/episodes/$animeId")
         } catch (e: Exception) {
+            Log.e("Enma", "episodes fetch failed for $animeId: ${e.message}")
             return null
         } ?: return null
 
         val epsData = try {
             parseJson<EnmaEpisodesResponse>(epsText).results?.episodes
         } catch (e: Exception) {
-            return null
+            Log.e("Enma", "episodes parse failed for $animeId: ${e.message}")
+            null
         } ?: emptyList()
-
-        var hasDub = false
-        var hasSub = true
-        try {
-            val serversText = fetchApi("$apiUrl/servers/$animeId?ep=1")
-            if (!serversText.isNullOrBlank()) {
-                val servers = parseJson<EnmaServersResponse>(serversText).results ?: emptyList()
-                hasDub = servers.any { it.type == "dub" }
-                hasSub = servers.any { it.type == "sub" }
-            }
-        } catch (e: Exception) {
-        }
 
         val subEpisodes = mutableListOf<Episode>()
         val dubEpisodes = mutableListOf<Episode>()
@@ -272,31 +225,27 @@ class EnmaProvider : MainAPI() {
             val epNum = ep.episodeNo ?: return@forEach
             val epId = ep.id ?: return@forEach
             val epTitle = ep.title?.takeIf { it.isNotBlank() }
+            val fillerNote = if (ep.filler == true) "Filler episode" else null
 
-            if (hasSub) {
-                subEpisodes.add(newEpisode(EpisodeLoadData(animeId, epId, epNum, "sub").toJson()) {
-                    this.episode = epNum
-                    this.name = epTitle ?: "Episode $epNum"
-                    this.description = if (ep.filler == true) "Filler episode" else null
-                })
-            }
-            if (hasDub) {
-                dubEpisodes.add(newEpisode(EpisodeLoadData(animeId, epId, epNum, "dub").toJson()) {
-                    this.episode = epNum
-                    this.name = epTitle ?: "Episode $epNum"
-                    this.description = if (ep.filler == true) "Filler episode" else null
-                })
-            }
+            subEpisodes.add(newEpisode(EpisodeLoadData(animeId, epId, epNum, "sub").toJson()) {
+                this.episode = epNum
+                this.name = epTitle ?: "Episode $epNum"
+                this.description = fillerNote
+            })
+            dubEpisodes.add(newEpisode(EpisodeLoadData(animeId, epId, epNum, "dub").toJson()) {
+                this.episode = epNum
+                this.name = epTitle ?: "Episode $epNum"
+                this.description = fillerNote
+            })
         }
 
-        val finalType = if (tvType == TvType.AnimeMovie && dubEpisodes.isNotEmpty()) TvType.Anime else tvType
-        return newAnimeLoadResponse(title, url, finalType) {
-            this.posterUrl = poster
-            this.plot = plot
-            this.tags = genres
+        return newAnimeLoadResponse(title, url, tvType) {
+            this.posterUrl = info.poster
+            this.plot = info.animeInfo?.overview
+            this.tags = info.animeInfo?.genres ?: emptyList()
             this.showStatus = showStatus
-            if (subEpisodes.isNotEmpty()) addEpisodes(DubStatus.Subbed, subEpisodes)
-            if (dubEpisodes.isNotEmpty()) addEpisodes(DubStatus.Dubbed, dubEpisodes)
+            addEpisodes(DubStatus.Subbed, subEpisodes)
+            addEpisodes(DubStatus.Dubbed, dubEpisodes)
         }
     }
 
@@ -309,319 +258,463 @@ class EnmaProvider : MainAPI() {
         val loadData = try {
             parseJson<EpisodeLoadData>(data)
         } catch (e: Exception) {
+            Log.e("Enma", "loadLinks got bad data: ${e.message}")
             return false
         }
 
-        val animeId = loadData.animeId
-        val episodeId = loadData.episodeId
-        val type = loadData.type
-        val epNum = loadData.episodeNum
-
         val servers = try {
-            val serversText = fetchApi("$apiUrl/servers/$animeId?ep=$epNum")
+            val serversText = fetchApi("$apiUrl/servers/${loadData.animeId}?ep=${loadData.episodeNum}")
             if (serversText.isNullOrBlank()) emptyList()
             else parseJson<EnmaServersResponse>(serversText).results ?: emptyList()
         } catch (e: Exception) {
+            Log.e("Enma", "servers fetch failed for ${loadData.animeId} ep${loadData.episodeNum}: ${e.message}")
             emptyList()
         }
 
-        val typeServers = servers.filter { it.type == type }
-        if (typeServers.isEmpty()) return false
-
-        val serverNames = typeServers.mapNotNull { it.serverName?.takeIf { n -> n.isNotBlank() } }
-            .ifEmpty { typeServers.mapIndexed { idx, _ -> "ENMA-${idx + 1}" } }
-
+        val wantedTypes = if (loadData.type == "dub") listOf("dub") else listOf("sub", "hsub")
+        val seenIframes = mutableSetOf<String>()
         var found = false
-        val seenUrls = mutableSetOf<String>()
 
-        for (serverName in serverNames) {
-            try {
-                val encodedId = URLEncoder.encode(episodeId, "UTF-8")
-                val streamUrl = "$apiUrl/stream?id=$encodedId&server=$serverName&type=$type"
-                val streamText = fetchApi(streamUrl) ?: continue
-                val streamData = parseJson<EnmaStreamResponse>(streamText)
-                val iframe = streamData.results?.streamingLink?.iframe ?: continue
+        for (groupType in wantedTypes) {
+            val group = servers.filter { it.type == groupType }
+            group.forEachIndexed { index, server ->
+                val apiName = server.serverName?.takeIf { it.isNotBlank() } ?: return@forEachIndexed
+                val label = if (groupType == "hsub") "ENMA-${index + 1} hardsub" else "ENMA-${index + 1}"
+                try {
+                    val encodedId = URLEncoder.encode(loadData.episodeId, "UTF-8")
+                    val streamText = fetchApi("$apiUrl/stream?id=$encodedId&server=$apiName&type=$groupType")
+                        ?: return@forEachIndexed
+                    val iframe = parseJson<EnmaStreamResponse>(streamText).results?.streamingLink?.iframe
+                        ?: return@forEachIndexed
+                    if (!seenIframes.add(iframe)) return@forEachIndexed
 
-                if (!seenUrls.add(iframe)) continue
-
-                val domain = Regex("""https?://([^/]+)""").find(iframe)?.groupValues?.get(1) ?: ""
-                val displayType = if (type == "dub") "DUB" else "SUB"
-
-                val resolved = when {
-                    domain.contains("megaplay", ignoreCase = true) ->
-                        resolveMegaPlay(iframe, serverName, type, subtitleCallback, callback)
-                    domain.contains("4animo", ignoreCase = true) ->
-                        resolve4Animo(iframe, serverName, displayType, subtitleCallback, callback)
-                    domain.contains("vidnest", ignoreCase = true) ->
-                        resolveVidnest(iframe, serverName, displayType, subtitleCallback, callback)
-                    domain.contains("tryembed", ignoreCase = true) ->
-                        resolveTryEmbed(iframe, serverName, displayType, subtitleCallback, callback)
-                    else -> {
-                        try {
-                            loadExtractor(iframe, "$mainUrl/", subtitleCallback, callback)
-                        } catch (e: Exception) {
-                            false
-                        }
+                    val host = Regex("""https?://([^/]+)""").find(iframe)?.groupValues?.get(1)
+                        ?: return@forEachIndexed
+                    val resolved = when {
+                        host.contains("megaplay", ignoreCase = true) ->
+                            resolveMegaPlay(iframe, label, subtitleCallback, callback)
+                        host.contains("tryembed", ignoreCase = true) ->
+                            resolveTryEmbed(iframe, label, subtitleCallback, callback)
+                        host.contains("4animo", ignoreCase = true) ->
+                            resolve4Animo(iframe, label, subtitleCallback, callback)
+                        host.contains("vidhawk", ignoreCase = true) ->
+                            resolveVidhawk(iframe, label, subtitleCallback, callback)
+                        else -> loadExtractor(iframe, "$mainUrl/", subtitleCallback, callback)
                     }
+                    if (resolved) found = true
+                } catch (e: Exception) {
+                    Log.d("Enma", "$label failed: ${e.message}")
                 }
-                if (resolved) found = true
-            } catch (e: Exception) {
-                Log.d("Enma", "Failed to resolve $serverName: ${e.message}")
             }
         }
 
         return found
     }
 
-    // 4animo uses session-tied tokens: embed page → getSources API → m3u8 path.
-    // JW Player doesn't auto-play in headless WebView, so we fetch all 3 directly.
-    private suspend fun resolve4Animo(
+    private fun pageHeaders(referer: String): Map<String, String> = mapOf(
+        "User-Agent" to EnmaDecryptor.USER_AGENT,
+        "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Referer" to referer
+    )
+
+    private suspend fun emitLink(
+        label: String,
+        url: String,
+        type: ExtractorLinkType,
+        referer: String,
+        extraHeaders: Map<String, String>,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        callback.invoke(
+            newExtractorLink(
+                source = "Enma",
+                name = label,
+                url = url,
+                type = type
+            ) {
+                this.referer = referer
+                this.headers = mapOf("User-Agent" to EnmaDecryptor.USER_AGENT) + extraHeaders
+            }
+        )
+    }
+
+    private suspend fun emitSubtitles(
+        root: com.google.gson.JsonObject,
+        urlPrefix: String,
+        headers: Map<String, String>,
+        subtitleCallback: (SubtitleFile) -> Unit
+    ) {
+        try {
+            root.getAsJsonArray("tracks")?.forEach { element ->
+                val track = element.asJsonObject
+                val kind = track.get("kind")?.asString ?: return@forEach
+                if (kind != "captions" && kind != "subtitles") return@forEach
+                val file = track.get("file")?.asString ?: return@forEach
+                if (file.isBlank()) return@forEach
+                val full = if (file.startsWith("http")) file else urlPrefix + file
+                val label = track.get("label")?.asString ?: "English"
+                subtitleCallback.invoke(newSubtitleFile(label, full) {
+                    this.headers = headers
+                })
+            }
+        } catch (e: Exception) {
+            Log.d("Enma", "subtitle tracks skipped: ${e.message}")
+        }
+    }
+
+    private suspend fun fetchMegaPlaySources(url: String, referer: String): com.google.gson.JsonObject? {
+        return try {
+            val text = app.get(
+                url,
+                headers = mapOf(
+                    "User-Agent" to EnmaDecryptor.USER_AGENT,
+                    "Accept" to "*/*",
+                    "X-Requested-With" to "XMLHttpRequest",
+                    "Origin" to "https://megaplay.buzz",
+                    "Referer" to referer
+                )
+            ).text
+            JsonParser.parseString(text).asJsonObject
+        } catch (e: Exception) {
+            Log.d("Enma", "MegaPlay sources request failed: ${e.message}")
+            null
+        }
+    }
+
+    private suspend fun megaPlayStreamUrl(root: com.google.gson.JsonObject?): String? {
+        if (root == null) return null
+        val enc = root.get("enc")?.takeIf { !it.isJsonNull }?.asString
+        if (!enc.isNullOrBlank()) return EnmaCipher.decryptFile(enc)
+        val sourcesEl = root.get("sources") ?: return null
+        return when {
+            sourcesEl.isJsonObject -> sourcesEl.asJsonObject.get("file")?.asString
+            sourcesEl.isJsonArray && sourcesEl.asJsonArray.size() > 0 ->
+                sourcesEl.asJsonArray[0].asJsonObject.get("file")?.asString
+            else -> null
+        }
+    }
+
+    private suspend fun resolveMegaPlay(
         iframeUrl: String,
-        serverName: String,
-        displayType: String,
+        label: String,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         try {
-            val host = Regex("""(https?://[^/]+)""").find(iframeUrl)?.groupValues?.get(1) ?: return false
+            val sParam = Regex("""[?&]s=([^&]+)""").find(iframeUrl)?.groupValues?.get(1)
+            val aniRoute = Regex("""/stream/ani/(\d+)/(\d+)/([a-z]+)""").find(iframeUrl)
 
-            val pageHeaders = mapOf(
-                "User-Agent" to mobileUA,
-                "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                "Referer" to "$mainUrl/"
+            var root: com.google.gson.JsonObject? = null
+            if (aniRoute != null) {
+                val directUrl = "https://megaplay.buzz/stream/getSourcesNew" +
+                    "?id=${aniRoute.groupValues[1]}&type=${aniRoute.groupValues[3]}" +
+                    (sParam?.let { "&s=$it" } ?: "")
+                root = fetchMegaPlaySources(directUrl, iframeUrl)
+            }
+
+            var m3u8 = megaPlayStreamUrl(root)
+            if (m3u8 == null) {
+                val pageHtml = app.get(iframeUrl, headers = pageHeaders("$mainUrl/")).text
+                val streamId = Regex("""data-id=["'](\d+)""").find(pageHtml)?.groupValues?.get(1)
+                    ?: Regex("""data-realid=["'](\d+)""").find(pageHtml)?.groupValues?.get(1)
+                    ?: return false
+                val sourcesUrl = "https://megaplay.buzz/stream/getSourcesNew?id=$streamId" +
+                    (sParam?.let { "&s=$it" } ?: "")
+                root = fetchMegaPlaySources(sourcesUrl, iframeUrl)
+                m3u8 = megaPlayStreamUrl(root)
+            }
+
+            if (m3u8.isNullOrBlank() || root == null) return false
+
+            emitLink(
+                label,
+                EnmaCipher.signUrl(m3u8),
+                ExtractorLinkType.M3U8,
+                "https://megaplay.buzz/",
+                emptyMap(),
+                callback
             )
-
-            val embedHtml = app.get(iframeUrl, headers = pageHeaders).text
-
-            val sourcesPath = Regex("""var\s+sourcesUrl\s*=\s*['"]([^'"]+)['"]""")
-                .find(embedHtml)?.groupValues?.get(1) ?: return false
-
-            val sourcesApiUrl = if (sourcesPath.startsWith("http")) sourcesPath else "$host$sourcesPath"
-            val ajaxHeaders = mapOf(
-                "User-Agent" to mobileUA,
-                "Accept" to "*/*",
-                "Referer" to iframeUrl
+            emitSubtitles(
+                root,
+                "",
+                mapOf(
+                    "User-Agent" to EnmaDecryptor.USER_AGENT,
+                    "Referer" to "https://megaplay.buzz/"
+                ),
+                subtitleCallback
             )
-            val sourcesText = app.get(sourcesApiUrl, headers = ajaxHeaders, referer = iframeUrl).text
+            return true
+        } catch (e: Exception) {
+            Log.d("Enma", "MegaPlay failed: ${e.message}")
+            return false
+        }
+    }
 
-            val root = try {
-                JsonParser.parseString(sourcesText).asJsonObject
+    private suspend fun resolveTryEmbed(
+        iframeUrl: String,
+        label: String,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
+        try {
+            val pageResponse = app.get(iframeUrl, headers = pageHeaders("$mainUrl/"))
+            val html = pageResponse.text
+            val payloadB64 = Regex("""RAW_PAYLOAD="([^"]+)"""").find(html)?.groupValues?.get(1)
+                ?: return false
+            val nonce = Regex("""EMBED_NONCE="([^"]+)"""").find(html)?.groupValues?.get(1)
+                ?: return false
+            val cookie = pageResponse.headers.values("Set-Cookie")
+                .map { it.substringBefore(';') }
+                .filter { it.contains('=') }
+                .joinToString("; ")
+            if (cookie.isBlank()) return false
+
+            val meta = try {
+                JsonParser.parseString(
+                    String(android.util.Base64.decode(payloadB64, android.util.Base64.DEFAULT), Charsets.UTF_8)
+                ).asJsonObject.getAsJsonObject("meta")
             } catch (e: Exception) {
                 return false
             }
+            val anilistId = meta.get("anilist_id")?.asString ?: return false
+            val episode = meta.get("episode")?.asNumber?.toString() ?: return false
+            val audio = meta.get("audio")?.asString ?: "sub"
 
-            val m3u8Path = try {
-                val sourcesEl = root.get("sources")
-                if (sourcesEl?.isJsonArray == true && sourcesEl.asJsonArray.size() > 0) {
-                    sourcesEl.asJsonArray[0].asJsonObject.get("file")?.asString
-                } else if (sourcesEl?.isJsonObject == true) {
-                    sourcesEl.asJsonObject.get("file")?.asString
-                } else null
-            } catch (_: Exception) { null } ?: return false
+            val streamUrl = "https://tryembed.us.cc/api/stream_data?id=$anilistId" +
+                "&episode=$episode&audio=$audio&player=jw&nonce=$nonce"
+            val streamText = app.get(
+                streamUrl,
+                headers = mapOf(
+                    "User-Agent" to EnmaDecryptor.USER_AGENT,
+                    "Accept" to "application/json",
+                    "X-Embed-Nonce" to nonce,
+                    "Referer" to iframeUrl,
+                    "Cookie" to cookie
+                )
+            ).text
 
-            val fullM3u8 = if (m3u8Path.startsWith("http")) m3u8Path else "$host$m3u8Path"
-
-            callback.invoke(
-                newExtractorLink(
-                    source = "Enma",
-                    name = "Enma $serverName $displayType",
-                    url = fullM3u8,
-                    type = ExtractorLinkType.M3U8
-                ) {
-                    this.referer = iframeUrl
-                    this.headers = mapOf("Referer" to iframeUrl, "User-Agent" to mobileUA)
+            val root = try {
+                JsonParser.parseString(streamText).asJsonObject
+            } catch (e: Exception) {
+                return false
+            }
+            val providers = root.getAsJsonArray("providers") ?: return false
+            var provider: com.google.gson.JsonObject? = null
+            for (element in providers) {
+                val p = element.asJsonObject
+                val qualities = p.getAsJsonArray("qualities") ?: continue
+                if (p.get("status")?.asString == "ready" && qualities.size() > 0) {
+                    provider = p
+                    break
                 }
+            }
+            provider ?: return false
+
+            val qualities = provider.getAsJsonArray("qualities") ?: return false
+            if (qualities.size() == 0) return false
+            val quality = qualities[0].asJsonObject
+            val token = quality.get("token")?.asString
+                ?: quality.get("fallbackToken")?.asString
+                ?: return false
+            val linkType = if (provider.get("type")?.asString == "mp4") {
+                ExtractorLinkType.VIDEO
+            } else {
+                ExtractorLinkType.M3U8
+            }
+            val ext = if (linkType == ExtractorLinkType.VIDEO) "mp4" else "m3u8"
+            val src = "https://tryembed.us.cc/s/$token.$ext"
+
+            emitLink(
+                label,
+                src,
+                linkType,
+                "https://tryembed.us.cc/",
+                mapOf("Cookie" to cookie),
+                callback
             )
 
             try {
-                root.getAsJsonArray("tracks")?.forEach { element ->
-                    val track = element.asJsonObject
-                    val kind = track.get("kind")?.asString ?: return@forEach
-                    if (kind != "captions" && kind != "subtitles") return@forEach
-                    val file = track.get("file")?.asString ?: return@forEach
-                    val label = track.get("label")?.asString ?: "English"
-                    val fullSub = if (file.startsWith("http")) file else "$host$file"
-                    subtitleCallback.invoke(newSubtitleFile(label, fullSub))
+                provider.getAsJsonArray("captions")?.forEach { element ->
+                    val cap = element.asJsonObject
+                    val file = cap.get("url")?.asString ?: return@forEach
+                    val capLabel = cap.get("label")?.asString ?: "English"
+                    subtitleCallback.invoke(newSubtitleFile(capLabel, file))
                 }
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                Log.d("Enma", "TryEmbed captions skipped: ${e.message}")
             }
-
             return true
-        } catch (e: Exception) {
-            Log.d("Enma", "4Animo failed: ${e.message}")
-            return false
-        }
-    }
-
-    private suspend fun resolveVidnest(
-        iframeUrl: String,
-        serverName: String,
-        displayType: String,
-        subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Unit
-    ): Boolean {
-        try {
-            val host = Regex("""(https?://[^/]+)""").find(iframeUrl)?.groupValues?.get(1) ?: return false
-            val resolver = WebViewResolver(
-                interceptUrl = Regex("""\.m3u8"""),
-                additionalUrls = listOf(Regex("""\.mp4""")),
-                script = """try{var b=document.querySelector('button,[class*=play],.vjs-big-play-button');if(b){b.click()}}catch(e){}""",
-                useOkhttp = false,
-                timeout = 20_000L
-            )
-            val resolved = app.get(iframeUrl, referer = "$mainUrl/", interceptor = resolver).url
-            if (resolved.contains(".m3u8", true)) {
-                val proxyHost = Regex("""(https?://[^/]+)""").find(resolved)?.groupValues?.get(1) ?: host
-                M3u8Helper.generateM3u8(
-                    "Enma $serverName $displayType", resolved, proxyHost
-                ).forEach(callback)
-                return true
-            }
-            return false
-        } catch (e: Exception) {
-            Log.d("Enma", "Vidnest failed: ${e.message}")
-            return false
-        }
-    }
-
-    // tryembed m3u8 returns a redirect to a proxy URL, so we follow it
-    // and pass the final URL directly to ExoPlayer
-    private suspend fun resolveTryEmbed(
-        iframeUrl: String,
-        serverName: String,
-        displayType: String,
-        subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Unit
-    ): Boolean {
-        try {
-            val host = Regex("""(https?://[^/]+)""").find(iframeUrl)?.groupValues?.get(1) ?: return false
-            val resolver = WebViewResolver(
-                interceptUrl = Regex("""\.m3u8"""),
-                additionalUrls = listOf(Regex("""\.mp4""")),
-                script = """try{var b=document.querySelector('button,.vjs-big-play-button,[class*=play]');if(b){b.click()}}catch(e){}""",
-                useOkhttp = false,
-                timeout = 25_000L
-            )
-            val resolved = app.get(iframeUrl, referer = "$mainUrl/", interceptor = resolver).url
-            if (resolved.contains(".m3u8", true)) {
-                val finalUrl = try {
-                    app.get(resolved, referer = "$host/", headers = mapOf("User-Agent" to mobileUA)).url
-                } catch (e: Exception) {
-                    resolved
-                }
-                val finalHost = Regex("""(https?://[^/]+)""").find(finalUrl)?.groupValues?.get(1) ?: host
-                callback.invoke(
-                    newExtractorLink(
-                        source = "Enma",
-                        name = "Enma $serverName $displayType",
-                        url = finalUrl,
-                        type = ExtractorLinkType.M3U8
-                    ) {
-                        this.referer = "$finalHost/"
-                        this.headers = mapOf("Referer" to "$finalHost/", "User-Agent" to mobileUA)
-                    }
-                )
-                return true
-            }
-            return false
         } catch (e: Exception) {
             Log.d("Enma", "TryEmbed failed: ${e.message}")
             return false
         }
     }
 
-    private suspend fun resolveMegaPlay(
+    private suspend fun resolve4Animo(
         iframeUrl: String,
-        serverName: String,
-        type: String,
+        label: String,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         try {
-            val host = try {
-                val uri = java.net.URI(iframeUrl)
-                "${uri.scheme}://${uri.host}"
-            } catch (e: Exception) {
-                "https://megaplay.buzz"
+            val host = Regex("""(https?://[^/]+)""").find(iframeUrl)?.groupValues?.get(1) ?: return false
+
+            // the sources token expires within seconds, so each retry reloads the page
+            for (attempt in 0 until 3) {
+                val html = try {
+                    app.get(iframeUrl, headers = pageHeaders("$mainUrl/")).text
+                } catch (e: Exception) {
+                    Log.d("Enma", "4Animo page failed: ${e.message}")
+                    return false
+                }
+                val sourcesPath = Regex("""__EMBED_SOURCES_URL__\s*=\s*'([^']+)'""").find(html)?.groupValues?.get(1)
+                    ?: return false
+
+                try {
+                    val text = app.get(
+                        host + sourcesPath,
+                        headers = mapOf(
+                            "User-Agent" to EnmaDecryptor.USER_AGENT,
+                            "Accept" to "*/*",
+                            "Referer" to iframeUrl,
+                            "Origin" to host
+                        )
+                    ).text
+                    val root = JsonParser.parseString(text).asJsonObject
+                    val sourcesArr = root.getAsJsonArray("sources") ?: continue
+                    if (sourcesArr.size() == 0) continue
+                    val file = sourcesArr[0].asJsonObject.get("file")?.asString ?: continue
+                    val m3u8 = if (file.startsWith("http")) file else host + file
+
+                    emitLink(
+                        label,
+                        m3u8,
+                        ExtractorLinkType.M3U8,
+                        "$host/",
+                        mapOf("Origin" to host),
+                        callback
+                    )
+                    emitSubtitles(
+                        root,
+                        host,
+                        mapOf(
+                            "User-Agent" to EnmaDecryptor.USER_AGENT,
+                            "Referer" to "$host/"
+                        ),
+                        subtitleCallback
+                    )
+                    return true
+                } catch (e: Exception) {
+                    Log.d("Enma", "4Animo attempt ${attempt + 1} failed: ${e.message}")
+                }
+                delay(1500L)
             }
+            return false
+        } catch (e: Exception) {
+            Log.d("Enma", "4Animo failed: ${e.message}")
+            return false
+        }
+    }
 
-            val pageHeaders = mapOf(
-                "User-Agent" to mobileUA,
-                "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                "Referer" to "$mainUrl/",
-            )
-
-            val doc = app.get(iframeUrl, headers = pageHeaders).document
-            val playerEl = doc.selectFirst("#megaplay-player")
-            val streamId = playerEl?.attr("data-id")
-                ?: playerEl?.attr("data-realid")
+    private suspend fun resolveVidhawk(
+        iframeUrl: String,
+        label: String,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
+        try {
+            val parts = Regex("""/embed/(?:ani|mal)/(\d+)/(\d+)/([a-z]+)""").find(iframeUrl)
                 ?: return false
-            if (streamId.isBlank()) return false
+            val anilistId = parts.groupValues[1]
+            val episode = parts.groupValues[2]
+            val audio = parts.groupValues[3]
 
-            val ajaxHeaders = mapOf(
-                "User-Agent" to mobileUA,
-                "Accept" to "*/*",
-                "X-Requested-With" to "XMLHttpRequest",
-                "Origin" to host,
-                "Referer" to iframeUrl,
-            )
-
-            val sourcesUrl = "$host/stream/getSources?id=$streamId&type=$type"
-            val sourcesText = app.get(sourcesUrl, headers = ajaxHeaders, referer = iframeUrl).text
-            val root = JsonParser.parseString(sourcesText).asJsonObject
-
-            val m3u8 = try {
-                val sourcesEl = root.get("sources")
-                if (sourcesEl?.isJsonObject == true) {
-                    sourcesEl.asJsonObject.get("file")?.asString
-                } else if (sourcesEl?.isJsonArray == true && sourcesEl.asJsonArray.size() > 0) {
-                    sourcesEl.asJsonArray[0].asJsonObject.get("file")?.asString
-                } else null
-            } catch (_: Exception) { null }
-
-            if (m3u8.isNullOrBlank()) return false
-
-            val displayType = if (type == "dub") "DUB" else "SUB"
-            val m3u8Headers = mapOf(
-                "Referer" to "$host/",
-                "Origin" to host,
-                "User-Agent" to mobileUA,
-            )
-
-            val generated = M3u8Helper.generateM3u8(
-                "Enma $serverName $displayType", m3u8, host, headers = m3u8Headers
-            )
-            if (generated.isNotEmpty()) {
-                generated.forEach(callback)
-            } else {
-                callback.invoke(
-                    newExtractorLink(
-                        source = "Enma",
-                        name = "Enma $serverName $displayType",
-                        url = m3u8,
-                        type = ExtractorLinkType.M3U8
-                    ) {
-                        this.referer = "$host/"
-                        this.headers = m3u8Headers
-                    }
+            val raceUrl = "https://vidhawk.buzz/api/stream/race?episode=$episode&audio=$audio" +
+                "&server=flow&stream=1&anilistId=$anilistId"
+            val raceText = app.get(
+                raceUrl,
+                headers = mapOf(
+                    "User-Agent" to EnmaDecryptor.USER_AGENT,
+                    "Accept" to "*/*",
+                    "Referer" to "https://vidhawk.buzz/"
                 )
+            ).text
+
+            var ticket: String? = null
+            for (line in raceText.lines()) {
+                val trimmed = line.trim()
+                if (trimmed.isEmpty()) continue
+                val event = try {
+                    JsonParser.parseString(trimmed).asJsonObject
+                } catch (e: Exception) {
+                    continue
+                }
+                if (event.get("type")?.asString == "done") {
+                    ticket = event.get("ticket")?.asString
+                    break
+                }
+                if (event.get("type")?.asString == "row") {
+                    val row = event.getAsJsonObject("row")
+                    if (row.get("ok")?.asBoolean == true && ticket == null) {
+                        ticket = row.get("ticket")?.asString
+                    }
+                }
             }
+            ticket ?: return false
+
+            val playText = app.get(
+                "https://vidhawk.buzz/api/play?t=" + URLEncoder.encode(ticket, "UTF-8"),
+                headers = mapOf(
+                    "User-Agent" to EnmaDecryptor.USER_AGENT,
+                    "Accept" to "application/json",
+                    "Referer" to "https://vidhawk.buzz/"
+                )
+            ).text
+            val play = try {
+                JsonParser.parseString(playText).asJsonObject
+            } catch (e: Exception) {
+                return false
+            }
+
+            val tracks = play.getAsJsonArray("tracks") ?: return false
+            var src: String? = null
+            for (element in tracks) {
+                val track = element.asJsonObject
+                if (track.get("id")?.asString == audio) {
+                    src = track.get("src")?.asString
+                    break
+                }
+            }
+            src ?: return false
+
+            emitLink(
+                label,
+                src,
+                ExtractorLinkType.M3U8,
+                "https://vidhawk.buzz/",
+                emptyMap(),
+                callback
+            )
 
             try {
-                root.getAsJsonArray("tracks")?.forEach { element ->
-                    val track = element.asJsonObject
-                    val kind = track.get("kind")?.asString ?: return@forEach
-                    if (kind != "captions" && kind != "subtitles") return@forEach
-                    val file = track.get("file")?.asString ?: return@forEach
-                    val label = track.get("label")?.asString ?: "English"
-                    subtitleCallback.invoke(newSubtitleFile(label, file))
+                val captions = play.getAsJsonObject("captions")?.getAsJsonArray(audio)
+                captions?.forEach { element ->
+                    val cap = element.asJsonObject
+                    val file = cap.get("src")?.asString ?: return@forEach
+                    val capLabel = cap.get("label")?.asString ?: "English"
+                    subtitleCallback.invoke(newSubtitleFile(capLabel, file) {
+                        this.headers = mapOf(
+                            "User-Agent" to EnmaDecryptor.USER_AGENT,
+                            "Referer" to "https://vidhawk.buzz/"
+                        )
+                    })
                 }
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                Log.d("Enma", "VidHawk captions skipped: ${e.message}")
             }
-
             return true
         } catch (e: Exception) {
-            Log.d("Enma", "MegaPlay failed: ${e.message}")
+            Log.d("Enma", "VidHawk failed: ${e.message}")
             return false
         }
     }

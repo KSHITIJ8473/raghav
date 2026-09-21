@@ -21,6 +21,8 @@ import kotlin.coroutines.resume
 object EnmaDecryptor {
     private const val TAG = "EnmaDecryptor"
     private const val PAGE_URL = "https://www.enma.lol/home"
+    const val USER_AGENT =
+        "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
     private val mapper = ObjectMapper()
 
     @Volatile private var webView: WebView? = null
@@ -29,8 +31,6 @@ object EnmaDecryptor {
     @Volatile private var initStarted = false
     @Volatile private var readySignal: CompletableDeferred<Unit>? = null
 
-    // SupervisorJob survives coroutine cancellation so the WebView keeps
-    // loading even if getMainPage is cancelled mid-init
     private val initScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
     fun setContext(context: Context) {
@@ -46,20 +46,13 @@ object EnmaDecryptor {
 
         @JavascriptInterface
         fun onError(error: String) {
-            Log.e(TAG, "WASM init error: $error")
+            Log.e(TAG, "wasm init error: $error")
             readySignal?.completeExceptionally(Exception(error))
-        }
-
-        @JavascriptInterface
-        fun log(msg: String) {
-            Log.d(TAG, "JS: $msg")
         }
     }
 
     private val bridge = DecryptBridge()
 
-    // Loads ada.wasm + ada.manifest, derives the export name via XOR, and
-    // exposes _doDecrypt for Kotlin to call via evaluateJavascript polling
     private val injectScript = """
         (function() {
             if (window._enmaDecryptLoaded) return;
@@ -148,8 +141,6 @@ object EnmaDecryptor {
         withTimeoutOrNull(30_000L) { signal.await() }
     }
 
-    // Polling avoids the coroutine/callback deadlock that suspendCancellableCoroutine
-    // had when multiple decrypt calls shared a single pendingResultCont field
     suspend fun decrypt(encrypted: String): String {
         if (!initialized) { startInit(); awaitReady() }
         val wv = webView ?: return ""
@@ -213,7 +204,7 @@ object EnmaDecryptor {
             if (decrypted.isBlank() || decrypted.startsWith("DECRYPT_ERROR:")) null
             else decrypted
         } catch (e: Exception) {
-            Log.e(TAG, "fetchAndDecrypt failed: ${e.message}")
+            Log.e(TAG, "fetch failed: ${e.message}")
             null
         }
     }

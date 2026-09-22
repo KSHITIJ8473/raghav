@@ -53,16 +53,14 @@ class RaghavAniPM : MainAPI() {
     private suspend fun bootstrap(
         entry: AniPMEntry,
         episode: Int,
-        lang: String,
-        backup: Boolean = false
+        lang: String
     ): JsonNode? {
         val idPart = when {
             entry.anilistId != null -> "anilist/${entry.anilistId}"
             entry.seriesId != null -> "settlar/${entry.seriesId}"
             else -> return null
         }
-        val url = "$mainUrl/api/anime/playback-bootstrap/$idPart?ep=$episode&lang=$lang" +
-            if (backup) "&backup=1" else ""
+        val url = "$mainUrl/api/anime/playback-bootstrap/$idPart?ep=$episode&lang=$lang&backup=1"
         val text = getJson(url) ?: return null
         return try {
             parseJson<JsonNode>(text)
@@ -149,10 +147,12 @@ class RaghavAniPM : MainAPI() {
                 ?: return false
             root = bootstrap(entry, episode, channel) ?: return false
         }
-        val resolved = entry ?: return false
         val resolvedRoot = root ?: return false
 
         if (resolvedRoot.path("effectiveLanguage").asText("") != channel) return false
+
+        val packageAnilist = if (anilistId > 0) anilistId
+        else resolvedRoot.path("core").path("anilistId").asText("").toIntOrNull() ?: 0
 
         val found = AtomicBoolean(false)
         val seenLinks = ConcurrentHashMap.newKeySet<String>()
@@ -172,11 +172,24 @@ class RaghavAniPM : MainAPI() {
                 },
                 async {
                     try {
-                        if (emitBackup(resolved, episode, channel, seenLinks, seenSubUrls, seenSubLabels, subtitleCallback, callback)) {
+                        if (emitBackup(resolvedRoot, seenLinks, subtitleCallback, callback)) {
                             found.set(true)
                         }
                     } catch (e: Exception) {
                         Log.e("RaghavAnimeKitsu", "[AniPM] backup failed: ${e.message}")
+                    }
+                },
+                async {
+                    try {
+                        if (packageAnilist > 0 && emitHardsub(
+                                packageAnilist, resolvedRoot, episode, channel,
+                                seenLinks, seenSubUrls, seenSubLabels, subtitleCallback, callback
+                            )
+                        ) {
+                            found.set(true)
+                        }
+                    } catch (e: Exception) {
+                        Log.e("RaghavAnimeKitsu", "[AniPM] hardsub failed: ${e.message}")
                     }
                 }
             ).awaitAll()
@@ -212,7 +225,8 @@ class RaghavAniPM : MainAPI() {
         seenSubUrls: MutableSet<String>,
         seenSubLabels: MutableSet<String>,
         subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Unit
+        callback: (ExtractorLink) -> Unit,
+        label: String = "AniPM"
     ): Boolean {
         val selection = root.path("settlarSelection").asText("")
         if (selection.isBlank()) return false
@@ -236,7 +250,7 @@ class RaghavAniPM : MainAPI() {
 
         if (!seenLinks.add(master)) return true
         callback.invoke(
-            newExtractorLink(name, "AniPM", master, type = ExtractorLinkType.M3U8) {
+            newExtractorLink(name, label, master, type = ExtractorLinkType.M3U8) {
                 referer = SETTLAR_REFERER
                 headers = playHeaders
             }
@@ -245,7 +259,29 @@ class RaghavAniPM : MainAPI() {
     }
 
     private suspend fun emitBackup(
-        entry: AniPMEntry,
+        root: JsonNode,
+        seenLinks: MutableSet<String>,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
+        val embed = root.path("backupEmbed")
+        if (!embed.path("available").asBoolean(false)) return false
+        val embedUrl = embed.path("url").asText("")
+        if (!embedUrl.startsWith("http")) return false
+
+        val stream = MegaPlayHelper.resolveStream(embedUrl, "$mainUrl/", "AniPM") ?: return false
+        if (!seenLinks.add(stream.m3u8)) return true
+
+        // codec-less master variants crash the ffmpeg renderer, emitLinks sidesteps the master entirely
+        return MegaPlayHelper.emitLinks(
+            name, "MegaPlay", stream.m3u8, MEGAPLAY_REFERER,
+            stream.subtitles, subtitleCallback, callback
+        )
+    }
+
+    private suspend fun emitHardsub(
+        anilistId: Int,
+        root: JsonNode,
         episode: Int,
         channel: String,
         seenLinks: MutableSet<String>,
@@ -254,30 +290,19 @@ class RaghavAniPM : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val root = bootstrap(entry, episode, channel, backup = true) ?: return false
-        val embed = root.path("backupEmbed")
-        if (!embed.path("available").asBoolean(false)) return false
-        val embedUrl = embed.path("url").asText("")
-        if (!embedUrl.startsWith("http")) return false
-
-        val stream = MegaPlayHelper.resolveStream(embedUrl, "$mainUrl/", "AniPM") ?: return false
-
-        val playHeaders = mapOf(
-            "User-Agent" to USER_AGENT,
-            "Referer" to MEGAPLAY_REFERER
+        val text = getJson("$mainUrl/api/anime/anipm-server/_packages?anilistId=$anilistId") ?: return false
+        val packages = try {
+            parseJson<JsonNode>(text)
+        } catch (e: Exception) {
+            Log.e("RaghavAnimeKitsu", "[AniPM] packages parse failed: ${e.message}")
+            null
+        } ?: return false
+        val field = if (channel == "dub") "dubhard" else "subhard"
+        if (!packages.path("episodes").path(episode.toString()).path(field).asBoolean(false)) return false
+        return emitSettlar(
+            root, episode, "${channel}hard", seenLinks, seenSubUrls, seenSubLabels,
+            subtitleCallback, callback, "AniPM Hardsub"
         )
-        for ((label, url) in stream.subtitles) {
-            emitSubtitle(label, url, playHeaders, seenSubUrls, seenSubLabels, subtitleCallback)
-        }
-
-        if (!seenLinks.add(stream.m3u8)) return true
-        callback.invoke(
-            newExtractorLink(name, "MegaPlay", MegaPlayHelper.signUrl(stream.m3u8), type = ExtractorLinkType.M3U8) {
-                referer = MEGAPLAY_REFERER
-                headers = playHeaders
-            }
-        )
-        return true
     }
 
     private fun encode(value: String): String =

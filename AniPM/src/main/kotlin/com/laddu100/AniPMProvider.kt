@@ -116,6 +116,14 @@ class AniPMProvider : MainAPI() {
         return out
     }
 
+    private fun parseDuration(value: String?): Int? {
+        if (value.isNullOrBlank()) return null
+        val hours = Regex("(\\d+)\\s*hr").find(value)?.groupValues?.get(1)?.toIntOrNull() ?: 0
+        val minutes = Regex("(\\d+)\\s*min").find(value)?.groupValues?.get(1)?.toIntOrNull() ?: 0
+        if (hours > 0 || minutes > 0) return hours * 60 + minutes
+        return value.filter { it.isDigit() }.takeIf { it.isNotEmpty() }?.toInt()
+    }
+
     override suspend fun load(url: String): LoadResponse? {
         val id = url.substringAfterLast("|").trim().toIntOrNull() ?: return null
         val series = AniPMApi.series(id) ?: return null
@@ -124,6 +132,15 @@ class AniPMProvider : MainAPI() {
         val filler = AniPMApi.filler(series.anilistId, title)
         val fillerNumbers = expandRanges(filler?.filler)
         val mixedNumbers = expandRanges(filler?.mixed)
+        val packages = AniPMApi.packages(series.anilistId)
+
+        fun episodeData(number: Int, dub: Boolean): String {
+            val channel = if (dub) "dub" else "sub"
+            val hard = packages?.episodes?.get(number.toString())
+                ?.let { if (dub) it.dubhard == true else it.subhard == true } == true
+            return "$mainUrl|$id|$number|$channel|${if (hard) "hs" else ""}" +
+                "|${series.anilistId.orEmpty()}|${series.malId.orEmpty()}"
+        }
 
         fun episodeList(dub: Boolean): List<Episode> {
             return series.episodes.orEmpty().mapNotNull { ep ->
@@ -136,7 +153,7 @@ class AniPMProvider : MainAPI() {
                     else -> ""
                 }
                 val realName = ep.title?.takeIf { it.isNotBlank() && !genericEpisodeTitle.matches(it) }
-                newEpisode("$mainUrl|$id|$number|${if (dub) "dub" else "sub"}") {
+                newEpisode(episodeData(number, dub)) {
                     this.name = realName?.let { "$it$mark" } ?: "Episode $number$mark"
                     this.episode = number
                     this.description = ep.description?.takeIf { it.isNotBlank() }
@@ -156,9 +173,12 @@ class AniPMProvider : MainAPI() {
             else -> TvType.Anime
         }
 
-        val showStatus = when (series.status?.lowercase()) {
-            "releasing", "ongoing" -> ShowStatus.Ongoing
-            "finished", "completed" -> ShowStatus.Completed
+        val statusLower = series.status?.lowercase()
+        val showStatus = when {
+            statusLower == null -> null
+            statusLower.startsWith("releasing") || statusLower.startsWith("ongoing") ||
+                statusLower.startsWith("currently") -> ShowStatus.Ongoing
+            statusLower.startsWith("finished") || statusLower.startsWith("completed") -> ShowStatus.Completed
             else -> null
         }
 
@@ -172,7 +192,7 @@ class AniPMProvider : MainAPI() {
             tags = series.genres.orEmpty()
             series.score?.takeIf { it > 0 }?.let { score = Score.from10(it.toString()) }
             showStatus?.let { this.showStatus = it }
-            duration = series.duration
+            duration = parseDuration(series.duration)
             contentRating = series.rating?.takeIf { it.isNotBlank() }
             series.anilistId?.toIntOrNull()?.let { addAniListId(it) }
             series.malId?.toIntOrNull()?.let { addMalId(it) }
@@ -189,31 +209,48 @@ class AniPMProvider : MainAPI() {
     ): Boolean {
         val parts = data.split("|")
         if (parts.size < 4) return false
-        val seriesId = parts[parts.size - 3].toIntOrNull() ?: return false
-        val episode = parts[parts.size - 2].toIntOrNull() ?: return false
-        val channel = if (parts.last() == "dub") "dub" else "sub"
+        val seriesId = parts[1].toIntOrNull() ?: return false
+        val episode = parts[2].toIntOrNull() ?: return false
+        val channel = if (parts[3] == "dub") "dub" else "sub"
+        val hardAvailable = parts.getOrNull(4) == "hs"
+        val anilistId = parts.getOrNull(5).orEmpty()
+        val malId = parts.getOrNull(6).orEmpty()
+
+        val bootstrap = AniPMApi.bootstrap(seriesId, episode, channel)
+        val selection = bootstrap?.settlarSelection?.takeIf { it.isNotBlank() }
 
         val seenLinks = ConcurrentHashMap.newKeySet<String>()
         val seenSubUrls = ConcurrentHashMap.newKeySet<String>()
         val seenSubLabels = ConcurrentHashMap.newKeySet<String>()
 
+        val tasks = mutableListOf<suspend () -> Boolean>()
+        tasks.add {
+            emitSettlar(
+                selection, episode, channel, name,
+                seenLinks, seenSubUrls, seenSubLabels,
+                subtitleCallback, callback
+            )
+        }
+        // burned in subtitle channel, only a handful of titles carry it
+        if (hardAvailable) {
+            tasks.add {
+                emitSettlar(
+                    selection, episode, "${channel}hard", "$name Hardsub",
+                    seenLinks, seenSubUrls, seenSubLabels,
+                    subtitleCallback, callback
+                )
+            }
+        }
+        tasks.add {
+            emitBackup(
+                bootstrap?.backupEmbed, anilistId, malId, episode, channel,
+                seenLinks, seenSubUrls, seenSubLabels,
+                subtitleCallback, callback
+            )
+        }
+
         val results = coroutineScope {
-            listOf(
-                async {
-                    emitSettlar(
-                        seriesId, episode, channel,
-                        seenLinks, seenSubUrls, seenSubLabels,
-                        subtitleCallback, callback
-                    )
-                },
-                async {
-                    emitBackup(
-                        seriesId, episode, channel,
-                        seenLinks, seenSubUrls, seenSubLabels,
-                        subtitleCallback, callback
-                    )
-                }
-            ).awaitAll()
+            tasks.map { async { it() } }.awaitAll()
         }
         return results.any { it }
     }
@@ -239,19 +276,18 @@ class AniPMProvider : MainAPI() {
     }
 
     private suspend fun emitSettlar(
-        seriesId: Int,
+        selection: String?,
         episode: Int,
         channel: String,
+        label: String,
         seenLinks: MutableSet<String>,
         seenSubUrls: MutableSet<String>,
         seenSubLabels: MutableSet<String>,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val selection = AniPMApi.bootstrap(seriesId, episode, channel)
-            ?.settlarSelection?.takeIf { it.isNotBlank() }
         if (selection == null) {
-            Log.d(TAG, "no settlar selection for $seriesId ep$episode $channel")
+            Log.d(TAG, "no settlar selection for ep$episode $channel")
             return false
         }
 
@@ -274,7 +310,7 @@ class AniPMProvider : MainAPI() {
 
         if (seenLinks.add(master)) {
             callback.invoke(
-                newExtractorLink(name, "AniPM", master, type = ExtractorLinkType.M3U8) {
+                newExtractorLink(name, label, master, type = ExtractorLinkType.M3U8) {
                     referer = SETTLAR_REFERER
                     headers = playHeaders
                 }
@@ -284,7 +320,9 @@ class AniPMProvider : MainAPI() {
     }
 
     private suspend fun emitBackup(
-        seriesId: Int,
+        backupEmbed: AniPMBackupEmbed?,
+        anilistId: String,
+        malId: String,
         episode: Int,
         channel: String,
         seenLinks: MutableSet<String>,
@@ -293,32 +331,34 @@ class AniPMProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val embed = AniPMApi.bootstrap(seriesId, episode, channel, backup = true)
-            ?.backupEmbed ?: return false
-        if (embed.available != true) return false
-        val embedUrl = embed.url?.takeIf { it.startsWith("http") } ?: return false
-
-        val stream = MegaPlayBackup.resolveStream(embedUrl, "$mainUrl/")
-        if (stream == null) {
-            Log.d(TAG, "megaplay resolve failed for $seriesId ep$episode $channel")
-            return false
+        val candidates = mutableListOf<String>()
+        if (backupEmbed?.available == true) {
+            backupEmbed.url?.takeIf { it.startsWith("http") }?.let { candidates.add(it) }
+        }
+        // megaplay also serves ani and mal style addresses when the site lists no backup
+        if (anilistId.isNotBlank()) {
+            candidates.add("https://megaplay.buzz/stream/ani/$anilistId/$episode/$channel")
+        }
+        if (malId.isNotBlank()) {
+            candidates.add("https://megaplay.buzz/stream/mal/$malId/$episode/$channel")
         }
 
         val playHeaders = mapOf(
             "User-Agent" to AniPMApi.USER_AGENT,
             "Referer" to MEGAPLAY_REFERER
         )
-        for ((label, url) in stream.subtitles) {
-            emitSubtitle(label, url, playHeaders, seenSubUrls, seenSubLabels, subtitleCallback)
-        }
 
-        if (!seenLinks.add(stream.m3u8)) return true
-        callback.invoke(
-            newExtractorLink(name, "MegaPlay", MegaPlayBackup.signUrl(stream.m3u8), type = ExtractorLinkType.M3U8) {
-                referer = MEGAPLAY_REFERER
-                headers = playHeaders
+        for (embedUrl in candidates) {
+            val stream = MegaPlayBackup.resolveStream(embedUrl, "$mainUrl/") ?: continue
+            for ((label, url) in stream.subtitles) {
+                emitSubtitle(label, url, playHeaders, seenSubUrls, seenSubLabels, subtitleCallback)
             }
-        )
-        return true
+            MegaPlayBackup.emitVariantLinks(
+                name, "MegaPlay", stream.m3u8, MEGAPLAY_REFERER, playHeaders, seenLinks, callback
+            )
+            return true
+        }
+        Log.d(TAG, "megaplay resolve failed for ep$episode $channel")
+        return false
     }
 }

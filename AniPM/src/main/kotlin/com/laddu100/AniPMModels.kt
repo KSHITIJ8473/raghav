@@ -57,7 +57,7 @@ data class AniPMSeries(
     @JsonProperty("year") val year: Int? = null,
     @JsonProperty("score") val score: Double? = null,
     @JsonProperty("rating") val rating: String? = null,
-    @JsonProperty("duration") val duration: Int? = null,
+    @JsonProperty("duration") val duration: String? = null,
     @JsonProperty("status") val status: String? = null,
     @JsonProperty("type") val type: String? = null,
     @JsonProperty("genres") val genres: List<String>? = null,
@@ -92,7 +92,6 @@ data class AniPMFillerList(
 @JsonIgnoreProperties(ignoreUnknown = true)
 data class AniPMBootstrap(
     @JsonProperty("settlarSelection") val settlarSelection: String? = null,
-    @JsonProperty("effectiveLanguage") val effectiveLanguage: String? = null,
     @JsonProperty("backupEmbed") val backupEmbed: AniPMBackupEmbed? = null
 )
 
@@ -100,6 +99,19 @@ data class AniPMBootstrap(
 data class AniPMBackupEmbed(
     @JsonProperty("available") val available: Boolean? = null,
     @JsonProperty("url") val url: String? = null
+)
+
+@JsonIgnoreProperties(ignoreUnknown = true)
+data class AniPMPackageEpisode(
+    @JsonProperty("sub") val sub: Boolean? = null,
+    @JsonProperty("dub") val dub: Boolean? = null,
+    @JsonProperty("subhard") val subhard: Boolean? = null,
+    @JsonProperty("dubhard") val dubhard: Boolean? = null
+)
+
+@JsonIgnoreProperties(ignoreUnknown = true)
+data class AniPMPackages(
+    @JsonProperty("episodes") val episodes: Map<String, AniPMPackageEpisode>? = null
 )
 
 @JsonIgnoreProperties(ignoreUnknown = true)

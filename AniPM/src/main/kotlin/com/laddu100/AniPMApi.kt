@@ -82,6 +82,17 @@ object AniPMApi {
         }
     }
 
+    suspend fun packages(anilistId: String?): AniPMPackages? {
+        if (anilistId.isNullOrBlank()) return null
+        val text = getJson("$MAIN_URL/api/anime/anipm-server/_packages?anilistId=$anilistId") ?: return null
+        return try {
+            parseJson<AniPMPackages>(text)
+        } catch (e: Exception) {
+            Log.d(TAG, "packages parse failed: ${e.message}")
+            null
+        }
+    }
+
     suspend fun filler(anilistId: String?, title: String?): AniPMFillerList? {
         if (anilistId.isNullOrBlank()) return null
         val text =
@@ -95,10 +106,8 @@ object AniPMApi {
         }
     }
 
-    suspend fun bootstrap(id: Int, episode: Int, lang: String, backup: Boolean = false): AniPMBootstrap? {
-        val url = "$MAIN_URL/api/anime/playback-bootstrap/settlar/$id" +
-            "?ep=$episode&lang=$lang" +
-            if (backup) "&backup=1" else ""
+    suspend fun bootstrap(id: Int, episode: Int, lang: String): AniPMBootstrap? {
+        val url = "$MAIN_URL/api/anime/playback-bootstrap/settlar/$id?ep=$episode&lang=$lang&backup=1"
         val text = getJson(url) ?: return null
         return try {
             parseJson<AniPMBootstrap>(text)

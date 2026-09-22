@@ -5,6 +5,9 @@ import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.lagradost.api.Log
 import com.lagradost.cloudstream3.app
+import com.lagradost.cloudstream3.utils.ExtractorLink
+import com.lagradost.cloudstream3.utils.ExtractorLinkType
+import com.lagradost.cloudstream3.utils.newExtractorLink
 import javax.crypto.Cipher
 import javax.crypto.Mac
 import javax.crypto.spec.IvParameterSpec
@@ -179,5 +182,83 @@ object MegaPlayBackup {
         val token = "${b64url(payload.toByteArray(Charsets.UTF_8))}.${b64url(signature)}"
         val sep = if (url.contains('?')) "&" else "?"
         return "$url${sep}token=$token"
+    }
+
+    private data class VariantEntry(val url: String, val quality: Int?)
+
+    private val resolutionRegex = Regex("""RESOLUTION=(\d+)x(\d+)""")
+
+    private fun parseVariants(masterUrl: String, masterText: String): List<VariantEntry> {
+        val base = masterUrl.substringBefore('?').substringBeforeLast('/') + "/"
+        val out = mutableListOf<VariantEntry>()
+        val lines = masterText.lines()
+        var i = 0
+        while (i < lines.size) {
+            val line = lines[i].trim()
+            if (line.startsWith("#EXT-X-STREAM-INF:")) {
+                val quality = resolutionRegex.find(line)?.groupValues?.get(2)?.toIntOrNull()
+                var j = i + 1
+                while (j < lines.size && (lines[j].isBlank() || lines[j].startsWith("#"))) j++
+                if (j < lines.size) {
+                    val uri = lines[j].trim()
+                    if (uri.isNotEmpty()) {
+                        out.add(VariantEntry(if (uri.startsWith("http")) uri else base + uri, quality))
+                    }
+                    i = j
+                }
+            }
+            i++
+        }
+        return out
+    }
+
+    // codec-less variants crash the ffmpeg renderer at track selection, so each quality goes out as its own playlist
+    suspend fun emitVariantLinks(
+        source: String,
+        label: String,
+        m3u8: String,
+        referer: String,
+        headers: Map<String, String>,
+        seenLinks: MutableSet<String>,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
+        val masterText = try {
+            app.get(signUrl(m3u8), headers = headers, timeout = 15_000L).text
+        } catch (e: Exception) {
+            Log.d(TAG, "master playlist fetch failed: ${e.message}")
+            null
+        }
+
+        val variants = masterText?.let { parseVariants(m3u8, it) }.orEmpty()
+        if (variants.isEmpty()) {
+            if (!seenLinks.add(m3u8)) return true
+            callback.invoke(
+                newExtractorLink(source, label, signUrl(m3u8), type = ExtractorLinkType.M3U8) {
+                    this.referer = referer
+                    this.headers = headers
+                }
+            )
+            return true
+        }
+
+        var found = false
+        for (v in variants) {
+            if (!seenLinks.add(v.url)) continue
+            val suffix = v.quality?.let { "${it}p" }.orEmpty()
+            callback.invoke(
+                newExtractorLink(
+                    source,
+                    if (suffix.isEmpty()) label else "$label $suffix",
+                    signUrl(v.url),
+                    type = ExtractorLinkType.M3U8
+                ) {
+                    this.referer = referer
+                    v.quality?.let { quality = it }
+                    this.headers = headers
+                }
+            )
+            found = true
+        }
+        return found
     }
 }

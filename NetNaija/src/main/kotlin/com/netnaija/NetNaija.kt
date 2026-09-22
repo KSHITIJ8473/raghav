@@ -330,7 +330,9 @@ class NetNaija : MainAPI() {
     override suspend fun search(query: String): List<SearchResponse> {
         mainUrl = FirebaseDomainHelper.getDomain("netnaija") ?: mainUrl
         if (query.isBlank()) return emptyList()
-        // subject/search rejects anonymous tokens, the site reads the rendered page
+        // the search api needs the bearer from the token bootstrap, the rendered
+        // page only backs it up for when that call gets refused
+        apiSearch(query)?.let { return it }
         return try {
             val html = app.get(
                 "$mainUrl/search-result?keyword=${URLEncoder.encode(query, "UTF-8")}",
@@ -340,6 +342,21 @@ class NetNaija : MainAPI() {
         } catch (e: Exception) {
             Log.d(TAG, "search failed: ${e.message}")
             emptyList()
+        }
+    }
+
+    private suspend fun apiSearch(query: String): List<SearchResponse>? {
+        return try {
+            val response = app.post(
+                "$bff/subject/search",
+                json = mapOf("keyword" to query, "page" to 1, "perPage" to 20),
+                headers = authHeaders()
+            )
+            val parsed = parseJson<NetNaijaListResponse>(response.text)
+            parsed.data?.items?.mapNotNull { it.toSearchResponse() }
+        } catch (e: Exception) {
+            Log.d(TAG, "api search failed: ${e.message}")
+            null
         }
     }
 
@@ -365,6 +382,7 @@ class NetNaija : MainAPI() {
                     try {
                         mapper.convertValue(entry, NetNaijaSubject::class.java).toSearchResponse()
                     } catch (e: Exception) {
+                        Log.d(TAG, "nuxt entry skipped: ${e.message}")
                         null
                     }
                 }
@@ -455,6 +473,8 @@ class NetNaija : MainAPI() {
                 )
             }
 
+            NetNaijaSources.register(dubs.mapNotNull { sourceLabel(it) })
+
             if (tvType == TvType.Movie || seasons.isEmpty()) {
                 // Movie - store all dub subjectIds so loadLinks can fetch each audio
                 val movieData = NetNaijaEpisodeData(dubs = dubs, season = 0, episode = 0).toJson()
@@ -529,7 +549,13 @@ class NetNaija : MainAPI() {
             return false
         }
 
-        val dubs = epData.dubs
+        NetNaijaSources.register(epData.dubs.mapNotNull { sourceLabel(it) })
+
+        // a source turned off in the settings is skipped entirely, its play
+        // endpoint is never touched
+        val dubs = epData.dubs.filter { dub ->
+            sourceLabel(dub)?.let { NetNaijaSources.isEnabled(it) } == true
+        }
         var found = false
 
         // soft subs only hang off the original audio stream, pull them once at the end

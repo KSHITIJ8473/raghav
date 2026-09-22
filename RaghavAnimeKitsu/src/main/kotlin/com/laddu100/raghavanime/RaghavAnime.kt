@@ -21,7 +21,13 @@ import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.app
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import java.net.URLEncoder
+import java.util.concurrent.ConcurrentLinkedQueue
 
 class RaghavAnime : MainAPI() {
     override var mainUrl = "https://kitsu.io"
@@ -38,6 +44,9 @@ class RaghavAnime : MainAPI() {
 
     @Volatile
     private var kitsuDownPopupShown = false
+
+    private val prefetchScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val recentPrefetches = ConcurrentLinkedQueue<Long>()
 
     private val downCheckLock = kotlinx.coroutines.sync.Mutex()
     @Volatile
@@ -97,7 +106,7 @@ class RaghavAnime : MainAPI() {
                 })
 
                 container.addView(TextView(ctx).apply {
-                    text = "RaghavAnime(Kitsu) depends on the Kitsu API for anime metadata, search, and homepage content.\n\nThis may be because the Kitsu API is disabled from their end, or something is wrong from our end. Whichever the case, it will soon be fixed.\n\nIf Kitsu is disabled from their end, everything will work again once Kitsu restores services.\n\nUse other providers in the meantime — there are many others in the csky repo."
+                    text = "RaghavAnime(Kitsu) depends on the Kitsu API for anime metadata, search, and homepage content.\n\nThis may be because the Kitsu API is disabled from their end, or something is wrong from our end. Whichever the case, it will soon be fixed.\n\nIf Kitsu is disabled from their end, everything will work again once Kitsu restores services.\n\nUse other providers in the meantime — there are many others in the raghav repo."
                     textSize = 13f
                     setTextColor(cTextSub)
                     setLineSpacing(1.4f, 1.0f)
@@ -330,6 +339,8 @@ class RaghavAnime : MainAPI() {
             })
         }
 
+        prefetchSources(kitsuId, anilistId, title, jpTitle, year)
+
         return newAnimeLoadResponse(title, url, tvType) {
             this.posterUrl = posterUrl
             this.backgroundPosterUrl = bannerUrl
@@ -373,91 +384,55 @@ class RaghavAnime : MainAPI() {
             try { RaghavAnimeFeatures.recordWatchTime(linkData.kitsuId, title, null, 24 * 60 * 1000L) } catch (_: Exception) {}
         }
 
-        runAllAsync(
+        val animeKey = linkData.kitsuId.toString()
+        val searchTitles = listOfNotNull(title, jpTitle).filter { it.isNotBlank() }
+        val targetTitles = listOfNotNull(title, jpTitle)
+
+        val sources = listOf<suspend () -> Unit>(
             {
                 runSource("Miruro", subtitleCallback, callback) { cSub, cLink ->
                     if (aniId <= 0) return@runSource
-                    val miruro = Miruro()
-                    val loadResult = miruro.load("${miruro.mainUrl}/info/$aniId") as? com.lagradost.cloudstream3.AnimeLoadResponse
-                    if (loadResult == null) return@runSource
-                    val epList = if (isDub) loadResult.episodes?.get(DubStatus.Dubbed) else loadResult.episodes?.get(DubStatus.Subbed)
-                    val matchedEp = epList?.find { it.episode == episode }
-                    if (matchedEp == null) return@runSource
-                    miruro.loadLinks(matchedEp.data, false, cSub, cLink)
+                    val epData = SourceCache.episodeData("Miruro", animeKey, isDub, episode) {
+                        resolveMiruro(aniId, episode, isDub)
+                    }
+                    if (epData == null) return@runSource
+                    Miruro().loadLinks(epData, false, cSub, cLink)
                 }
             },
             {
                 runSource("AniSuge", subtitleCallback, callback) { cSub, cLink ->
-                    val aniSuge = AniSugeProvider()
-                    val searchTitles = listOfNotNull(title, jpTitle).filter { it.isNotBlank() }
-                    val epData = findEpisodeData(searchTitles, listOfNotNull(title, jpTitle), episode, isDub, year = linkData.year,
-                        doSearch = { aniSuge.search(it) },
-                        doLoad = { aniSuge.load(it) as? com.lagradost.cloudstream3.AnimeLoadResponse },
-                        sourceTag = "AniSuge"
-                    )
-                    if (epData != null) {
-                        aniSuge.loadLinks(epData, false, cSub, cLink)
+                    val epData = SourceCache.episodeData("AniSuge", animeKey, isDub, episode) {
+                        resolveAniSuge(searchTitles, targetTitles, episode, isDub, linkData.year)
                     }
+                    if (epData == null) return@runSource
+                    AniSugeProvider().loadLinks(epData, false, cSub, cLink)
                 }
             },
             {
                 runSource("AniWaves", subtitleCallback, callback) { cSub, cLink ->
-                    val aniWaves = AniWaves()
-                    val searchTitles = listOfNotNull(title, jpTitle).filter { it.isNotBlank() }
-                    val aniWavesTargets = listOfNotNull(title, jpTitle).map { cleanTitle(it) }
-                    var matchedData: String? = null
-                    for (t in searchTitles) {
-                        val searchResults = try { aniWaves.search(t) } catch (e: Throwable) { continue }
-                        val candidates = searchResults.mapNotNull { r ->
-                            val c = cleanTitle(r.name)
-                            val score = when {
-                                aniWavesTargets.contains(c) -> 2
-                                else -> 0
-                            }
-                            if (score > 0) Pair(score, r) else null
-                        }.sortedByDescending { it.first }
-                        for ((_, result) in candidates) {
-                            try {
-                                val loadResult = aniWaves.load(result.url) as? com.lagradost.cloudstream3.AnimeLoadResponse ?: continue
-                                val epList = if (isDub) loadResult.episodes?.get(DubStatus.Dubbed) else loadResult.episodes?.get(DubStatus.Subbed)
-                                val ep = epList?.find { it.episode == episode } ?: continue
-                                matchedData = ep.data
-                                break
-                            } catch (e: Throwable) { continue }
-                        }
-                        if (matchedData != null) break
+                    val epData = SourceCache.episodeData("AniWaves", animeKey, isDub, episode) {
+                        resolveAniWaves(searchTitles, targetTitles, episode, isDub)
                     }
-                    if (matchedData != null) {
-                        aniWaves.loadLinks(matchedData, false, cSub, cLink)
-                    }
+                    if (epData == null) return@runSource
+                    AniWaves().loadLinks(epData, false, cSub, cLink)
                 }
             },
             {
                 runSource("Anikai", subtitleCallback, callback) { cSub, cLink ->
-                    val anikai = Anikai()
-                    val searchTitles = listOfNotNull(title, jpTitle).filter { it.isNotBlank() }
-                    val epData = findEpisodeData(searchTitles, listOfNotNull(title, jpTitle), episode, isDub, year = linkData.year,
-                        doSearch = { anikai.search(it) },
-                        doLoad = { anikai.load(it) as? com.lagradost.cloudstream3.AnimeLoadResponse },
-                        sourceTag = "Anikai"
-                    )
-                    if (epData != null) {
-                        anikai.loadLinks(epData, false, cSub, cLink)
+                    val epData = SourceCache.episodeData("Anikai", animeKey, isDub, episode) {
+                        resolveAnikai(searchTitles, targetTitles, episode, isDub, linkData.year)
                     }
+                    if (epData == null) return@runSource
+                    Anikai().loadLinks(epData, false, cSub, cLink)
                 }
             },
             {
                 runSource("AniDb", subtitleCallback, callback) { cSub, cLink ->
-                    val aniDb = AniDb()
-                    val searchTitles = listOfNotNull(title, jpTitle).filter { it.isNotBlank() }
-                    val epData = findEpisodeData(searchTitles, listOfNotNull(title, jpTitle), episode, isDub, year = linkData.year,
-                        doSearch = { q -> aniDb.search(q, 1).items },
-                        doLoad = { aniDb.load(it) as? com.lagradost.cloudstream3.AnimeLoadResponse },
-                        sourceTag = "AniDb"
-                    )
-                    if (epData != null) {
-                        aniDb.loadLinks(epData, false, cSub, cLink)
+                    val epData = SourceCache.episodeData("AniDb", animeKey, isDub, episode) {
+                        resolveAniDb(searchTitles, targetTitles, episode, isDub, linkData.year)
                     }
+                    if (epData == null) return@runSource
+                    AniDb().loadLinks(epData, false, cSub, cLink)
                 }
             },
             {
@@ -469,44 +444,29 @@ class RaghavAnime : MainAPI() {
             },
             {
                 runSource("Anineko", subtitleCallback, callback) { cSub, cLink ->
-                    val anineko = Anineko()
-                    val searchTitles = listOfNotNull(title, jpTitle).filter { it.isNotBlank() }
-                    val epData = findEpisodeData(searchTitles, listOfNotNull(title, jpTitle), episode, isDub, year = linkData.year,
-                        doSearch = { anineko.search(it) },
-                        doLoad = { anineko.load(it) as? com.lagradost.cloudstream3.AnimeLoadResponse },
-                        sourceTag = "Anineko"
-                    )
-                    if (epData != null) {
-                        anineko.loadLinks(epData, false, cSub, cLink)
+                    val epData = SourceCache.episodeData("Anineko", animeKey, isDub, episode) {
+                        resolveAnineko(searchTitles, targetTitles, episode, isDub, linkData.year)
                     }
+                    if (epData == null) return@runSource
+                    Anineko().loadLinks(epData, false, cSub, cLink)
                 }
             },
             {
                 runSource("2DHive", subtitleCallback, callback) { cSub, cLink ->
-                    val twoDHive = RaghavTwoDHive()
-                    val searchTitles = listOfNotNull(title, jpTitle).filter { it.isNotBlank() }
-                    val epData = findEpisodeData(searchTitles, listOfNotNull(title, jpTitle), episode, isDub, year = linkData.year,
-                        doSearch = { twoDHive.search(it) },
-                        doLoad = { twoDHive.load(it) as? com.lagradost.cloudstream3.AnimeLoadResponse },
-                        sourceTag = "2DHive"
-                    )
-                    if (epData != null) {
-                        twoDHive.loadLinks(epData, false, cSub, cLink)
+                    val epData = SourceCache.episodeData("2DHive", animeKey, isDub, episode) {
+                        resolveTwoDHive(searchTitles, targetTitles, episode, isDub, linkData.year)
                     }
+                    if (epData == null) return@runSource
+                    RaghavTwoDHive().loadLinks(epData, false, cSub, cLink)
                 }
             },
             {
                 runSource("AniKoto", subtitleCallback, callback) { cSub, cLink ->
-                    val anikoto = RaghavAnikoto()
-                    val searchTitles = listOfNotNull(title, jpTitle).filter { it.isNotBlank() }
-                    val epData = findEpisodeData(searchTitles, listOfNotNull(title, jpTitle), episode, isDub, year = linkData.year,
-                        doSearch = { anikoto.search(it) },
-                        doLoad = { anikoto.load(it) as? com.lagradost.cloudstream3.AnimeLoadResponse },
-                        sourceTag = "AniKoto"
-                    )
-                    if (epData != null) {
-                        anikoto.loadLinks(epData, false, cSub, cLink)
+                    val epData = SourceCache.episodeData("AniKoto", animeKey, isDub, episode) {
+                        resolveAniKoto(searchTitles, targetTitles, episode, isDub, linkData.year)
                     }
+                    if (epData == null) return@runSource
+                    RaghavAnikoto().loadLinks(epData, false, cSub, cLink)
                 }
             },
             {
@@ -518,16 +478,11 @@ class RaghavAnime : MainAPI() {
             },
             {
                 runSource("Animo", subtitleCallback, callback) { cSub, cLink ->
-                    val animo = RaghavAnimo()
-                    val searchTitles = listOfNotNull(title, jpTitle).filter { it.isNotBlank() }
-                    val epData = findEpisodeData(searchTitles, listOfNotNull(title, jpTitle), episode, isDub, year = linkData.year,
-                        doSearch = { animo.search(it) },
-                        doLoad = { animo.load(it) as? com.lagradost.cloudstream3.AnimeLoadResponse },
-                        sourceTag = "Animo"
-                    )
-                    if (epData != null) {
-                        animo.loadLinks(epData, false, cSub, cLink)
+                    val epData = SourceCache.episodeData("Animo", animeKey, isDub, episode) {
+                        resolveAnimo(searchTitles, targetTitles, episode, isDub, linkData.year)
                     }
+                    if (epData == null) return@runSource
+                    RaghavAnimo().loadLinks(epData, false, cSub, cLink)
                 }
             },
             {
@@ -545,42 +500,30 @@ class RaghavAnime : MainAPI() {
             },
             {
                 runSource("Senshi", subtitleCallback, callback) { cSub, cLink ->
-                    val senshi = RaghavSenshi()
-                    val searchTitles = listOfNotNull(title, jpTitle).filter { it.isNotBlank() }
-                    val epData = findEpisodeData(searchTitles, listOfNotNull(title, jpTitle), episode, isDub, year = linkData.year,
-                        doSearch = { senshi.search(it) },
-                        doLoad = { senshi.load(it) as? com.lagradost.cloudstream3.AnimeLoadResponse },
-                        sourceTag = "Senshi"
-                    )
-                    if (epData != null) {
-                        senshi.loadLinks(epData, false, cSub, cLink)
+                    val epData = SourceCache.episodeData("Senshi", animeKey, isDub, episode) {
+                        resolveSenshi(searchTitles, targetTitles, episode, isDub, linkData.year)
                     }
+                    if (epData == null) return@runSource
+                    RaghavSenshi().loadLinks(epData, false, cSub, cLink)
                 }
             },
             {
                 runSource("AniNami", subtitleCallback, callback) { cSub, cLink ->
                     if (aniId <= 0) return@runSource
-                    val aniNami = RaghavAniNami()
-                    val loadResult = aniNami.load("${aniNami.mainUrl}/anime/$aniId") as? com.lagradost.cloudstream3.AnimeLoadResponse
-                    if (loadResult == null) return@runSource
-                    val epList = if (isDub) loadResult.episodes?.get(DubStatus.Dubbed) else loadResult.episodes?.get(DubStatus.Subbed)
-                    val matchedEp = epList?.find { it.episode == episode }
-                    if (matchedEp == null) return@runSource
-                    aniNami.loadLinks(matchedEp.data, false, cSub, cLink)
+                    val epData = SourceCache.episodeData("AniNami", animeKey, isDub, episode) {
+                        resolveAniNami(aniId, episode, isDub)
+                    }
+                    if (epData == null) return@runSource
+                    RaghavAniNami().loadLinks(epData, false, cSub, cLink)
                 }
             },
             {
                 runSource("AniDao", subtitleCallback, callback) { cSub, cLink ->
-                    val aniDao = RaghavAniDao()
-                    val searchTitles = listOfNotNull(title, jpTitle).filter { it.isNotBlank() }
-                    val epData = findEpisodeData(searchTitles, listOfNotNull(title, jpTitle), episode, isDub, year = linkData.year,
-                        doSearch = { aniDao.search(it) },
-                        doLoad = { aniDao.load(it) as? com.lagradost.cloudstream3.AnimeLoadResponse },
-                        sourceTag = "AniDao"
-                    )
-                    if (epData != null) {
-                        aniDao.loadLinks(epData, false, cSub, cLink)
+                    val epData = SourceCache.episodeData("AniDao", animeKey, isDub, episode) {
+                        resolveAniDao(searchTitles, targetTitles, episode, isDub, linkData.year)
                     }
+                    if (epData == null) return@runSource
+                    RaghavAniDao().loadLinks(epData, false, cSub, cLink)
                 }
             },
             {
@@ -605,6 +548,12 @@ class RaghavAnime : MainAPI() {
                 }
             },
         )
+
+        // slow sources keep resolving in the background, but the player never waits past the cap
+        val waitJob = prefetchScope.launch {
+            runAllAsync(*sources.toTypedArray())
+        }
+        withTimeoutOrNull(MAX_SOURCE_WAIT_MS) { waitJob.join() }
 
         return true
     }
@@ -670,28 +619,203 @@ class RaghavAnime : MainAPI() {
         return Regex("""\b(19\d{2}|20\d{2})\b""").find(title)?.groupValues?.get(1)?.toIntOrNull()
     }
 
-    private suspend fun findEpisodeData(
+    private fun allowPrefetch(): Boolean {
+        val now = System.currentTimeMillis()
+        while (recentPrefetches.peek() != null && now - recentPrefetches.peek() > 8000L) {
+            recentPrefetches.poll()
+        }
+        return recentPrefetches.size < 3
+    }
+
+    private suspend fun warmSource(provider: String, animeKey: String, isDub: Boolean, resolve: suspend () -> Map<Int, String>?) {
+        try {
+            SourceCache.warm(provider, animeKey, isDub, resolve)
+        } catch (e: Exception) {
+            Log.d("RaghavAnimeKitsu", "[$provider] prefetch skipped: ${e.message}")
+        }
+    }
+
+    private fun prefetchSources(kitsuId: Int, anilistId: Int?, title: String, jpTitle: String?, year: Int?) {
+        if (kitsuId <= 0 || title.isBlank() || !allowPrefetch()) return
+        recentPrefetches.add(System.currentTimeMillis())
+
+        val animeKey = kitsuId.toString()
+        val titles = listOfNotNull(title, jpTitle).filter { it.isNotBlank() }
+        val targets = listOfNotNull(title, jpTitle)
+        val aniId = anilistId ?: 0
+
+        prefetchScope.launch {
+            for (isDub in listOf(false, true)) {
+                runAllAsync(
+                    { if (aniId > 0) warmSource("Miruro", animeKey, isDub) { resolveMiruro(aniId, null, isDub)?.episodes } },
+                    { warmSource("AniSuge", animeKey, isDub) { resolveAniSuge(titles, targets, null, isDub, year)?.episodes } },
+                    { warmSource("AniWaves", animeKey, isDub) { resolveAniWaves(titles, targets, null, isDub)?.episodes } },
+                    { warmSource("Anikai", animeKey, isDub) { resolveAnikai(titles, targets, null, isDub, year)?.episodes } },
+                    { warmSource("AniDb", animeKey, isDub) { resolveAniDb(titles, targets, null, isDub, year)?.episodes } },
+                    { warmSource("Anineko", animeKey, isDub) { resolveAnineko(titles, targets, null, isDub, year)?.episodes } },
+                    { warmSource("2DHive", animeKey, isDub) { resolveTwoDHive(titles, targets, null, isDub, year)?.episodes } },
+                    { warmSource("AniKoto", animeKey, isDub) { resolveAniKoto(titles, targets, null, isDub, year)?.episodes } },
+                    { warmSource("Animo", animeKey, isDub) { resolveAnimo(titles, targets, null, isDub, year)?.episodes } },
+                    { warmSource("Senshi", animeKey, isDub) { resolveSenshi(titles, targets, null, isDub, year)?.episodes } },
+                    { if (aniId > 0) warmSource("AniNami", animeKey, isDub) { resolveAniNami(aniId, null, isDub)?.episodes } },
+                    { warmSource("AniDao", animeKey, isDub) { resolveAniDao(titles, targets, null, isDub, year)?.episodes } }
+                )
+            }
+        }
+    }
+
+    private suspend fun resolveMiruro(anilistId: Int, episode: Int?, isDub: Boolean): SourceCache.Match? {
+        val miruro = Miruro()
+        val loadResult = miruro.load("${miruro.mainUrl}/info/$anilistId") as? com.lagradost.cloudstream3.AnimeLoadResponse ?: return null
+        return matchFrom(loadResult, episode, isDub)
+    }
+
+    private suspend fun resolveAniNami(anilistId: Int, episode: Int?, isDub: Boolean): SourceCache.Match? {
+        val aniNami = RaghavAniNami()
+        val loadResult = aniNami.load("${aniNami.mainUrl}/anime/$anilistId") as? com.lagradost.cloudstream3.AnimeLoadResponse ?: return null
+        return matchFrom(loadResult, episode, isDub)
+    }
+
+    private fun matchFrom(loadResult: com.lagradost.cloudstream3.AnimeLoadResponse, episode: Int?, isDub: Boolean): SourceCache.Match? {
+        val epList = loadResult.episodes?.get(if (isDub) DubStatus.Dubbed else DubStatus.Subbed)
+        val map = episodeMap(epList) ?: return null
+        return SourceCache.Match(map, episode != null && map.containsKey(episode))
+    }
+
+    private fun episodeMap(epList: List<Episode>?): Map<Int, String>? {
+        if (epList.isNullOrEmpty()) return null
+        val map = epList.mapNotNull { e -> e.episode?.let { it to e.data } }.toMap()
+        return map.ifEmpty { null }
+    }
+
+    private suspend fun resolveAniSuge(titles: List<String>, targets: List<String>, episode: Int?, isDub: Boolean, year: Int?): SourceCache.Match? {
+        val aniSuge = AniSugeProvider()
+        return findEpisodeMap(titles, targets, episode, isDub, year,
+            doSearch = { aniSuge.search(it) },
+            doLoad = { aniSuge.load(it) as? com.lagradost.cloudstream3.AnimeLoadResponse },
+            sourceTag = "AniSuge")
+    }
+
+    private suspend fun resolveAnikai(titles: List<String>, targets: List<String>, episode: Int?, isDub: Boolean, year: Int?): SourceCache.Match? {
+        val anikai = Anikai()
+        return findEpisodeMap(titles, targets, episode, isDub, year,
+            doSearch = { anikai.search(it) },
+            doLoad = { anikai.load(it) as? com.lagradost.cloudstream3.AnimeLoadResponse },
+            sourceTag = "Anikai")
+    }
+
+    private suspend fun resolveAniDb(titles: List<String>, targets: List<String>, episode: Int?, isDub: Boolean, year: Int?): SourceCache.Match? {
+        val aniDb = AniDb()
+        return findEpisodeMap(titles, targets, episode, isDub, year,
+            doSearch = { q -> aniDb.search(q, 1).items },
+            doLoad = { aniDb.load(it) as? com.lagradost.cloudstream3.AnimeLoadResponse },
+            sourceTag = "AniDb")
+    }
+
+    private suspend fun resolveAnineko(titles: List<String>, targets: List<String>, episode: Int?, isDub: Boolean, year: Int?): SourceCache.Match? {
+        val anineko = Anineko()
+        return findEpisodeMap(titles, targets, episode, isDub, year,
+            doSearch = { anineko.search(it) },
+            doLoad = { anineko.load(it) as? com.lagradost.cloudstream3.AnimeLoadResponse },
+            sourceTag = "Anineko")
+    }
+
+    private suspend fun resolveTwoDHive(titles: List<String>, targets: List<String>, episode: Int?, isDub: Boolean, year: Int?): SourceCache.Match? {
+        val twoDHive = RaghavTwoDHive()
+        return findEpisodeMap(titles, targets, episode, isDub, year,
+            doSearch = { twoDHive.search(it) },
+            doLoad = { twoDHive.load(it) as? com.lagradost.cloudstream3.AnimeLoadResponse },
+            sourceTag = "2DHive")
+    }
+
+    private suspend fun resolveAniKoto(titles: List<String>, targets: List<String>, episode: Int?, isDub: Boolean, year: Int?): SourceCache.Match? {
+        val anikoto = RaghavAnikoto()
+        return findEpisodeMap(titles, targets, episode, isDub, year,
+            doSearch = { anikoto.search(it) },
+            doLoad = { anikoto.load(it) as? com.lagradost.cloudstream3.AnimeLoadResponse },
+            sourceTag = "AniKoto")
+    }
+
+    private suspend fun resolveAnimo(titles: List<String>, targets: List<String>, episode: Int?, isDub: Boolean, year: Int?): SourceCache.Match? {
+        val animo = RaghavAnimo()
+        return findEpisodeMap(titles, targets, episode, isDub, year,
+            doSearch = { animo.search(it) },
+            doLoad = { animo.load(it) as? com.lagradost.cloudstream3.AnimeLoadResponse },
+            sourceTag = "Animo")
+    }
+
+    private suspend fun resolveSenshi(titles: List<String>, targets: List<String>, episode: Int?, isDub: Boolean, year: Int?): SourceCache.Match? {
+        val senshi = RaghavSenshi()
+        return findEpisodeMap(titles, targets, episode, isDub, year,
+            doSearch = { senshi.search(it) },
+            doLoad = { senshi.load(it) as? com.lagradost.cloudstream3.AnimeLoadResponse },
+            sourceTag = "Senshi")
+    }
+
+    private suspend fun resolveAniDao(titles: List<String>, targets: List<String>, episode: Int?, isDub: Boolean, year: Int?): SourceCache.Match? {
+        val aniDao = RaghavAniDao()
+        return findEpisodeMap(titles, targets, episode, isDub, year,
+            doSearch = { aniDao.search(it) },
+            doLoad = { aniDao.load(it) as? com.lagradost.cloudstream3.AnimeLoadResponse },
+            sourceTag = "AniDao")
+    }
+
+    private suspend fun resolveAniWaves(titles: List<String>, targets: List<String>, episode: Int?, isDub: Boolean): SourceCache.Match? {
+        val aniWaves = AniWaves()
+        val cleanedTargets = targets.map { cleanTitle(it) }
+        var failedSearches = 0
+        var fallback: Map<Int, String>? = null
+        for (t in titles) {
+            val searchResults = try { aniWaves.search(t) } catch (e: Throwable) {
+                failedSearches++
+                Log.e("RaghavAnimeKitsu", "[AniWaves] search failed for '$t': ${e.message}")
+                continue
+            }
+            val candidates = searchResults.filter { r -> cleanedTargets.contains(cleanTitle(r.name)) }
+            for (result in candidates) {
+                try {
+                    val loadResult = aniWaves.load(result.url) as? com.lagradost.cloudstream3.AnimeLoadResponse ?: continue
+                    val epList = if (isDub) loadResult.episodes?.get(DubStatus.Dubbed) else loadResult.episodes?.get(DubStatus.Subbed)
+                    val map = episodeMap(epList) ?: continue
+                    if (fallback == null) fallback = map
+                    if (episode == null || map.containsKey(episode)) {
+                        return SourceCache.Match(map, episode != null)
+                    }
+                } catch (e: Throwable) {
+                    Log.e("RaghavAnimeKitsu", "[AniWaves] load failed for '${result.name}': ${e.message}")
+                    continue
+                }
+            }
+        }
+        if (fallback != null) return SourceCache.Match(fallback, false)
+        if (titles.isNotEmpty() && failedSearches == titles.size) {
+            throw IllegalStateException("AniWaves is unreachable right now")
+        }
+        return null
+    }
+
+    private suspend fun findEpisodeMap(
         searchTitles: List<String>,
         targetTitles: List<String>,
-        episode: Int,
+        episode: Int?,
         isDub: Boolean,
         year: Int?,
         doSearch: suspend (String) -> List<SearchResponse>,
         doLoad: suspend (String) -> com.lagradost.cloudstream3.AnimeLoadResponse?,
-        dubKey: com.lagradost.cloudstream3.DubStatus = com.lagradost.cloudstream3.DubStatus.Dubbed,
-        subKey: com.lagradost.cloudstream3.DubStatus = com.lagradost.cloudstream3.DubStatus.Subbed,
         sourceTag: String = "Source"
-    ): String? {
+    ): SourceCache.Match? {
         val cleanedTargets = targetTitles.map { cleanTitle(it) }
-        val epKey = if (isDub) dubKey else subKey
+        val epKey = if (isDub) DubStatus.Dubbed else DubStatus.Subbed
 
         val targetSeasonNum = targetTitles.firstNotNullOfOrNull { extractSeasonNumber(it) }
 
         data class Candidate(val combinedScore: Int, val titleScore: Int, val result: SearchResponse)
 
         val allCandidates = mutableListOf<Candidate>()
+        var failedSearches = 0
         for (t in searchTitles) {
             val searchResults = try { doSearch(t) } catch (e: Throwable) {
+                failedSearches++
                 Log.e("RaghavAnimeKitsu", "[$sourceTag] search failed for '$t': ${e.message}")
                 continue
             }
@@ -720,20 +844,19 @@ class RaghavAnime : MainAPI() {
             }
         }
 
-        if (allCandidates.isEmpty()) {
-            return null
-        }
-
         allCandidates.sortByDescending { it.combinedScore }
+
+        var fallback: Map<Int, String>? = null
 
         // exact title matches first, best season/year score wins
         for (cand in allCandidates) {
             if (cand.titleScore < 2) break
             try {
                 val loadResult = doLoad(cand.result.url) ?: continue
-                val ep = loadResult.episodes?.get(epKey)?.find { it.episode == episode }
-                if (ep != null) {
-                    return ep.data
+                val map = episodeMap(loadResult.episodes?.get(epKey)) ?: continue
+                if (fallback == null) fallback = map
+                if (episode == null || map.containsKey(episode)) {
+                    return SourceCache.Match(map, episode != null)
                 }
             } catch (e: Throwable) {
                 Log.e("RaghavAnimeKitsu", "[$sourceTag] load failed for '${cand.result.name}': ${e.message}")
@@ -751,15 +874,20 @@ class RaghavAnime : MainAPI() {
             if (year != null && candYear != null && Math.abs(candYear - year) > 1) continue
             try {
                 val loadResult = doLoad(cand.result.url) ?: continue
-                val ep = loadResult.episodes?.get(epKey)?.find { it.episode == episode }
-                if (ep != null) {
-                    return ep.data
+                val map = episodeMap(loadResult.episodes?.get(epKey)) ?: continue
+                if (fallback == null) fallback = map
+                if (episode == null || map.containsKey(episode)) {
+                    return SourceCache.Match(map, episode != null)
                 }
             } catch (e: Throwable) {
                 Log.e("RaghavAnimeKitsu", "[$sourceTag] load failed for fuzzy '${cand.result.name}': ${e.message}")
             }
         }
 
+        if (fallback != null) return SourceCache.Match(fallback, false)
+        if (searchTitles.isNotEmpty() && failedSearches == searchTitles.size) {
+            throw IllegalStateException("$sourceTag is unreachable right now")
+        }
         return null
     }
 
@@ -777,6 +905,7 @@ class RaghavAnime : MainAPI() {
     companion object {
         var hasShownThisSession = false
         private val homePageCache = mutableMapOf<String, List<KitsuMedia>>()
+        private const val MAX_SOURCE_WAIT_MS = 35_000L
     }
 }
 

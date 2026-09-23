@@ -17,8 +17,9 @@ object GoTakuCrypto {
         167, 208, 189, 122, 150, 242, 60, 1, 70, 177, 253, 150, 158, 124, 253, 47
     ).map { it.toByte() }.toByteArray()
 
+    // rotated by the site, current value lives in the embed player bundle
     private val manifestSeed = byteHex(
-        "b6b9ec379d7d50ec" + "4771208701ed60ae" + "423730683469433f" + "2a30c9a2ce205c46"
+        "458e5403c40a7333" + "2706df406193dd6b" + "040a2ea97a6bb59b" + "52b294a61006e6ef"
     )
 
     private val apiKey = hkdf(apiSeed, ByteArray(0), "api-seal|v1".toByteArray())

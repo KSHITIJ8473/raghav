@@ -21,13 +21,7 @@ import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.app
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withTimeoutOrNull
 import java.net.URLEncoder
-import java.util.concurrent.ConcurrentLinkedQueue
 
 class RaghavAnime : MainAPI() {
     override var mainUrl = "https://kitsu.io"
@@ -44,9 +38,6 @@ class RaghavAnime : MainAPI() {
 
     @Volatile
     private var kitsuDownPopupShown = false
-
-    private val prefetchScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private val recentPrefetches = ConcurrentLinkedQueue<Long>()
 
     private val downCheckLock = kotlinx.coroutines.sync.Mutex()
     @Volatile
@@ -339,8 +330,6 @@ class RaghavAnime : MainAPI() {
             })
         }
 
-        prefetchSources(kitsuId, anilistId, title, jpTitle, year)
-
         return newAnimeLoadResponse(title, url, tvType) {
             this.posterUrl = posterUrl
             this.backgroundPosterUrl = bannerUrl
@@ -549,11 +538,7 @@ class RaghavAnime : MainAPI() {
             },
         )
 
-        // slow sources keep resolving in the background, but the player never waits past the cap
-        val waitJob = prefetchScope.launch {
-            runAllAsync(*sources.toTypedArray())
-        }
-        withTimeoutOrNull(MAX_SOURCE_WAIT_MS) { waitJob.join() }
+        runAllAsync(*sources.toTypedArray())
 
         return true
     }
@@ -617,51 +602,6 @@ class RaghavAnime : MainAPI() {
 
     private fun extractYear(title: String): Int? {
         return Regex("""\b(19\d{2}|20\d{2})\b""").find(title)?.groupValues?.get(1)?.toIntOrNull()
-    }
-
-    private fun allowPrefetch(): Boolean {
-        val now = System.currentTimeMillis()
-        while (recentPrefetches.peek() != null && now - recentPrefetches.peek() > 8000L) {
-            recentPrefetches.poll()
-        }
-        return recentPrefetches.size < 3
-    }
-
-    private suspend fun warmSource(provider: String, animeKey: String, isDub: Boolean, resolve: suspend () -> Map<Int, String>?) {
-        try {
-            SourceCache.warm(provider, animeKey, isDub, resolve)
-        } catch (e: Exception) {
-            Log.d("RaghavAnimeKitsu", "[$provider] prefetch skipped: ${e.message}")
-        }
-    }
-
-    private fun prefetchSources(kitsuId: Int, anilistId: Int?, title: String, jpTitle: String?, year: Int?) {
-        if (kitsuId <= 0 || title.isBlank() || !allowPrefetch()) return
-        recentPrefetches.add(System.currentTimeMillis())
-
-        val animeKey = kitsuId.toString()
-        val titles = listOfNotNull(title, jpTitle).filter { it.isNotBlank() }
-        val targets = listOfNotNull(title, jpTitle)
-        val aniId = anilistId ?: 0
-
-        prefetchScope.launch {
-            for (isDub in listOf(false, true)) {
-                runAllAsync(
-                    { if (aniId > 0) warmSource("Miruro", animeKey, isDub) { resolveMiruro(aniId, null, isDub)?.episodes } },
-                    { warmSource("AniSuge", animeKey, isDub) { resolveAniSuge(titles, targets, null, isDub, year)?.episodes } },
-                    { warmSource("AniWaves", animeKey, isDub) { resolveAniWaves(titles, targets, null, isDub)?.episodes } },
-                    { warmSource("Anikai", animeKey, isDub) { resolveAnikai(titles, targets, null, isDub, year)?.episodes } },
-                    { warmSource("AniDb", animeKey, isDub) { resolveAniDb(titles, targets, null, isDub, year)?.episodes } },
-                    { warmSource("Anineko", animeKey, isDub) { resolveAnineko(titles, targets, null, isDub, year)?.episodes } },
-                    { warmSource("2DHive", animeKey, isDub) { resolveTwoDHive(titles, targets, null, isDub, year)?.episodes } },
-                    { warmSource("AniKoto", animeKey, isDub) { resolveAniKoto(titles, targets, null, isDub, year)?.episodes } },
-                    { warmSource("Animo", animeKey, isDub) { resolveAnimo(titles, targets, null, isDub, year)?.episodes } },
-                    { warmSource("Senshi", animeKey, isDub) { resolveSenshi(titles, targets, null, isDub, year)?.episodes } },
-                    { if (aniId > 0) warmSource("AniNami", animeKey, isDub) { resolveAniNami(aniId, null, isDub)?.episodes } },
-                    { warmSource("AniDao", animeKey, isDub) { resolveAniDao(titles, targets, null, isDub, year)?.episodes } }
-                )
-            }
-        }
     }
 
     private suspend fun resolveMiruro(anilistId: Int, episode: Int?, isDub: Boolean): SourceCache.Match? {
@@ -905,7 +845,6 @@ class RaghavAnime : MainAPI() {
     companion object {
         var hasShownThisSession = false
         private val homePageCache = mutableMapOf<String, List<KitsuMedia>>()
-        private const val MAX_SOURCE_WAIT_MS = 35_000L
     }
 }
 

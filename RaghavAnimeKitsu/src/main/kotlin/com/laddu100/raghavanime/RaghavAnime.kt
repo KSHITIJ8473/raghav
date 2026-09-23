@@ -21,6 +21,13 @@ import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.app
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import java.net.URLEncoder
 
 class RaghavAnime : MainAPI() {
@@ -38,6 +45,11 @@ class RaghavAnime : MainAPI() {
 
     @Volatile
     private var kitsuDownPopupShown = false
+
+    private val prefetchScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    @Volatile
+    private var prefetchJob: Job? = null
 
     private val downCheckLock = kotlinx.coroutines.sync.Mutex()
     @Volatile
@@ -265,8 +277,6 @@ class RaghavAnime : MainAPI() {
 
         val tags = try { fetchCategories(kitsuId) } catch (_: Exception) { emptyList() }
 
-        // movies carry both sub and dub episode lists here, and the app hides
-        // the sub/dub switcher on movie types, so they stay regular anime
         val tvType = when (subtype) {
             "ova", "ona", "special" -> TvType.OVA
             else -> TvType.Anime
@@ -329,6 +339,8 @@ class RaghavAnime : MainAPI() {
                 this.posterUrl = epPoster
             })
         }
+
+        prefetchSources(kitsuId, anilistId, title, jpTitle, year)
 
         return newAnimeLoadResponse(title, url, tvType) {
             this.posterUrl = posterUrl
@@ -538,7 +550,9 @@ class RaghavAnime : MainAPI() {
             },
         )
 
-        runAllAsync(*sources.toTypedArray())
+        withTimeoutOrNull(MAX_SOURCE_WAIT_MS) {
+            runAllAsync(*sources.toTypedArray())
+        }
 
         return true
     }
@@ -602,6 +616,40 @@ class RaghavAnime : MainAPI() {
 
     private fun extractYear(title: String): Int? {
         return Regex("""\b(19\d{2}|20\d{2})\b""").find(title)?.groupValues?.get(1)?.toIntOrNull()
+    }
+
+    private suspend fun warmSource(provider: String, animeKey: String, isDub: Boolean, resolve: suspend () -> Map<Int, String>?) {
+        try {
+            SourceCache.warm(provider, animeKey, isDub, resolve)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.d("RaghavAnimeKitsu", "[$provider] warm failed: ${e.message}")
+        }
+    }
+
+    private fun prefetchSources(kitsuId: Int, anilistId: Int?, title: String, jpTitle: String?, year: Int?) {
+        if (kitsuId <= 0 || title.isBlank()) return
+        val animeKey = kitsuId.toString()
+        val titles = listOfNotNull(title, jpTitle).filter { it.isNotBlank() }
+        val targets = listOfNotNull(title, jpTitle)
+        val aniId = anilistId ?: 0
+
+        prefetchJob?.cancel()
+        prefetchJob = prefetchScope.launch {
+            for (isDub in listOf(false, true)) {
+                runAllAsync(
+                    { warmSource("AniWaves", animeKey, isDub) { resolveAniWaves(titles, targets, null, isDub)?.episodes } },
+                    { warmSource("Anikai", animeKey, isDub) { resolveAnikai(titles, targets, null, isDub, year)?.episodes } },
+                    { warmSource("Anineko", animeKey, isDub) { resolveAnineko(titles, targets, null, isDub, year)?.episodes } },
+                    { warmSource("2DHive", animeKey, isDub) { resolveTwoDHive(titles, targets, null, isDub, year)?.episodes } },
+                    { warmSource("AniKoto", animeKey, isDub) { resolveAniKoto(titles, targets, null, isDub, year)?.episodes } },
+                    { warmSource("Animo", animeKey, isDub) { resolveAnimo(titles, targets, null, isDub, year)?.episodes } },
+                    { if (aniId > 0) warmSource("AniNami", animeKey, isDub) { resolveAniNami(aniId, null, isDub)?.episodes } },
+                    { warmSource("AniDao", animeKey, isDub) { resolveAniDao(titles, targets, null, isDub, year)?.episodes } }
+                )
+            }
+        }
     }
 
     private suspend fun resolveMiruro(anilistId: Int, episode: Int?, isDub: Boolean): SourceCache.Match? {
@@ -763,10 +811,7 @@ class RaghavAnime : MainAPI() {
                 val c = cleanTitle(r.name)
                 if (c.isBlank()) continue
                 val titleScore = when {
-                    // exact match after normalization
                     cleanedTargets.contains(c) -> 2
-                    // prefix match against a real name (guards against
-                    // trivial overlaps like "boku no")
                     c.length >= 6 && cleanedTargets.any { tgt ->
                         (c.startsWith(tgt) || tgt.startsWith(c))
                     } -> 1
@@ -788,7 +833,6 @@ class RaghavAnime : MainAPI() {
 
         var fallback: Map<Int, String>? = null
 
-        // exact title matches first, best season/year score wins
         for (cand in allCandidates) {
             if (cand.titleScore < 2) break
             try {
@@ -803,8 +847,6 @@ class RaghavAnime : MainAPI() {
             }
         }
 
-        // fuzzy fallback: only season- and year-consistent candidates,
-        // so a sequel entry can never satisfy another season's lookup
         for (cand in allCandidates) {
             if (cand.titleScore == 2) continue
             val candSeasonNum = extractSeasonNumber(cand.result.name)
@@ -845,6 +887,7 @@ class RaghavAnime : MainAPI() {
     companion object {
         var hasShownThisSession = false
         private val homePageCache = mutableMapOf<String, List<KitsuMedia>>()
+        private const val MAX_SOURCE_WAIT_MS = 35_000L
     }
 }
 

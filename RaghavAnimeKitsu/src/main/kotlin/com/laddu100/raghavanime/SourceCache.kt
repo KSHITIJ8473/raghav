@@ -54,6 +54,21 @@ object SourceCache {
         }
     }
 
+    suspend fun warm(
+        provider: String,
+        anime: String,
+        isDub: Boolean,
+        resolve: suspend () -> Map<Int, String>?
+    ) {
+        val k = key(provider, anime, isDub)
+        val lock = locks.computeIfAbsent(k) { Mutex() }
+        lock.withLock {
+            val cached = cache[k]
+            if (cached != null && cached.fresh()) return
+            store(k, Entry(resolve() ?: emptyMap(), mutableSetOf(), System.currentTimeMillis()))
+        }
+    }
+
     private fun store(k: String, entry: Entry) {
         if (cache.size >= MAX_ENTRIES) {
             cache.entries.sortedBy { it.value.time }.take(MAX_ENTRIES / 4).forEach { cache.remove(it.key) }

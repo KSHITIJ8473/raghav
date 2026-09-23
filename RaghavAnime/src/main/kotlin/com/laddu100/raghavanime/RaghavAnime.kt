@@ -19,6 +19,13 @@ import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.AppUtils.toJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.nicehttp.RequestBodyTypes
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.RequestBody.Companion.toRequestBody
 
@@ -37,6 +44,11 @@ class RaghavAnime : MainAPI() {
 
     @Volatile
     private var anilistDownPopupShown = false
+
+    private val prefetchScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    @Volatile
+    private var prefetchJob: Job? = null
 
     private val downCheckLock = kotlinx.coroutines.sync.Mutex()
     @Volatile
@@ -338,6 +350,8 @@ class RaghavAnime : MainAPI() {
             })
         }
 
+        prefetchSources(anilistId, title, jpTitle, year)
+
         return newAnimeLoadResponse(title, url, tvType) {
             this.posterUrl = posterUrl
             this.backgroundPosterUrl = bannerUrl
@@ -576,7 +590,9 @@ class RaghavAnime : MainAPI() {
             },
         )
 
-        runAllAsync(*sources.toTypedArray())
+        withTimeoutOrNull(MAX_SOURCE_WAIT_MS) {
+            runAllAsync(*sources.toTypedArray())
+        }
 
         return true
     }
@@ -627,6 +643,39 @@ class RaghavAnime : MainAPI() {
 
     private fun extractYear(title: String): Int? {
         return Regex("""\b(19\d{2}|20\d{2})\b""").find(title)?.groupValues?.get(1)?.toIntOrNull()
+    }
+
+    private suspend fun warmSource(provider: String, animeKey: String, isDub: Boolean, resolve: suspend () -> Map<Int, String>?) {
+        try {
+            SourceCache.warm(provider, animeKey, isDub, resolve)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.d("RaghavAnime", "[$provider] warm failed: ${e.message}")
+        }
+    }
+
+    private fun prefetchSources(anilistId: Int, title: String, jpTitle: String?, year: Int?) {
+        if (anilistId <= 0 || title.isBlank()) return
+        val animeKey = anilistId.toString()
+        val titles = listOfNotNull(title, jpTitle).filter { it.isNotBlank() }
+        val targets = listOfNotNull(title, jpTitle)
+
+        prefetchJob?.cancel()
+        prefetchJob = prefetchScope.launch {
+            for (isDub in listOf(false, true)) {
+                runAllAsync(
+                    { warmSource("AniWaves", animeKey, isDub) { resolveAniWaves(titles, targets, null, isDub)?.episodes } },
+                    { warmSource("Anikai", animeKey, isDub) { resolveAnikai(titles, targets, null, isDub, year)?.episodes } },
+                    { warmSource("Anineko", animeKey, isDub) { resolveAnineko(titles, targets, null, isDub, year)?.episodes } },
+                    { warmSource("2DHive", animeKey, isDub) { resolveTwoDHive(titles, targets, null, isDub, year)?.episodes } },
+                    { warmSource("AniKoto", animeKey, isDub) { resolveAniKoto(titles, targets, null, isDub, year)?.episodes } },
+                    { warmSource("Animo", animeKey, isDub) { resolveAnimo(titles, targets, null, isDub, year)?.episodes } },
+                    { warmSource("AniNami", animeKey, isDub) { resolveAniNami(anilistId, null, isDub)?.episodes } },
+                    { warmSource("AniDao", animeKey, isDub) { resolveAniDao(titles, targets, null, isDub, year)?.episodes } }
+                )
+            }
+        }
     }
 
     private suspend fun resolveMiruro(anilistId: Int, episode: Int?, isDub: Boolean): SourceCache.Match? {
@@ -846,6 +895,7 @@ class RaghavAnime : MainAPI() {
     companion object {
         var hasShownThisSession = false
         private val homePageCache = mutableMapOf<String, List<AniListMedia>>()
+        private const val MAX_SOURCE_WAIT_MS = 35_000L
     }
 }
 

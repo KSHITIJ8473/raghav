@@ -2,7 +2,6 @@ package com.laddu100.raghavanime
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties
 import com.fasterxml.jackson.annotation.JsonProperty
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.AppUtils.toJson
@@ -42,7 +41,6 @@ suspend fun getAnilistId(title: String): Int? {
 
         res?.data?.Media?.id
     } catch (e: Exception) {
-        Log.e("RaghavAnimeKitsu", "[Anineko] getAnilistId failed for '$title': ${e.message}")
         null
     }
 }

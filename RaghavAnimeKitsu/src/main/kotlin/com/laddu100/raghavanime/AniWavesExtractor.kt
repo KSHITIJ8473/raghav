@@ -1,6 +1,5 @@
 package com.laddu100.raghavanime
 
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.network.WebViewResolver
@@ -32,7 +31,7 @@ class AniWavesWebView(private val sourceName: String, private val baseUrl: Strin
                 useOkhttp = false,
                 timeout = 30_000L
             )
-            val resolved = app.get(url, referer = referer ?: mainUrl, interceptor = resolver).url
+            val resolved = RaghavPerf.withWebView { app.get(url, referer = referer ?: mainUrl, interceptor = resolver).url }
             val headers = mapOf("Referer" to url)
             when {
                 resolved.contains(".m3u8", ignoreCase = true) -> {
@@ -53,7 +52,6 @@ class AniWavesWebView(private val sourceName: String, private val baseUrl: Strin
                 }
             }
         }.onFailure { error ->
-            Log.e("RaghavAnimeKitsu", "[AniWaves][AniWavesWebView] getUrl failed: ${error.message}")
         }
     }
 }

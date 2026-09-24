@@ -1,6 +1,5 @@
 package com.laddu100.raghavanime
 
-import com.lagradost.api.Log
 import java.io.BufferedReader
 import java.io.ByteArrayOutputStream
 import java.io.InputStream
@@ -19,12 +18,11 @@ import okhttp3.ConnectionPool
 import okhttp3.Dispatcher
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import kotlinx.coroutines.CancellationException
 
 object FlixProxy {
 
     private const val FLIX_EMBED_BASE = "https://flixcloud.cc"
-
-    private const val TAG = "RaghavAnime"
     private const val MAX_STREAMS = 20
     private const val PREFETCH_COUNT = 3
     private const val CACHE_LIMIT_BYTES = 48L * 1024 * 1024
@@ -83,12 +81,12 @@ object FlixProxy {
                         val conn = socket.accept()
                         pool.execute { handleRequest(conn) }
                     } catch (e: Exception) {
-                        if (serverRunning) Log.e(TAG, "accept failed: ${e.message}")
+                        if (e is CancellationException) throw e
                     }
                 }
             }.start()
         } catch (e: Exception) {
-            Log.e(TAG, "proxy start failed: ${e.message}")
+            if (e is CancellationException) throw e
         }
         return serverPort
     }
@@ -154,7 +152,7 @@ object FlixProxy {
                 else -> send404(conn)
             }
         } catch (e: Exception) {
-            Log.e(TAG, "proxy request failed: ${e.message}")
+            // one bad request must not kill the proxy thread; finally closes the socket
         } finally {
             try { conn.close() } catch (_: Exception) {}
         }
@@ -223,7 +221,6 @@ object FlixProxy {
             }
             return out.toString()
         } catch (e: Exception) {
-            Log.e(TAG, "master rewrite failed: ${e.message}")
             return null
         }
     }
@@ -264,7 +261,6 @@ object FlixProxy {
             sendBytes(conn, rewritten.toByteArray(Charsets.UTF_8), HLS_TYPE)
             triggerFirstPrefetch(entry, target)
         } catch (e: Exception) {
-            Log.e(TAG, "playlist fetch failed: ${e.message}")
             send404(conn)
         }
     }
@@ -286,7 +282,7 @@ object FlixProxy {
                 streamSegment(conn, target, body.byteStream(), body.contentLength())
             }
         } catch (e: Exception) {
-            Log.e(TAG, "segment fetch failed: ${e.message}")
+            if (e is CancellationException) throw e
         }
     }
 
@@ -335,7 +331,7 @@ object FlixProxy {
                 cachePut(target, captured)
             }
         } catch (e: Exception) {
-            Log.e(TAG, "segment stream failed: ${e.message}")
+            if (e is CancellationException) throw e
         }
     }
 
@@ -427,7 +423,7 @@ object FlixProxy {
                 val raw = fetchBytes(url) ?: return@execute
                 cachePut(url, unwrapBytes(raw))
             } catch (e: Exception) {
-                Log.e(TAG, "prefetch failed: ${e.message}")
+                // a failed prefetch only skips the cache; finally releases the slot
             } finally {
                 inFlight.remove(url)
             }

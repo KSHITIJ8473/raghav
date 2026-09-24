@@ -1,7 +1,6 @@
 package com.laddu100.raghavanime
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.DubStatus
 import com.lagradost.cloudstream3.Episode
 import com.lagradost.cloudstream3.LoadResponse
@@ -23,6 +22,7 @@ import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.newExtractorLink
 import java.net.URLEncoder
+import kotlinx.coroutines.CancellationException
 
 class RaghavAniKage : MainAPI() {
     override var mainUrl = "https://anikage.cc"
@@ -423,6 +423,7 @@ class RaghavAniKage : MainAPI() {
                         val freshText = app.get("$sourcesUrl&_=${System.currentTimeMillis()}", headers = apiHeaders).text
                         parseSourcesResponse(freshText)?.let { parsed = it }
                     } catch (e: Exception) {
+                        if (e is CancellationException) throw e
                     }
                 }
 
@@ -456,6 +457,7 @@ class RaghavAniKage : MainAPI() {
                             val embedLabel = "AniKage ${src.server ?: serverId} ${subType}"
                             if (RaghavEmbeds.resolveEmbed(embedUrl, "$mainUrl/", embedLabel, "AniKage", lang, subtitleCallback, callback)) found = true
                         } catch (e: Exception) {
+                            if (e is CancellationException) throw e
                         }
                     }
 
@@ -495,11 +497,12 @@ class RaghavAniKage : MainAPI() {
                             val embedLabel = "AniKage ${embed.server ?: serverId} ${subType}"
                             if (RaghavEmbeds.resolveEmbed(embedUrl, "$mainUrl/", embedLabel, "AniKage", lang, subtitleCallback, callback)) found = true
                         } catch (e: Exception) {
+                            if (e is CancellationException) throw e
                         }
                     }
                 }
             } catch (e: Exception) {
-                Log.e("RaghavAnime", "[AniKage] server $serverId failed: ${e.message}")
+                if (e is CancellationException) throw e
             }
         }
 

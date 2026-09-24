@@ -2,7 +2,6 @@ package com.laddu100.raghavanime
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties
 import com.fasterxml.jackson.annotation.JsonProperty
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
@@ -12,6 +11,7 @@ import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.newExtractorLink
 import com.lagradost.cloudstream3.newSubtitleFile
 import java.net.URLEncoder
+import kotlinx.coroutines.CancellationException
 
 class RaghavAnimo : MainAPI() {
     override var mainUrl = "https://4animo.xyz"
@@ -53,7 +53,6 @@ class RaghavAnimo : MainAPI() {
             val home = items.mapNotNull { it.toSearchResponse() }
             newHomePageResponse(request.name, home, hasNext = home.size == 20)
         } catch (e: Exception) {
-            Log.e("RaghavAnimeKitsu", "[Animo] getMainPage ${request.name} failed: ${e.message}")
             newHomePageResponse(request.name, emptyList(), hasNext = false)
         }
     }
@@ -63,7 +62,6 @@ class RaghavAnimo : MainAPI() {
         if (trimmed.startsWith("[")) parseJson(text)
         else parseJson<SearchResponseData>(text).data ?: emptyList()
     } catch (e: Exception) {
-        Log.e("RaghavAnimeKitsu", "[Animo] parseAnimeList failed (len=${text.length}): ${e.message}")
         emptyList()
     }
 
@@ -76,7 +74,6 @@ class RaghavAnimo : MainAPI() {
             val resp = parseJson<SearchResponseData>(app.get(url, headers = apiHeaders).text)
             resp.data?.mapNotNull { it.toSearchResponse() } ?: emptyList()
         } catch (e: Exception) {
-            Log.e("RaghavAnimeKitsu", "[Animo] search failed: ${e.message}")
             emptyList()
         }
     }
@@ -88,7 +85,6 @@ class RaghavAnimo : MainAPI() {
         val anime = try {
             parseJson<AnimeDetails>(app.get("$apiUrl/anime/$animeId", headers = apiHeaders).text)
         } catch (e: Exception) {
-            Log.e("RaghavAnimeKitsu", "[Animo] load: anime details fetch failed for $animeId: ${e.message}")
             return null
         }
         val title = anime.titles?.english ?: anime.titles?.romaji ?: return null
@@ -98,7 +94,6 @@ class RaghavAnimo : MainAPI() {
                 app.get("$apiUrl/anime/$animeId/episodes", headers = apiHeaders).text
             ).data ?: emptyList()
         } catch (e: Exception) {
-            Log.e("RaghavAnimeKitsu", "[Animo] load: episodes fetch failed for $animeId: ${e.message}")
             emptyList()
         }
 
@@ -154,7 +149,6 @@ class RaghavAnimo : MainAPI() {
         val epData = try {
             parseJson<EpisodeData>(data)
         } catch (e: Exception) {
-            Log.e("RaghavAnimeKitsu", "[Animo] loadLinks: failed to parse episode data: ${e.message}")
             return false
         }
 
@@ -176,13 +170,12 @@ class RaghavAnimo : MainAPI() {
         for ((key, embedUrl) in embeds) {
             try {
                 if (!resolveSource(embedUrl, key, type, subsAdded, subtitleCallback, callback)) {
-                    Log.w("RaghavAnimeKitsu", "[Animo] embed $key resolved no links")
                     continue
                 }
                 found = true
                 subsAdded = true
             } catch (e: Exception) {
-                Log.d("Animo", "source $key failed: ${e.message}")
+                if (e is CancellationException) throw e
             }
         }
 

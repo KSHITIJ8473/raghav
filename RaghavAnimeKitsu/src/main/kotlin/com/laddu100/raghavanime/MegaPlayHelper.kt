@@ -3,7 +3,6 @@ package com.laddu100.raghavanime
 import android.util.Base64
 import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.newSubtitleFile
@@ -36,7 +35,6 @@ object MegaPlayCipher {
                 Pair(g[1], g[2]).also { cachedSeeds = it }
             }
         } catch (e: Exception) {
-            Log.d("MegaPlay", "seed fetch failed: ${e.message}")
             null
         }
         return listOfNotNull(dynamic, fallback())
@@ -60,7 +58,6 @@ object MegaPlayCipher {
             cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(keyBytes, "AES"), IvParameterSpec(ivBytes))
             String(cipher.doFinal(cipherBytes), Charsets.UTF_8)
         } catch (e: Exception) {
-            Log.d("MegaPlay", "token decrypt failed: ${e.message}")
             null
         }
     }
@@ -77,8 +74,6 @@ object MegaPlayCipher {
 // megaplay-style players expose the playlist through getSourcesNew, the
 // legacy endpoint only carries an encrypted payload on a dead cdn
 object MegaPlayHelper {
-
-    private const val TAG = "RaghavAnimeKitsu"
     private val mapper = ObjectMapper()
 
     private const val USER_AGENT =
@@ -103,7 +98,6 @@ object MegaPlayHelper {
         val pageHtml = try {
             app.get(embedUrl, headers = pageHeaders).text
         } catch (e: Exception) {
-            Log.d(TAG, "[MegaPlay] embed page failed for $host: ${e.message}")
             return null
         }
 
@@ -184,7 +178,6 @@ object MegaPlayHelper {
         return try {
             mapper.readTree(app.get(url, headers = headers, timeout = 15_000L).text)
         } catch (e: Exception) {
-            Log.d(TAG, "[MegaPlay] sources request failed: ${e.message}")
             null
         }
     }
@@ -259,7 +252,6 @@ object MegaPlayHelper {
         val masterText = try {
             app.get(signedMaster, headers = playHeaders, timeout = 15_000L).text
         } catch (e: Exception) {
-            Log.d(TAG, "[MegaPlay] master playlist fetch failed: ${e.message}")
             null
         }
 

@@ -26,7 +26,6 @@ import androidx.appcompat.app.AppCompatActivity
 import com.google.android.material.bottomsheet.BottomSheetBehavior
 import com.google.android.material.bottomsheet.BottomSheetDialog
 import com.google.android.material.bottomsheet.BottomSheetDialogFragment
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.CommonActivity
 import com.lagradost.cloudstream3.app
 import com.lagradost.nicehttp.NiceResponse
@@ -38,6 +37,7 @@ import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.RequestBody.Companion.toRequestBody
 import kotlin.coroutines.resume
+import kotlinx.coroutines.CancellationException
 
 private val cfBlockerPhrases = listOf(
     "just a moment", "checking your browser", "ddos-guard",
@@ -144,7 +144,6 @@ class SenshiCFDialog(
             when {
                 cookieStr.contains("cf_clearance") -> saveCookiesAndDismiss(cookieStr)
                 pollElapsedMs >= POLL_TIMEOUT_MS -> {
-                    Log.w("Senshi", "cookie poll timed out after ${pollElapsedMs / 1000}s")
                     updateStatus("Timed out. Solve the CAPTCHA then tap retry.")
                 }
                 else -> scheduleNextPoll()
@@ -304,7 +303,6 @@ class SenshiCFDialog(
     override fun onDismiss(dialog: DialogInterface) {
         super.onDismiss(dialog)
         if (!cookiesSaved) {
-            Log.w("Senshi", "bypass dialog dismissed without cookies")
             handler.removeCallbacks(cookiePollRunnable)
             onFinished?.invoke(false)
         }
@@ -345,7 +343,6 @@ private suspend fun showBypassDialogAndWait(url: String): Boolean = withContext(
         try {
             dialog.show(activity.supportFragmentManager, "SenshiCFDialog")
         } catch (e: Exception) {
-            Log.e("Senshi", "failed to show bypass dialog: ${e.message}")
             if (cont.isActive) cont.resume(false)
         }
         cont.invokeOnCancellation { dialog.dismissAllowingStateLoss() }
@@ -368,7 +365,7 @@ internal fun initSenshiCFBypass(context: Context) {
     try {
         SenshiCookieStore.init(context)
     } catch (e: Exception) {
-        Log.e("Senshi", "bypass init failed: ${e.message}")
+        if (e is CancellationException) throw e
     }
 }
 
@@ -398,7 +395,6 @@ internal suspend fun cfGet(
             response = app.get(url, headers = senshiHeaders(headers, url), timeout = timeout)
             if (!isSenshiCloudflareBlocked(response)) return response
         }
-        Log.e("Senshi", "still blocked on $host after bypass")
     }
 
     return response
@@ -433,7 +429,6 @@ internal suspend fun cfPost(
             response = app.post(url, requestBody = requestBody(), headers = senshiHeaders(headers, url), timeout = timeout)
             if (!isSenshiCloudflareBlocked(response)) return response
         }
-        Log.e("Senshi", "still blocked on $host after bypass")
     }
 
     return response

@@ -1,7 +1,6 @@
 package com.laddu100.raghavanime
 
 import android.util.Base64
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.app
 import java.security.MessageDigest
 import javax.crypto.Cipher
@@ -10,8 +9,6 @@ import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
 object FlixResolver {
-
-    private const val TAG = "RaghavAnimeKitsu"
     private const val FLIX_EMBED_BASE = "https://flixcloud.cc"
     const val USER_AGENT =
         "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
@@ -101,7 +98,6 @@ object FlixResolver {
 
             Result(url, pk, masterBody, extractSubtitles(region))
         } catch (e: Exception) {
-            Log.d(TAG, "[ReAnime] flix resolve failed: ${e.message}")
             null
         }
     }

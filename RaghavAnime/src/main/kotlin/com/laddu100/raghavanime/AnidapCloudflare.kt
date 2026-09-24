@@ -39,7 +39,6 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlin.coroutines.resume
 
-private const val TAG = "Anidap_CFBypass"
 
 private const val CHAD_HOST = "https://chad.anidap.lol"
 

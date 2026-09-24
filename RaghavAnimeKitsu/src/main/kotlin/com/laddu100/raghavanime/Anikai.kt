@@ -1,5 +1,4 @@
 package com.laddu100.raghavanime
-import com.lagradost.api.Log
 
 import com.lagradost.cloudstream3.DubStatus
 import com.lagradost.cloudstream3.Episode
@@ -27,6 +26,7 @@ import com.lagradost.cloudstream3.utils.newExtractorLink
 import com.lagradost.cloudstream3.utils.loadExtractor
 import java.net.URL
 import java.net.URLDecoder
+import kotlinx.coroutines.CancellationException
 
 class Anikai : MainAPI() {
     override var mainUrl = "https://www3.anikai.cc"
@@ -242,7 +242,7 @@ class Anikai : MainAPI() {
                         ?.let { URLDecoder.decode(it, "UTF-8") } ?: "English"
                     subtitleCallback.invoke(newSubtitleFile(subLabel, decodedSub))
                 }
-            } catch (e: Exception) { Log.e("RaghavAnimeKitsu", "Anikai: ${e.message}") }
+            } catch (e: Exception) { if (e is CancellationException) throw e }
 
             try {
                 when {
@@ -297,7 +297,6 @@ class Anikai : MainAPI() {
                         if (loaded) {
                             foundAnySources = true
                         } else {
-                            Log.d("RaghavAnimeKitsu", "[Anikai] loadExtractor failed, scanning embed page for m3u8")
                             val embedHtml = app.get(embedUrl, headers = mapOf("Referer" to "$mainUrl/")).text
                             val m3u8Url = Regex("""(https?://[^\s"']+\.m3u8[^\s"']*)""").find(embedHtml)?.groupValues?.get(1)
                             if (m3u8Url != null) {
@@ -316,7 +315,7 @@ class Anikai : MainAPI() {
                         }
                     }
                 }
-            } catch (e: Exception) { Log.e("RaghavAnimeKitsu", "Anikai: ${e.message}") }
+            } catch (e: Exception) { if (e is CancellationException) throw e }
         }
 
         return foundAnySources

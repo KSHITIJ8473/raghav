@@ -4,7 +4,6 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.KotlinModule
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.MainAPI
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.TvType
@@ -14,6 +13,7 @@ import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.newExtractorLink
 import kotlinx.coroutines.delay
 import java.net.URLEncoder
+import kotlinx.coroutines.CancellationException
 
 class RaghavAniChan : MainAPI() {
     override var mainUrl = "https://anichan.to"
@@ -171,7 +171,7 @@ class RaghavAniChan : MainAPI() {
                         return mapper.readValue(resp.text, ServersEnvelope::class.java).servers ?: emptyList()
                     }
                 } catch (e: Exception) {
-                    Log.d("RaghavAnimeKitsu", "[AniChan] servers attempt failed: ${e.message}")
+                    if (e is CancellationException) throw e
                 }
             }
             delay(400)

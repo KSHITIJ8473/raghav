@@ -3,7 +3,6 @@ package com.laddu100.raghavanime
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.google.gson.JsonParser
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.newSubtitleFile
@@ -15,6 +14,7 @@ import com.lagradost.cloudstream3.utils.loadExtractor
 import com.lagradost.cloudstream3.utils.newExtractorLink
 import kotlinx.coroutines.delay
 import java.net.URLEncoder
+import kotlinx.coroutines.CancellationException
 
 class RaghavEnma : MainAPI() {
     override var mainUrl = "https://www.enma.lol"
@@ -137,14 +137,12 @@ class RaghavEnma : MainAPI() {
         val response = try {
             fetchApi("${request.data}?page=$page")
         } catch (e: Exception) {
-            Log.e("RaghavAnimeKitsu", "[Enma] getMainPage ${request.name} fetch failed: ${e.message}")
             return newHomePageResponse(request.name, emptyList())
         } ?: return newHomePageResponse(request.name, emptyList())
 
         val items = try {
             parseJson<EnmaSearchResponse>(response).results?.data
         } catch (e: Exception) {
-            Log.e("RaghavAnimeKitsu", "[Enma] getMainPage ${request.name} parse failed: ${e.message}")
             null
         }?.mapNotNull { it.toSearchResult() } ?: emptyList()
         return newHomePageResponse(request.name, items)
@@ -155,14 +153,12 @@ class RaghavEnma : MainAPI() {
         val response = try {
             fetchApi("$apiUrl/search?keyword=$encoded&page=1")
         } catch (e: Exception) {
-            Log.e("RaghavAnimeKitsu", "[Enma] search fetch failed: ${e.message}")
             return emptyList()
         } ?: return emptyList()
 
         return try {
             parseJson<EnmaSearchResponse>(response).results?.data
         } catch (e: Exception) {
-            Log.e("RaghavAnimeKitsu", "[Enma] search parse failed: ${e.message}")
             emptyList()
         }?.mapNotNull { it.toSearchResult() } ?: emptyList()
     }
@@ -194,11 +190,9 @@ class RaghavEnma : MainAPI() {
             val response = try {
                 fetchApi("$apiUrl/search?keyword=$encoded&page=1")
             } catch (e: Exception) {
-                Log.e("RaghavAnimeKitsu", "[Enma] anilist search fetch failed: ${e.message}")
                 continue
             } ?: continue
             val parsed = try { parseJson<EnmaSearchResponse>(response) } catch (e: Exception) {
-                Log.e("RaghavAnimeKitsu", "[Enma] anilist search parse failed: ${e.message}")
                 continue
             }
             val match = parsed.results?.data?.firstOrNull { it.anilistId == anilistId && it.id != null }
@@ -221,14 +215,12 @@ class RaghavEnma : MainAPI() {
         val infoText = try {
             fetchApi("$apiUrl/info?id=$animeId")
         } catch (e: Exception) {
-            Log.e("RaghavAnimeKitsu", "[Enma] info fetch failed for $animeId: ${e.message}")
             return null
         } ?: return null
 
         val info = try {
             parseJson<EnmaInfoResponse>(infoText).results?.data
         } catch (e: Exception) {
-            Log.e("RaghavAnimeKitsu", "[Enma] info parse failed for $animeId: ${e.message}")
             null
         } ?: return null
 
@@ -248,14 +240,12 @@ class RaghavEnma : MainAPI() {
         val epsText = try {
             fetchApi("$apiUrl/episodes/$animeId")
         } catch (e: Exception) {
-            Log.e("RaghavAnimeKitsu", "[Enma] episodes fetch failed for $animeId: ${e.message}")
             return null
         } ?: return null
 
         val epsData = try {
             parseJson<EnmaEpisodesResponse>(epsText).results?.episodes
         } catch (e: Exception) {
-            Log.e("RaghavAnimeKitsu", "[Enma] episodes parse failed for $animeId: ${e.message}")
             null
         } ?: emptyList()
 
@@ -299,7 +289,6 @@ class RaghavEnma : MainAPI() {
         val loadData = try {
             parseJson<EpisodeLoadData>(data)
         } catch (e: Exception) {
-            Log.e("RaghavAnimeKitsu", "[Enma] loadLinks got bad data: ${e.message}")
             return false
         }
 
@@ -308,7 +297,6 @@ class RaghavEnma : MainAPI() {
             if (serversText.isNullOrBlank()) emptyList()
             else parseJson<EnmaServersResponse>(serversText).results ?: emptyList()
         } catch (e: Exception) {
-            Log.e("RaghavAnimeKitsu", "[Enma] servers fetch failed for ${loadData.animeId} ep${loadData.episodeNum}: ${e.message}")
             emptyList()
         }
 
@@ -344,7 +332,7 @@ class RaghavEnma : MainAPI() {
                     }
                     if (resolved) found = true
                 } catch (e: Exception) {
-                    Log.d("RaghavAnimeKitsu", "[Enma] $label failed: ${e.message}")
+                    if (e is CancellationException) throw e
                 }
             }
         }
@@ -399,7 +387,7 @@ class RaghavEnma : MainAPI() {
                 })
             }
         } catch (e: Exception) {
-            Log.d("RaghavAnimeKitsu", "[Enma] subtitle tracks skipped: ${e.message}")
+            if (e is CancellationException) throw e
         }
     }
 
@@ -417,7 +405,6 @@ class RaghavEnma : MainAPI() {
             ).text
             JsonParser.parseString(text).asJsonObject
         } catch (e: Exception) {
-            Log.d("RaghavAnimeKitsu", "[Enma] MegaPlay sources request failed: ${e.message}")
             null
         }
     }
@@ -486,7 +473,6 @@ class RaghavEnma : MainAPI() {
             )
             return true
         } catch (e: Exception) {
-            Log.d("RaghavAnimeKitsu", "[Enma] MegaPlay failed: ${e.message}")
             return false
         }
     }
@@ -582,11 +568,10 @@ class RaghavEnma : MainAPI() {
                     subtitleCallback.invoke(newSubtitleFile(capLabel, file))
                 }
             } catch (e: Exception) {
-                Log.d("RaghavAnimeKitsu", "[Enma] TryEmbed captions skipped: ${e.message}")
+                if (e is CancellationException) throw e
             }
             return true
         } catch (e: Exception) {
-            Log.d("RaghavAnimeKitsu", "[Enma] TryEmbed failed: ${e.message}")
             return false
         }
     }
@@ -605,7 +590,6 @@ class RaghavEnma : MainAPI() {
                 val html = try {
                     app.get(iframeUrl, headers = pageHeaders("$mainUrl/")).text
                 } catch (e: Exception) {
-                    Log.d("RaghavAnimeKitsu", "[Enma] 4Animo page failed: ${e.message}")
                     return false
                 }
                 val sourcesPath = Regex("""__EMBED_SOURCES_URL__\s*=\s*'([^']+)'""").find(html)?.groupValues?.get(1)
@@ -646,13 +630,12 @@ class RaghavEnma : MainAPI() {
                     )
                     return true
                 } catch (e: Exception) {
-                    Log.d("RaghavAnimeKitsu", "[Enma] 4Animo attempt ${attempt + 1} failed: ${e.message}")
+                    if (e is CancellationException) throw e
                 }
                 delay(1500L)
             }
             return false
         } catch (e: Exception) {
-            Log.d("RaghavAnimeKitsu", "[Enma] 4Animo failed: ${e.message}")
             return false
         }
     }
@@ -751,11 +734,10 @@ class RaghavEnma : MainAPI() {
                     })
                 }
             } catch (e: Exception) {
-                Log.d("RaghavAnimeKitsu", "[Enma] VidHawk captions skipped: ${e.message}")
+                if (e is CancellationException) throw e
             }
             return true
         } catch (e: Exception) {
-            Log.d("RaghavAnimeKitsu", "[Enma] VidHawk failed: ${e.message}")
             return false
         }
     }

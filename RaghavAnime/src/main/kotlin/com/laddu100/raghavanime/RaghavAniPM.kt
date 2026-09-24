@@ -1,6 +1,5 @@
 package com.laddu100.raghavanime
 
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
@@ -14,6 +13,7 @@ import kotlinx.coroutines.coroutineScope
 import java.net.URLEncoder
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlinx.coroutines.CancellationException
 
 class RaghavAniPM : MainAPI() {
     override var mainUrl = "https://ani.pm"
@@ -41,11 +41,9 @@ class RaghavAniPM : MainAPI() {
         return try {
             val res = app.get(url, headers = headers(referer), timeout = 30_000L)
             if (res.code == 200) res.text else {
-                Log.e("RaghavAnime", "[AniPM] ${url.substringBefore('?')} answered ${res.code}")
                 null
             }
         } catch (e: Exception) {
-            Log.e("RaghavAnime", "[AniPM] ${url.substringBefore('?')} failed: ${e.message}")
             null
         }
     }
@@ -65,7 +63,6 @@ class RaghavAniPM : MainAPI() {
         return try {
             parseJson<JsonNode>(text)
         } catch (e: Exception) {
-            Log.e("RaghavAnime", "[AniPM] bootstrap parse failed: ${e.message}")
             null
         }
     }
@@ -77,7 +74,6 @@ class RaghavAniPM : MainAPI() {
         return try {
             parseJson<JsonNode>(text).path("embedUrl").asText("").ifBlank { null }
         } catch (e: Exception) {
-            Log.e("RaghavAnime", "[AniPM] settlar session parse failed: ${e.message}")
             null
         }
     }
@@ -89,7 +85,6 @@ class RaghavAniPM : MainAPI() {
         return try {
             parseJson<JsonNode>(text)
         } catch (e: Exception) {
-            Log.e("RaghavAnime", "[AniPM] settlar resolve parse failed: ${e.message}")
             null
         }
     }
@@ -111,7 +106,6 @@ class RaghavAniPM : MainAPI() {
             val items = try {
                 parseJson<JsonNode>(text).path("items")
             } catch (e: Exception) {
-                Log.e("RaghavAnime", "[AniPM] search parse failed: ${e.message}")
                 null
             } ?: continue
             if (!items.isArray || items.size() == 0) continue
@@ -167,7 +161,7 @@ class RaghavAniPM : MainAPI() {
                             found.set(true)
                         }
                     } catch (e: Exception) {
-                        Log.e("RaghavAnime", "[AniPM] settlar failed: ${e.message}")
+                        if (e is CancellationException) throw e
                     }
                 },
                 async {
@@ -176,7 +170,7 @@ class RaghavAniPM : MainAPI() {
                             found.set(true)
                         }
                     } catch (e: Exception) {
-                        Log.e("RaghavAnime", "[AniPM] backup failed: ${e.message}")
+                        if (e is CancellationException) throw e
                     }
                 },
                 async {
@@ -189,7 +183,7 @@ class RaghavAniPM : MainAPI() {
                             found.set(true)
                         }
                     } catch (e: Exception) {
-                        Log.e("RaghavAnime", "[AniPM] hardsub failed: ${e.message}")
+                        if (e is CancellationException) throw e
                     }
                 }
             ).awaitAll()
@@ -213,7 +207,7 @@ class RaghavAniPM : MainAPI() {
                 this.headers = subHeaders
             })
         } catch (e: Exception) {
-            Log.e("RaghavAnime", "[AniPM] subtitle emit failed: ${e.message}")
+            if (e is CancellationException) throw e
         }
     }
 
@@ -294,7 +288,6 @@ class RaghavAniPM : MainAPI() {
         val packages = try {
             parseJson<JsonNode>(text)
         } catch (e: Exception) {
-            Log.e("RaghavAnime", "[AniPM] packages parse failed: ${e.message}")
             null
         } ?: return false
         val field = if (channel == "dub") "dubhard" else "subhard"

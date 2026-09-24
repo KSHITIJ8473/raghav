@@ -2,7 +2,6 @@ package com.laddu100.raghavanime
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties
 import com.fasterxml.jackson.annotation.JsonProperty
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.MainAPI
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.TvType
@@ -14,6 +13,7 @@ import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.loadExtractor
 import com.lagradost.cloudstream3.utils.newExtractorLink
 import java.net.URLEncoder
+import kotlinx.coroutines.CancellationException
 
 class RaghavKyren : MainAPI() {
     override var mainUrl = "https://kyren.moe"
@@ -79,7 +79,6 @@ class RaghavKyren : MainAPI() {
                 val parsed = parseJson<StreamResponse>(res.text)
 
                 if (parsed.ok != true) {
-                    Log.d("RaghavAnimeKitsu", "[Kyren] server '$server' not available: ${parsed.error ?: "ok=false"}")
                     continue
                 }
 
@@ -137,12 +136,11 @@ class RaghavKyren : MainAPI() {
                     subtitleCallback.invoke(SubtitleFile(subLabel, subUrl))
                 }
             } catch (e: Exception) {
-                Log.e("RaghavAnimeKitsu", "[Kyren] server '$server' failed for anilist $anilistId ep$episode ($lang): ${e.message}")
+                if (e is CancellationException) throw e
             }
         }
 
         if (!found) {
-            Log.w("RaghavAnimeKitsu", "[Kyren] produced no links for anilist $anilistId ep$episode ($lang)")
         }
         return found
     }

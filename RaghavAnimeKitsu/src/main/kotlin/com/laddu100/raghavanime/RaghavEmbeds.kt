@@ -1,6 +1,5 @@
 package com.laddu100.raghavanime
 
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.newSubtitleFile
@@ -11,12 +10,11 @@ import com.lagradost.cloudstream3.utils.newExtractorLink
 import com.lagradost.cloudstream3.utils.loadExtractor
 import java.net.URL
 import java.net.URLDecoder
+import kotlinx.coroutines.CancellationException
 
 // embed hosts shared across the aggregated sources: vivibebe/bibiemb inline the
 // playlist, the otaku clones pack it with jsunpacker, megaplay needs its ajax flow
 object RaghavEmbeds {
-
-    private const val TAG = "RaghavAnimeKitsu"
 
     private const val USER_AGENT =
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
@@ -63,7 +61,6 @@ object RaghavEmbeds {
                 else -> resolveGeneric(embedUrl, referer, label, sourceTag, subtitleCallback, callback)
             }
         } catch (e: Exception) {
-            Log.e(TAG, "[$sourceTag] embed '$label' ($host) failed: ${e.message}")
             false
         }
     }
@@ -96,7 +93,6 @@ object RaghavEmbeds {
         val html = fetchEmbedHtml(embedUrl, referer) ?: return false
         val m3u8 = m3u8Regex.find(html)?.value ?: return false
         if (!streamPlayable(m3u8, "https://${hostOf(embedUrl)}/")) {
-            Log.d(TAG, "[$sourceTag] stream behind '$label' is not playable, skipping")
             return false
         }
         return emitM3u8(label, m3u8, "https://${hostOf(embedUrl)}/", subtitleCallback, callback)
@@ -275,6 +271,7 @@ object RaghavEmbeds {
                 ?.let { URLDecoder.decode(it, "UTF-8") } ?: "English"
             subtitleCallback.invoke(SubtitleFile(label, decoded))
         } catch (e: Exception) {
+            if (e is CancellationException) throw e
         }
     }
 }

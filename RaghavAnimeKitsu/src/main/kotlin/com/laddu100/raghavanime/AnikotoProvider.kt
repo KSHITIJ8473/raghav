@@ -2,13 +2,13 @@ package com.laddu100.raghavanime
 
 import android.util.Base64
 import com.google.gson.JsonParser
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Element
 import java.net.URLEncoder
+import kotlinx.coroutines.CancellationException
 
 class RaghavAnikoto : MainAPI() {
     override var mainUrl = "https://anikototv.to"
@@ -112,7 +112,7 @@ class RaghavAnikoto : MainAPI() {
                     }
                 }
             } catch (e: Exception) {
-                Log.e("AniKoto", "episode list failed: ${e.message}")
+                if (e is CancellationException) throw e
             }
         }
 
@@ -192,7 +192,6 @@ class RaghavAnikoto : MainAPI() {
 
             resolveServers(serverIds, data, audioType, subtitleCallback, callback)
         } catch (e: Exception) {
-            Log.e("AniKoto", "episode page fallback failed: ${e.message}")
             false
         }
     }
@@ -260,7 +259,7 @@ class RaghavAnikoto : MainAPI() {
                     found = true
                 }
             } catch (e: Exception) {
-                Log.e("AniKoto", "server $serverName failed: ${e.message}")
+                if (e is CancellationException) throw e
             }
         }
         return found

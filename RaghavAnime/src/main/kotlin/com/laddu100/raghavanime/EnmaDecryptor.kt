@@ -7,19 +7,19 @@ import android.webkit.WebChromeClient
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import com.fasterxml.jackson.databind.ObjectMapper
-import com.lagradost.api.Log
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.coroutines.resume
 
 object EnmaDecryptor {
-    private const val TAG = "EnmaDecryptor"
     private const val PAGE_URL = "https://www.enma.lol/home"
     const val USER_AGENT =
         "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
@@ -32,6 +32,11 @@ object EnmaDecryptor {
     @Volatile private var readySignal: CompletableDeferred<Unit>? = null
 
     private val initScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+
+    // the shared decrypt WebView keeps per-call state (window._pendingEnc),
+    // so concurrent decrypts corrupt each other; this lock serializes them
+    // and keeps main thread WebView traffic bounded
+    private val decryptMutex = Mutex()
 
     fun setContext(context: Context) {
         appContext = context
@@ -46,7 +51,6 @@ object EnmaDecryptor {
 
         @JavascriptInterface
         fun onError(error: String) {
-            Log.e(TAG, "WASM init error: $error")
             readySignal?.completeExceptionally(Exception(error))
         }
 
@@ -126,7 +130,6 @@ object EnmaDecryptor {
                 }
                 webView = wv
             } catch (e: Exception) {
-                Log.e(TAG, "init failed: ${e.message}")
                 readySignal?.completeExceptionally(e)
             }
         }
@@ -147,7 +150,8 @@ object EnmaDecryptor {
         val wv = webView ?: return ""
         if (!initialized) return ""
 
-        return withContext(Dispatchers.Main) {
+        return decryptMutex.withLock {
+            withContext(Dispatchers.Main) {
             wv.evaluateJavascript(
                 "window._pendingEnc=${jsonEncode(encrypted)};window._decryptResult=null;window._doDecrypt();",
                 null
@@ -173,6 +177,7 @@ object EnmaDecryptor {
                 mapper.readValue(result, String::class.java)
             } catch (e: Exception) {
                 ""
+            }
             }
         }
     }
@@ -205,7 +210,6 @@ object EnmaDecryptor {
             if (decrypted.isBlank() || decrypted.startsWith("DECRYPT_ERROR:")) null
             else decrypted
         } catch (e: Exception) {
-            Log.e(TAG, "fetchAndDecrypt failed: ${e.message}")
             null
         }
     }

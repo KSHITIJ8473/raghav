@@ -2,7 +2,6 @@ package com.laddu100.raghavanime
 
 import android.util.Base64
 import com.fasterxml.jackson.annotation.JsonProperty
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
@@ -12,6 +11,7 @@ import java.net.URLEncoder
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.CancellationException
 
 class AniSugeProvider : MainAPI() {
     override var mainUrl = "https://anisuge.tv"
@@ -294,7 +294,7 @@ class AniSugeProvider : MainAPI() {
                 anyLoaded = true
             }
         } catch (e: Exception) {
-            Log.d("AniSuge", "legacy server path failed: ${e.message}")
+            if (e is CancellationException) throw e
         }
 
         if (!malId.isNullOrBlank() && !timestamp.isNullOrBlank()) {
@@ -303,7 +303,7 @@ class AniSugeProvider : MainAPI() {
                     anyLoaded = true
                 }
             } catch (e: Exception) {
-                Log.d("AniSuge", "mapper path failed: ${e.message}")
+                if (e is CancellationException) throw e
             }
         }
 
@@ -379,7 +379,7 @@ class AniSugeProvider : MainAPI() {
                         loadedSingle = true
                     }
                 } catch (e: Exception) {
-                    Log.e("AniSuge", "server $serverName failed: ${e.message}")
+                    if (e is CancellationException) throw e
                 }
                 loadedSingle
             }
@@ -429,7 +429,7 @@ class AniSugeProvider : MainAPI() {
                         anyLoaded = true
                     }
                 } catch (e: Exception) {
-                    Log.d("AniSuge", "embed $displayName failed: ${e.message}")
+                    if (e is CancellationException) throw e
                 }
             }
 
@@ -453,7 +453,7 @@ class AniSugeProvider : MainAPI() {
                     )
                     anyLoaded = true
                 } catch (e: Exception) {
-                    Log.d("AniSuge", "download $displayName $qualityLabel failed: ${e.message}")
+                    if (e is CancellationException) throw e
                 }
             }
         }
@@ -504,7 +504,6 @@ class AniSugeProvider : MainAPI() {
                     stream.subtitles, subtitleCallback, callback
                 )
             }
-            Log.e("AniSuge", "megaplay resolution failed for $serverName")
             return false
         }
 
@@ -522,7 +521,7 @@ class AniSugeProvider : MainAPI() {
                     useOkhttp = false,
                     timeout = 30_000L
                 )
-                val resolved = app.get(playerUrl, referer = "$baseUrl/", interceptor = resolver).url
+                val resolved = RaghavPerf.withWebView { app.get(playerUrl, referer = "$baseUrl/", interceptor = resolver).url }
                 when {
                     resolved.contains(".m3u8", ignoreCase = true) -> {
                         M3u8Helper.generateM3u8(
@@ -552,7 +551,7 @@ class AniSugeProvider : MainAPI() {
                     }
                 }
             } catch (e: Exception) {
-                Log.e("AniSuge", "webview fallback failed for $serverName: ${e.message}")
+                if (e is CancellationException) throw e
             }
         }
         return loaded

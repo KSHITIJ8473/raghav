@@ -1,6 +1,5 @@
 package com.laddu100.raghavanime
 
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
@@ -13,6 +12,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlinx.coroutines.CancellationException
 
 class RaghavAnidap : MainAPI() {
     override var mainUrl = "https://anidap.lol"
@@ -99,7 +99,6 @@ class RaghavAnidap : MainAPI() {
                 }
             }
         } catch (e: Exception) {
-            Log.e("RaghavAnime", "[Anidap] search failed: ${e.message}")
             emptyList()
         }
     }
@@ -166,7 +165,6 @@ class RaghavAnidap : MainAPI() {
                     } else null
                 } else null
             } catch (e: Exception) {
-                Log.e("RaghavAnime", "[Anidap] episodes fetch failed: ${e.message}")
                 null
             }
 
@@ -182,7 +180,7 @@ class RaghavAnidap : MainAPI() {
                         ep1HasDub = sRoot.path("dubProviders").size() > 0
                     }
                 } catch (e: Exception) {
-                    Log.e("RaghavAnime", "[Anidap] servers probe failed: ${e.message}")
+                    if (e is CancellationException) throw e
                 }
             }
 
@@ -252,7 +250,6 @@ class RaghavAnidap : MainAPI() {
                 if (dubEpisodes.isNotEmpty()) addEpisodes(DubStatus.Dubbed, dubEpisodes)
             }
         } catch (e: Exception) {
-            Log.e("RaghavAnime", "[Anidap] load failed: ${e.message}")
             null
         }
     }
@@ -274,7 +271,6 @@ class RaghavAnidap : MainAPI() {
             }.ifBlank { return false }
             resolveLinks(slug, episode.toString(), if (isDub) "dub" else "sub", subtitleCallback, callback)
         } catch (e: Exception) {
-            Log.e("RaghavAnime", "[Anidap] anilist $anilistId resolve failed: ${e.message}")
             false
         }
     }
@@ -290,7 +286,6 @@ class RaghavAnidap : MainAPI() {
         val rawParts = data.trim().split("|")
         val parts = if (rawParts.firstOrNull()?.startsWith("http") == true) rawParts.drop(1) else rawParts
         if (parts.size < 3) {
-            Log.e("RaghavAnime", "[Anidap] loadLinks: invalid data")
             return false
         }
         val slug = parts[0]
@@ -340,7 +335,6 @@ class RaghavAnidap : MainAPI() {
                 )
             } else emptyMap()
         } catch (e: Exception) {
-            Log.e("RaghavAnime", "[Anidap] servers fetch failed: ${e.message}")
             emptyMap()
         }
         serversCache[key] = System.currentTimeMillis() to out
@@ -403,7 +397,6 @@ class RaghavAnidap : MainAPI() {
 
             SourcesPayload(sources, trackList, headers)
         } catch (e: Exception) {
-            Log.e("RaghavAnime", "[Anidap] sources $providerId failed: ${e.message}")
             null
         }
     }
@@ -456,7 +449,7 @@ class RaghavAnidap : MainAPI() {
                     this.headers = subHeaders
                 })
             } catch (e: Exception) {
-                Log.e("RaghavAnime", "[Anidap] subtitle emit failed: ${e.message}")
+                if (e is CancellationException) throw e
             }
         }
     }
@@ -588,7 +581,7 @@ class RaghavAnidap : MainAPI() {
                             }
                         }
                     } catch (e: Exception) {
-                        Log.e("RaghavAnime", "[Anidap] provider ${provider.id} failed: ${e.message}")
+                        if (e is CancellationException) throw e
                     }
                 }
             }.forEach { it.await() }

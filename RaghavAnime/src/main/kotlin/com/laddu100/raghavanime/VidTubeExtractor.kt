@@ -1,6 +1,5 @@
 package com.laddu100.raghavanime
 
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.newSubtitleFile
 import com.lagradost.cloudstream3.utils.ExtractorApi
@@ -21,7 +20,6 @@ class VidTubeExtractor(private val sourceName: String = "VidTube") : ExtractorAp
     ) {
         val stream = MegaPlayHelper.resolveStream(url, referer ?: "$mainUrl/", "VidTube")
         if (stream == null) {
-            Log.d("RaghavAnime", "[VidTube] no stream found")
             return
         }
         MegaPlayHelper.emitLinks(

@@ -2,14 +2,12 @@ package com.laddu100.raghavanime
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties
 import com.fasterxml.jackson.databind.ObjectMapper
-import com.lagradost.api.Log
 
 fun parseAnimeData(jsonString: String): MetaAnimeData? {
     return try {
         val objectMapper = ObjectMapper()
         objectMapper.readValue(jsonString, MetaAnimeData::class.java)
     } catch (e: Exception) {
-        Log.e("RaghavAnimeKitsu", "[AniDb] parseAnimeData failed: ${e.message}")
         null
     }
 }

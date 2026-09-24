@@ -1,6 +1,5 @@
 package com.laddu100.raghavanime
 
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.DubStatus
 import com.lagradost.cloudstream3.Episode
 import com.lagradost.cloudstream3.HomePageResponse
@@ -30,6 +29,7 @@ import kotlinx.coroutines.coroutineScope
 import org.jsoup.nodes.Document
 import java.net.URL
 import java.net.URLDecoder
+import kotlinx.coroutines.CancellationException
 
 class RaghavAniDao : MainAPI() {
     override var mainUrl = "https://anidao.to"
@@ -173,7 +173,6 @@ class RaghavAniDao : MainAPI() {
                 AnimeEntry(url, title, poster)
             }
         } catch (e: Exception) {
-            Log.e("RaghavAnimeKitsu", "[AniDao] parseListPage page=$page failed: ${e.message}")
             emptyList()
         }
     }
@@ -343,7 +342,6 @@ class RaghavAniDao : MainAPI() {
                 }
             }
         } catch (e: Exception) {
-            Log.e("RaghavAnimeKitsu", "[AniDao] resolveEmbed failed for ${embedUrl.take(120)}: ${e.message}")
             false
         }
     }
@@ -369,7 +367,7 @@ class RaghavAniDao : MainAPI() {
                 ?.let { URLDecoder.decode(it, "UTF-8") } ?: "English"
             subtitleCallback.invoke(SubtitleFile(label, decoded))
         } catch (e: Exception) {
-            Log.e("RaghavAnimeKitsu", "[AniDao] passSubtitle failed for ${embedUrl.take(120)}: ${e.message}")
+            if (e is CancellationException) throw e
         }
     }
 
@@ -377,7 +375,6 @@ class RaghavAniDao : MainAPI() {
         return try {
             URL(url).host.substringBefore(".")
         } catch (e: Exception) {
-            Log.e("RaghavAnimeKitsu", "[AniDao] domainName failed: ${e.message}")
             "unknown"
         }
     }

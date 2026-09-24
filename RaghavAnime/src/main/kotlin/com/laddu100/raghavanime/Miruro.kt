@@ -1,6 +1,5 @@
 package com.laddu100.raghavanime
 
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.DubStatus
 import com.lagradost.cloudstream3.Episode
 import com.lagradost.cloudstream3.HomePageResponse
@@ -367,7 +366,6 @@ class Miruro : MainAPI() {
                             loadExtractor(embedUrl, referer, subtitleCallback, callback)
                             found = true
                         } catch (e: Exception) {
-                            Log.e("RaghavAnime", "[Miruro] loadExtractor failed for embed: ${e.message}, falling back to MiruroWebView")
                             val host = try { java.net.URL(embedUrl).host } catch (_: Exception) { "" }
                             if (host.isNotEmpty()) {
                                 MiruroWebView(host, "https://$host").getUrl(embedUrl, referer, subtitleCallback, callback)
@@ -386,7 +384,6 @@ class Miruro : MainAPI() {
 
             return if (found) true else null
         } catch (e: Exception) {
-            Log.e("RaghavAnime", "[Miruro] processProvider $displayName failed: ${e.message}")
             return null
         }
     }

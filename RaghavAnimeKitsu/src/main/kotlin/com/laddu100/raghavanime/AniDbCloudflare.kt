@@ -29,7 +29,6 @@ import androidx.fragment.app.FragmentActivity
 import com.google.android.material.bottomsheet.BottomSheetBehavior
 import com.google.android.material.bottomsheet.BottomSheetDialog
 import com.google.android.material.bottomsheet.BottomSheetDialogFragment
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.CommonActivity
 import com.lagradost.cloudstream3.app
 import com.lagradost.nicehttp.NiceResponse
@@ -39,8 +38,6 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlin.coroutines.resume
-
-private const val TAG = "AniDB_CFBypass"
 
 private val CF_BLOCKER_PHRASES = listOf(
     "just a moment", "checking your browser", "ddos-guard",
@@ -165,7 +162,6 @@ class AniDbCFDialog(
                     else scheduleNextPoll()
                 }
                 pollElapsedMs >= POLL_TIMEOUT_MS -> {
-                    Log.w("RaghavAnimeKitsu", "[AniDb] CF: cookie poll timed out after ${pollElapsedMs / 1000}s for $targetHost")
                     updateStatus("Timed out. Try solving the CAPTCHA then tap Bypass again.")
                 }
                 else -> scheduleNextPoll()
@@ -345,7 +341,6 @@ class AniDbCFDialog(
         super.onDismiss(dialog)
         if (!cookiesSaved) {
             handler.removeCallbacks(cookiePollRunnable)
-            Log.w("RaghavAnimeKitsu", "[AniDb] CF: dialog dismissed without cookies (bypass failed)")
             onFinished?.invoke(false)
         }
     }
@@ -376,7 +371,6 @@ class AniDbCFDialog(
 private suspend fun showCFBypassDialogAndWait(url: String): Boolean = withContext(Dispatchers.Main) {
     val activity = CommonActivity.activity as? AppCompatActivity
     if (activity == null || activity.isFinishing || activity.isDestroyed) {
-        Log.e("RaghavAnimeKitsu", "[AniDb] CF: no valid activity to show bypass dialog")
         return@withContext false
     }
     suspendCancellableCoroutine { cont ->
@@ -386,7 +380,6 @@ private suspend fun showCFBypassDialogAndWait(url: String): Boolean = withContex
         try {
             dialog.show(activity.supportFragmentManager, "AniDbCFDialog")
         } catch (e: Exception) {
-            Log.e("RaghavAnimeKitsu", "[AniDb] CF: failed to show bypass dialog: ${e.message}")
             if (cont.isActive) cont.resume(false)
         }
         cont.invokeOnCancellation { dialog.dismissAllowingStateLoss() }
@@ -457,7 +450,6 @@ suspend fun cfAppGet(
                 return@withLock
             }
         }
-        Log.e("RaghavAnimeKitsu", "[AniDb] CF: still blocked for $targetHost after bypass retries, giving up")
     }
 
     return response

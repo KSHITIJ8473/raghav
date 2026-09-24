@@ -1,6 +1,5 @@
 package com.laddu100.raghavanime
 
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.AnimeSearchResponse
 import com.lagradost.cloudstream3.DubStatus
 import com.lagradost.cloudstream3.Episode
@@ -102,7 +101,6 @@ class AniDb : MainAPI() {
 
         val episodesUrl = "$mainUrl/api/frontend/anime/$siteId/episodes"
         val epResponse = cfAppGet(episodesUrl, headers = mapOf("X-Requested-With" to "XMLHttpRequest", "Referer" to url, "Accept" to "application/json, text/plain, */*")).parsedSafe<EpisodesResponse>()
-        if (epResponse == null) Log.d("RaghavAnimeKitsu", "[AniDb] episodes api parse failed")
         val episodesList = epResponse?.episodes ?: emptyList()
 
         val firstEpId = episodesList.firstOrNull()?.id
@@ -113,7 +111,6 @@ class AniDb : MainAPI() {
             val langUrl = "$mainUrl/api/frontend/episode/$firstEpId/languages"
             val langResponse = cfAppGet(langUrl, headers = mapOf("X-Requested-With" to "XMLHttpRequest", "Referer" to url, "Accept" to "application/json, text/plain, */*")).parsedSafe<LanguagesResponse>()
             val langs = langResponse?.languages ?: emptyList()
-            if (langResponse == null) Log.d("RaghavAnimeKitsu", "[AniDb] languages api parse failed for first episode")
             hasSub = langs.isEmpty() || langs.any { it.code?.lowercase() in listOf("jpn", "ja", "japanese") || it.name?.lowercase() in listOf("jpn", "ja", "japanese") }
             hasDub = langs.any { it.code?.lowercase() in listOf("eng", "en", "english") || it.name?.lowercase() in listOf("eng", "en", "english") }
         }
@@ -243,14 +240,12 @@ class AniDb : MainAPI() {
         val langResponse = cfAppGet(langUrl, headers = mapOf("X-Requested-With" to "XMLHttpRequest", "Referer" to "$mainUrl/anime/$slug", "Accept" to "application/json, text/plain, */*")).parsedSafe<LanguagesResponse>()
 
         val langs = langResponse?.languages ?: emptyList()
-        if (langResponse == null) Log.d("RaghavAnimeKitsu", "[AniDb] languages api parse failed for episode $episodeId")
         val langsToExtract = if (audio == "movie") {
             langs
         } else {
             val preferredCodes = if (audio == "sub") listOf("jpn", "ja", "japanese") else listOf("eng", "en", "english")
             listOfNotNull(langs.find { it.code?.lowercase() in preferredCodes } ?: langs.find { it.name?.lowercase() in preferredCodes })
         }
-        if (langsToExtract.isEmpty()) Log.d("RaghavAnimeKitsu", "[AniDb] no matching language for audio '$audio', no links will be loaded")
 
         val hlsRegex = listOf(
             Regex("""file\s*:\s*["'](https?://[^"']+\.m3u8[^"']*)["']""", RegexOption.IGNORE_CASE),

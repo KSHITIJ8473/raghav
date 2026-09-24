@@ -1,6 +1,5 @@
 package com.laddu100.raghavanime
 
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.DubStatus
 import com.lagradost.cloudstream3.Episode
 import com.lagradost.cloudstream3.HomePageResponse
@@ -22,6 +21,7 @@ import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.addDubStatus
 import com.lagradost.cloudstream3.SearchResponse
 import com.lagradost.cloudstream3.addDate
+import kotlinx.coroutines.CancellationException
 
 class Anineko : MainAPI() {
     override var mainUrl = "https://anineko.to"
@@ -241,7 +241,7 @@ class Anineko : MainAPI() {
                         found = true
                     }
                 } catch (e: Exception) {
-                    Log.e("RaghavAnime", "[Anineko] server '$serverName' failed: ${e.message}")
+                    if (e is CancellationException) throw e
                 }
             }
         }

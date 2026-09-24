@@ -1,6 +1,5 @@
 package com.laddu100.raghavanime
 
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.DubStatus
 import com.lagradost.cloudstream3.Episode
 import com.lagradost.cloudstream3.HomePageResponse
@@ -26,6 +25,7 @@ import org.jsoup.Jsoup
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.CancellationException
 
 class AniWaves : MainAPI() {
     override var mainUrl = "https://aniwaves.ru"
@@ -308,7 +308,7 @@ class AniWaves : MainAPI() {
                         }
                     }
                 } catch (e: Exception) {
-                    Log.e("RaghavAnimeKitsu", "[AniWaves] server $displayName ($targetType) failed: ${e.message}")
+                    if (e is CancellationException) throw e
                 }
             }
         }

@@ -21,8 +21,6 @@ These extensions are Free: They can be redistributed and/or modified under the t
 [GNU General Public License](https://www.gnu.org/licenses/gpl.html) version 3 or later published by the Free Software Foundation.
 
 
-https://buymeacoffee.com/raghav766
-
  
 
 

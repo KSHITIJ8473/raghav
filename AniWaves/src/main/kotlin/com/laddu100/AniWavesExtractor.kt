@@ -10,7 +10,6 @@ import com.lagradost.cloudstream3.utils.newExtractorLink
 import com.lagradost.cloudstream3.utils.M3u8Helper.Companion.generateM3u8
 import com.lagradost.cloudstream3.utils.INFER_TYPE
 import com.lagradost.cloudstream3.utils.getQualityFromName
-import com.lagradost.api.Log
 
 class AniWavesWebView(private val sourceName: String, private val baseUrl: String) : ExtractorApi() {
     override val name = sourceName
@@ -29,7 +28,7 @@ class AniWavesWebView(private val sourceName: String, private val baseUrl: Strin
                 additionalUrls = listOf(Regex("""(?i)\.(m3u8|mp4)(?:\?|$)""")),
                 script = """document.querySelector('button,[role="button"],.jw-icon-display,.vds-play-button')?.click();""",
                 useOkhttp = false,
-                timeout = 20_000L
+                timeout = 25_000L
             )
             val resolved = app.get(url, referer = referer ?: mainUrl, interceptor = resolver).url
             val headers = mapOf("Referer" to url)
@@ -51,8 +50,6 @@ class AniWavesWebView(private val sourceName: String, private val baseUrl: Strin
                     )
                 }
             }
-        }.onFailure { error ->
-            Log.e(name, "WebView extraction failed: ${error.message}")
         }
     }
 }

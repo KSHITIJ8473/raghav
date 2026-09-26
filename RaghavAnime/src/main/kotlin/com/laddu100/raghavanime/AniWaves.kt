@@ -294,7 +294,23 @@ class AniWaves : MainAPI() {
                     if (!isNew) return@async
 
                     val loaded = when {
-                        embedUrl.contains("echovideo") || embedUrl.contains("weneverbeenfree.com") || embedUrl.contains("filemoon") || embedUrl.contains("myvidplay.com") -> {
+                        embedUrl.contains("megaplay") -> {
+                            val stream = MegaPlayHelper.resolveStream(embedUrl, watchUrl, "AniWaves")
+                            if (stream != null) {
+                                MegaPlayHelper.emitLinks(
+                                    "AniWaves $displayName",
+                                    "$displayName (${targetType.uppercase()})",
+                                    stream.m3u8,
+                                    embedUrl,
+                                    stream.subtitles,
+                                    subtitleCallback,
+                                    linkCallback
+                                )
+                            } else {
+                                false
+                            }
+                        }
+                        embedUrl.contains("echovideo") || embedUrl.contains("weneverbeenfree.com") || embedUrl.contains("filemoon") || embedUrl.contains("mfw09.org") || embedUrl.contains("myvidplay.com") || embedUrl.contains("playmogo") -> {
                             AniWavesWebView("$displayName (${targetType.uppercase()})", embedUrl.baseUrl()).getUrl(embedUrl, watchUrl, subtitleCallback, linkCallback)
                             true
                         }

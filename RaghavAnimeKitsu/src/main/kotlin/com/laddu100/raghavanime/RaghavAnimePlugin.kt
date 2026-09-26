@@ -12,8 +12,6 @@ class RaghavAnimePlugin : Plugin() {
 
         Miruro.context = context
 
-        initAniDbCFBypass(context)
-
         initAnidapCFBypass(context)
 
         initSenshiCFBypass(context)

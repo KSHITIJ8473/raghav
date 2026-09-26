@@ -416,33 +416,9 @@ class RaghavAnime : MainAPI() {
                     AniWaves().loadLinks(epData, false, subtitleCallback, callback)
                 }
             },
-            "Anikai" to {
-                val epData = SourceCache.episodeData("Anikai", animeKey, isDub, episode) {
-                    resolveAnikai(searchTitles, targetTitles, episode, isDub, linkData.year)
-                }
-                if (epData != null) {
-                    Anikai().loadLinks(epData, false, subtitleCallback, callback)
-                }
-            },
-            "AniDb" to {
-                val epData = SourceCache.episodeData("AniDb", animeKey, isDub, episode) {
-                    resolveAniDb(searchTitles, targetTitles, episode, isDub, linkData.year)
-                }
-                if (epData != null) {
-                    AniDb().loadLinks(epData, false, subtitleCallback, callback)
-                }
-            },
             "AniKage" to {
                 val anikage = RaghavAniKage()
                 anikage.loadLinksByAnilistId(aniId, title, jpTitle, episode, isDub, subtitleCallback, callback)
-            },
-            "Anineko" to {
-                val epData = SourceCache.episodeData("Anineko", animeKey, isDub, episode) {
-                    resolveAnineko(searchTitles, targetTitles, episode, isDub, linkData.year)
-                }
-                if (epData != null) {
-                    Anineko().loadLinks(epData, false, subtitleCallback, callback)
-                }
             },
             "2DHive" to {
                 val epData = SourceCache.episodeData("2DHive", animeKey, isDub, episode) {
@@ -494,14 +470,6 @@ class RaghavAnime : MainAPI() {
                 }
                 if (epData != null) {
                     RaghavAniNami().loadLinks(epData, false, subtitleCallback, callback)
-                }
-            },
-            "AniDao" to {
-                val epData = SourceCache.episodeData("AniDao", animeKey, isDub, episode) {
-                    resolveAniDao(searchTitles, targetTitles, episode, isDub, linkData.year)
-                }
-                if (epData != null) {
-                    RaghavAniDao().loadLinks(epData, false, subtitleCallback, callback)
                 }
             },
             "AniChan" to {
@@ -632,13 +600,10 @@ class RaghavAnime : MainAPI() {
                 if (!isActive) return@launch
                 RaghavPerf.runLimitedAsync(RaghavPerf.prefetchConcurrency(), listOf(
                     { warmSource("AniWaves", animeKey, isDub) { resolveAniWaves(titles, targets, null, isDub)?.episodes } },
-                    { warmSource("Anikai", animeKey, isDub) { resolveAnikai(titles, targets, null, isDub, year)?.episodes } },
-                    { warmSource("Anineko", animeKey, isDub) { resolveAnineko(titles, targets, null, isDub, year)?.episodes } },
                     { warmSource("2DHive", animeKey, isDub) { resolveTwoDHive(titles, targets, null, isDub, year)?.episodes } },
                     { warmSource("AniKoto", animeKey, isDub) { resolveAniKoto(titles, targets, null, isDub, year)?.episodes } },
                     { warmSource("Animo", animeKey, isDub) { resolveAnimo(titles, targets, null, isDub, year)?.episodes } },
-                    { warmSource("AniNami", animeKey, isDub) { resolveAniNami(anilistId, null, isDub)?.episodes } },
-                    { warmSource("AniDao", animeKey, isDub) { resolveAniDao(titles, targets, null, isDub, year)?.episodes } }
+                    { warmSource("AniNami", animeKey, isDub) { resolveAniNami(anilistId, null, isDub)?.episodes } }
                 ))
             }
         }
@@ -676,30 +641,6 @@ class RaghavAnime : MainAPI() {
             sourceTag = "AniSuge")
     }
 
-    private suspend fun resolveAnikai(titles: List<String>, targets: List<String>, episode: Int?, isDub: Boolean, year: Int?): SourceCache.Match? {
-        val anikai = Anikai()
-        return findEpisodeMap(titles, targets, episode, isDub, year,
-            doSearch = { anikai.search(it) },
-            doLoad = { anikai.load(it) as? com.lagradost.cloudstream3.AnimeLoadResponse },
-            sourceTag = "Anikai")
-    }
-
-    private suspend fun resolveAniDb(titles: List<String>, targets: List<String>, episode: Int?, isDub: Boolean, year: Int?): SourceCache.Match? {
-        val aniDb = AniDb()
-        return findEpisodeMap(titles, targets, episode, isDub, year,
-            doSearch = { q -> aniDb.search(q, 1).items },
-            doLoad = { aniDb.load(it) as? com.lagradost.cloudstream3.AnimeLoadResponse },
-            sourceTag = "AniDb")
-    }
-
-    private suspend fun resolveAnineko(titles: List<String>, targets: List<String>, episode: Int?, isDub: Boolean, year: Int?): SourceCache.Match? {
-        val anineko = Anineko()
-        return findEpisodeMap(titles, targets, episode, isDub, year,
-            doSearch = { anineko.search(it) },
-            doLoad = { anineko.load(it) as? com.lagradost.cloudstream3.AnimeLoadResponse },
-            sourceTag = "Anineko")
-    }
-
     private suspend fun resolveTwoDHive(titles: List<String>, targets: List<String>, episode: Int?, isDub: Boolean, year: Int?): SourceCache.Match? {
         val twoDHive = RaghavTwoDHive()
         return findEpisodeMap(titles, targets, episode, isDub, year,
@@ -730,14 +671,6 @@ class RaghavAnime : MainAPI() {
             doSearch = { senshi.search(it) },
             doLoad = { senshi.load(it) as? com.lagradost.cloudstream3.AnimeLoadResponse },
             sourceTag = "Senshi")
-    }
-
-    private suspend fun resolveAniDao(titles: List<String>, targets: List<String>, episode: Int?, isDub: Boolean, year: Int?): SourceCache.Match? {
-        val aniDao = RaghavAniDao()
-        return findEpisodeMap(titles, targets, episode, isDub, year,
-            doSearch = { aniDao.search(it) },
-            doLoad = { aniDao.load(it) as? com.lagradost.cloudstream3.AnimeLoadResponse },
-            sourceTag = "AniDao")
     }
 
     private suspend fun resolveAniWaves(titles: List<String>, targets: List<String>, episode: Int?, isDub: Boolean): SourceCache.Match? {

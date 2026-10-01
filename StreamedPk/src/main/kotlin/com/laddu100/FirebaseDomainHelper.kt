@@ -29,7 +29,7 @@ object FirebaseDomainHelper {
         }
 
         try {
-            val response = app.get(URL, timeout = 5000L).text
+            val response = app.get(URL, timeout = 5L).text
             val parsed = parseJson<Map<String, Any?>>(response)
             domains = parsed.mapNotNull { (k, v) ->
                 val strVal = when (v) {

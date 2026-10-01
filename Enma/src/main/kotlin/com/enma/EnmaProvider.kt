@@ -13,6 +13,7 @@ import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.loadExtractor
 import com.lagradost.cloudstream3.utils.newExtractorLink
+import com.lagradost.cloudstream3.network.CloudflareKiller
 import kotlinx.coroutines.delay
 import java.net.URLEncoder
 import com.raghav.donation.DonationManager
@@ -26,6 +27,8 @@ class EnmaProvider : MainAPI() {
     override val supportedTypes = setOf(TvType.Anime, TvType.AnimeMovie, TvType.OVA)
 
     private val apiUrl = "https://api.enma.lol/api"
+
+    private val cfKiller = CloudflareKiller()
 
     private val headers = mapOf(
         "User-Agent" to EnmaDecryptor.USER_AGENT,
@@ -459,39 +462,60 @@ class EnmaProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         try {
+            val host = "https://tryembed.us.cc"
+
+            // the page hands out a single use bootstrap ticket and the nonce
+            // it trades for only comes back to a request shaped exactly like
+            // the player's own fetch, anything less is answered with a 403
             val pageResponse = app.get(iframeUrl, headers = pageHeaders("$mainUrl/"))
-            val html = pageResponse.text
-            val payloadB64 = Regex("""RAW_PAYLOAD="([^"]+)"""").find(html)?.groupValues?.get(1)
+            val ticket = Regex("""BOOTSTRAP_TICKET="([^"]+)"""").find(pageResponse.text)?.groupValues?.get(1)
                 ?: return false
-            val nonce = Regex("""EMBED_NONCE="([^"]+)"""").find(html)?.groupValues?.get(1)
-                ?: return false
-            val cookie = pageResponse.headers.values("Set-Cookie")
+            val pageCookies = pageResponse.headers.values("Set-Cookie")
                 .map { it.substringBefore(';') }
                 .filter { it.contains('=') }
-                .joinToString("; ")
-            if (cookie.isBlank()) return false
+            if (pageCookies.isEmpty()) return false
 
-            val meta = try {
-                JsonParser.parseString(
-                    String(android.util.Base64.decode(payloadB64, android.util.Base64.DEFAULT), Charsets.UTF_8)
-                ).asJsonObject.getAsJsonObject("meta")
+            val bootResponse = app.post(
+                "$host/api/bootstrap",
+                headers = mapOf(
+                    "User-Agent" to EnmaDecryptor.USER_AGENT,
+                    "Accept" to "*/*",
+                    "X-TryEmbed-Bootstrap" to ticket,
+                    "Cookie" to pageCookies.joinToString("; "),
+                    "Origin" to host,
+                    "Referer" to iframeUrl,
+                    "sec-fetch-site" to "same-origin",
+                    "sec-fetch-mode" to "cors",
+                    "sec-fetch-dest" to "empty"
+                )
+            )
+            if (!bootResponse.isSuccessful) return false
+            val boot = try {
+                JsonParser.parseString(bootResponse.text).asJsonObject
             } catch (e: Exception) {
                 return false
             }
-            val anilistId = meta.get("anilist_id")?.asString ?: return false
-            val episode = meta.get("episode")?.asNumber?.toString() ?: return false
-            val audio = meta.get("audio")?.asString ?: "sub"
+            val nonce = boot.get("embedNonce")?.takeIf { !it.isJsonNull }?.asString ?: return false
+            val cookie = (pageCookies + bootResponse.headers.values("Set-Cookie").map { it.substringBefore(';') })
+                .filter { it.contains('=') }
+                .distinct()
+                .joinToString("; ")
 
-            val streamUrl = "https://tryembed.us.cc/api/stream_data?id=$anilistId" +
-                "&episode=$episode&audio=$audio&player=jw&nonce=$nonce"
+            val parts = Regex("""/embed/(?:anime|mal)/(\d+)/(\d+)/([a-z]+)""").find(iframeUrl)
+                ?: return false
             val streamText = app.get(
-                streamUrl,
+                "$host/api/stream_data?id=${parts.groupValues[1]}" +
+                    "&episode=${parts.groupValues[2]}&audio=${parts.groupValues[3]}&player=jw",
                 headers = mapOf(
                     "User-Agent" to EnmaDecryptor.USER_AGENT,
-                    "Accept" to "application/json",
+                    "Accept" to "*/*",
                     "X-Embed-Nonce" to nonce,
+                    "Cookie" to cookie,
+                    "Origin" to host,
                     "Referer" to iframeUrl,
-                    "Cookie" to cookie
+                    "sec-fetch-site" to "same-origin",
+                    "sec-fetch-mode" to "cors",
+                    "sec-fetch-dest" to "empty"
                 )
             ).text
 
@@ -501,51 +525,49 @@ class EnmaProvider : MainAPI() {
                 return false
             }
             val providers = root.getAsJsonArray("providers") ?: return false
-            var provider: com.google.gson.JsonObject? = null
+            var found = false
             for (element in providers) {
-                val p = element.asJsonObject
-                val qualities = p.getAsJsonArray("qualities") ?: continue
-                if (p.get("status")?.asString == "ready" && qualities.size() > 0) {
-                    provider = p
-                    break
+                val provider = element.asJsonObject
+                if (provider.get("status")?.takeIf { !it.isJsonNull }?.asString != "ready") continue
+                val qualities = provider.getAsJsonArray("qualities") ?: continue
+                if (qualities.size() == 0) continue
+                val quality = qualities[qualities.size() - 1].asJsonObject
+                val direct = quality.get("directUrl")?.takeIf { !it.isJsonNull }?.asString
+                val token = quality.get("token")?.takeIf { !it.isJsonNull }?.asString
+                    ?: quality.get("fallbackToken")?.takeIf { !it.isJsonNull }?.asString
+                if (direct.isNullOrBlank() && token.isNullOrBlank()) continue
+                val isMp4 = provider.get("type")?.asString == "mp4"
+                val src = direct?.takeIf { it.isNotBlank() }
+                    ?: "$host/s/$token.${if (isMp4) "mp4" else "m3u8"}"
+                val providerId = provider.get("id")?.takeIf { !it.isJsonNull }?.asString
+
+                emitLink(
+                    if (providerId.isNullOrBlank()) label else "$label $providerId",
+                    src,
+                    if (isMp4) ExtractorLinkType.VIDEO else ExtractorLinkType.M3U8,
+                    "$host/",
+                    mapOf("Cookie" to cookie),
+                    callback
+                )
+                found = true
+
+                try {
+                    provider.getAsJsonArray("captions")?.forEach { capElement ->
+                        val cap = capElement.asJsonObject
+                        val file = cap.get("url")?.asString ?: return@forEach
+                        val capLabel = cap.get("label")?.asString ?: "English"
+                        subtitleCallback.invoke(newSubtitleFile(capLabel, file) {
+                            this.headers = mapOf(
+                                "User-Agent" to EnmaDecryptor.USER_AGENT,
+                                "Referer" to "$host/"
+                            )
+                        })
+                    }
+                } catch (e: Exception) {
+                    Log.d("Enma", "TryEmbed captions skipped: ${e.message}")
                 }
             }
-            provider ?: return false
-
-            val qualities = provider.getAsJsonArray("qualities") ?: return false
-            if (qualities.size() == 0) return false
-            val quality = qualities[0].asJsonObject
-            val token = quality.get("token")?.asString
-                ?: quality.get("fallbackToken")?.asString
-                ?: return false
-            val linkType = if (provider.get("type")?.asString == "mp4") {
-                ExtractorLinkType.VIDEO
-            } else {
-                ExtractorLinkType.M3U8
-            }
-            val ext = if (linkType == ExtractorLinkType.VIDEO) "mp4" else "m3u8"
-            val src = "https://tryembed.us.cc/s/$token.$ext"
-
-            emitLink(
-                label,
-                src,
-                linkType,
-                "https://tryembed.us.cc/",
-                mapOf("Cookie" to cookie),
-                callback
-            )
-
-            try {
-                provider.getAsJsonArray("captions")?.forEach { element ->
-                    val cap = element.asJsonObject
-                    val file = cap.get("url")?.asString ?: return@forEach
-                    val capLabel = cap.get("label")?.asString ?: "English"
-                    subtitleCallback.invoke(newSubtitleFile(capLabel, file))
-                }
-            } catch (e: Exception) {
-                Log.d("Enma", "TryEmbed captions skipped: ${e.message}")
-            }
-            return true
+            return found
         } catch (e: Exception) {
             Log.d("Enma", "TryEmbed failed: ${e.message}")
             return false
@@ -564,7 +586,7 @@ class EnmaProvider : MainAPI() {
             // the sources token expires within seconds, so each retry reloads the page
             for (attempt in 0 until 3) {
                 val html = try {
-                    app.get(iframeUrl, headers = pageHeaders("$mainUrl/")).text
+                    app.get(iframeUrl, headers = pageHeaders("$mainUrl/"), interceptor = cfKiller).text
                 } catch (e: Exception) {
                     Log.d("Enma", "4Animo page failed: ${e.message}")
                     return false
@@ -580,7 +602,8 @@ class EnmaProvider : MainAPI() {
                             "Accept" to "*/*",
                             "Referer" to iframeUrl,
                             "Origin" to host
-                        )
+                        ),
+                        interceptor = cfKiller
                     ).text
                     val root = JsonParser.parseString(text).asJsonObject
                     val sourcesArr = root.getAsJsonArray("sources") ?: continue
@@ -639,7 +662,8 @@ class EnmaProvider : MainAPI() {
                     "User-Agent" to EnmaDecryptor.USER_AGENT,
                     "Accept" to "*/*",
                     "Referer" to "https://vidhawk.buzz/"
-                )
+                ),
+                interceptor = cfKiller
             ).text
 
             var ticket: String? = null
@@ -670,7 +694,8 @@ class EnmaProvider : MainAPI() {
                     "User-Agent" to EnmaDecryptor.USER_AGENT,
                     "Accept" to "application/json",
                     "Referer" to "https://vidhawk.buzz/"
-                )
+                ),
+                interceptor = cfKiller
             ).text
             val play = try {
                 JsonParser.parseString(playText).asJsonObject

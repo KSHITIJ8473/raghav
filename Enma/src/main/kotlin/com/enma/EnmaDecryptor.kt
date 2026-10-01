@@ -57,13 +57,17 @@ object EnmaDecryptor {
         (function() {
             if (window._enmaDecryptLoaded) return;
             window._enmaDecryptLoaded = true;
-            var Rs=null, funcName=null;
+            var Rs=null, runName=null, allocName=null, outPtrName=null;
             async function initWasm(){
                 var w=await fetch('/ada.wasm');
                 var m=await fetch('/ada.manifest');
                 var wb=await w.arrayBuffer();
                 var mf=await m.json();
-                funcName=String.fromCharCode.apply(null, mf.e.map(function(l,c){return l^(mf.s>>(c&15))&255}));
+                var s=mf.s;
+                function nm(a){return String.fromCharCode.apply(null,a.map(function(l,c){return l^(s>>(c&15))&255}));}
+                runName=nm(mf.r);
+                allocName=nm(mf.i);
+                outPtrName=nm(mf.o);
                 var r=await WebAssembly.instantiate(wb,{env:{abort:function(){}}});
                 Rs=r.instance.exports;
             }
@@ -77,17 +81,12 @@ object EnmaDecryptor {
                     var len=dec.length;
                     var bytes=new Uint8Array(len);
                     for(var i=0;i<len;i++)bytes[i]=dec.charCodeAt(i);
-                    var dp=Rs.__pin(Rs.__new(len,1))>>>0;
-                    var hp=Rs.__new(12,5)>>>0;
-                    var v=new DataView(Rs.memory.buffer);
-                    v.setUint32(hp,dp,true);v.setUint32(hp+4,dp,true);v.setUint32(hp+8,len,true);
+                    var dp=Rs[allocName]()>>>0;
                     new Uint8Array(Rs.memory.buffer,dp,len).set(bytes);
-                    Rs.__unpin(dp);
-                    var rp=Rs[funcName](hp);
-                    v=new DataView(Rs.memory.buffer);
-                    var rdp=v.getUint32(rp+4,true);
-                    var rl=v.getUint32(rp+8,true);
-                    var rb=new Uint8Array(Rs.memory.buffer,rdp,rl).slice();
+                    var rl=Rs[runName](dp,len)>>>0;
+                    if(rl===0){window._decryptResult='DECRYPT_ERROR:decrypt failed';return;}
+                    var op=Rs[outPtrName]()>>>0;
+                    var rb=new Uint8Array(Rs.memory.buffer,op,rl).slice();
                     window._decryptResult=new TextDecoder().decode(rb);
                 }catch(e){
                     window._decryptResult='DECRYPT_ERROR:'+e.message;
@@ -194,7 +193,7 @@ object EnmaDecryptor {
     suspend fun fetchAndDecrypt(url: String, headers: Map<String, String>): String? {
         if (!initialized) startInit()
         return try {
-            val encrypted = com.lagradost.cloudstream3.app.get(url, headers = headers, timeout = 15_000L).text
+            val encrypted = com.lagradost.cloudstream3.app.get(url, headers = headers, timeout = 15L).text
             if (encrypted.isBlank()) return null
             val trimmed = encrypted.trim()
             if (trimmed.startsWith("{") || trimmed.startsWith("[")) return trimmed

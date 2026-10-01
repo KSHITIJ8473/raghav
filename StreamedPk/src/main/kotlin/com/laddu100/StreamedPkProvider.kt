@@ -4,6 +4,7 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.AppUtils.toJson
+import com.lagradost.nicehttp.NiceResponse
 import com.fasterxml.jackson.annotation.JsonProperty
 import android.content.Context
 import android.webkit.WebView
@@ -14,7 +15,10 @@ import android.webkit.WebResourceResponse
 import android.webkit.ConsoleMessage
 import android.os.Handler
 import android.os.Looper
+import java.io.IOException
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.Dispatchers
@@ -35,13 +39,48 @@ class StreamedPkProvider : MainAPI() {
     override val hasChromecastSupport = true
     override val supportedTypes = setOf(TvType.Live)
 
-    private val apiHeaders: Map<String, String>
-        get() = mapOf(
+    private fun apiHeaders(): Map<String, String> {
+        val headers = mutableMapOf(
             "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
             "Accept" to "application/json, text/plain, */*",
             "Referer" to "$mainUrl/",
             "Origin" to mainUrl
         )
+        savedCookies().takeIf { it.isNotBlank() }?.let { headers["Cookie"] = it }
+        return headers
+    }
+
+    // ddos-guard fronts the site and is far friendlier to clients that bring
+    // their __ddg cookies back, the shared app client has no cookie jar so
+    // without this every request looks brand new and gets reset at times
+    private fun cookieStore() =
+        context?.getSharedPreferences("streamedpk_net", Context.MODE_PRIVATE)
+
+    private fun savedCookies(): String =
+        cookieStore()?.getString("cookies", "") ?: ""
+
+    private fun keepCookies(res: NiceResponse) {
+        val store = cookieStore() ?: return
+        val jar = LinkedHashMap<String, String>()
+        for (part in savedCookies().split(";")) {
+            val p = part.trim()
+            val eq = p.indexOf('=')
+            if (eq > 0) jar[p.substring(0, eq)] = p.substring(eq + 1)
+        }
+        var changed = false
+        for (raw in res.headers.values("set-cookie")) {
+            val pair = raw.substringBefore(";").trim()
+            val eq = pair.indexOf('=')
+            if (eq <= 0) continue
+            val value = pair.substring(eq + 1)
+            if (value.isBlank()) continue
+            jar[pair.substring(0, eq)] = value
+            changed = true
+        }
+        if (changed) {
+            store.edit().putString("cookies", jar.entries.joinToString("; ") { "${it.key}=${it.value}" }).apply()
+        }
+    }
 
     private data class CachedMatches(val matches: List<StreamedMatch>, val timestamp: Long)
     @Volatile private var matchesCache: CachedMatches? = null
@@ -49,18 +88,30 @@ class StreamedPkProvider : MainAPI() {
     private val CACHE_STALE_LIMIT_MS = 600_000L
 
     private suspend fun fetchAllMatches(): List<StreamedMatch> {
-        try {
-            val res = app.get("$mainUrl/api/matches/all", headers = apiHeaders, timeout = 30_000L)
-            val matches = parseJson<List<StreamedMatch>>(res.text)
-            matchesCache = CachedMatches(matches, System.currentTimeMillis())
-            return matches
-        } catch (e: Exception) {
-            val cached = matchesCache
-            if (cached != null && System.currentTimeMillis() - cached.timestamp < CACHE_STALE_LIMIT_MS) {
-                return cached.matches
+        var lastError: Exception? = null
+        for (attempt in 0 until 3) {
+            try {
+                val res = app.get("$mainUrl/api/matches/all", headers = apiHeaders(), timeout = 20L)
+                keepCookies(res)
+                if (!res.isSuccessful) throw IOException("streamed.pk answered ${res.code}")
+                val matches = parseJson<List<StreamedMatch>>(res.text)
+                matchesCache = CachedMatches(matches, System.currentTimeMillis())
+                return matches
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                lastError = e
+                // the edge refuses a request now and then, reloading used to
+                // be a manual job for the user, one short pause and another
+                // try settles it on the same load
+                if (attempt < 2) delay(1500L)
             }
-            throw e
         }
+        val cached = matchesCache
+        if (cached != null && System.currentTimeMillis() - cached.timestamp < CACHE_STALE_LIMIT_MS) {
+            return cached.matches
+        }
+        throw lastError ?: IOException("streamed.pk could not be reached")
     }
 
     data class StreamedMatch(
@@ -308,7 +359,7 @@ class StreamedPkProvider : MainAPI() {
             sources.forEach { src ->
                 try {
                     val streamUrl = "$mainUrl/api/stream/${src.source}/${src.id}"
-                    val streamText = app.get(streamUrl, headers = apiHeaders, timeout = 30_000L).text
+                    val streamText = app.get(streamUrl, headers = apiHeaders(), timeout = 20L).text
                     val variants = parseJson<List<StreamVariant>>(streamText)
 
                     variants.forEach { st ->

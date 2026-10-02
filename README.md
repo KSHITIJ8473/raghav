@@ -20,7 +20,5 @@ For full legal compliance details, please read our DMCA & Disclaimer Notice.
 These extensions are Free: They can be redistributed and/or modified under the terms of the
 [GNU General Public License](https://www.gnu.org/licenses/gpl.html) version 3 or later published by the Free Software Foundation.
 
-
- 
-
-
+### Links
+[Official CloudStream repo](https://github.com/recloudstream/cloudstream) · [CloudStream Wiki](https://cloudstream.miraheze.org/wiki/Main_Page)

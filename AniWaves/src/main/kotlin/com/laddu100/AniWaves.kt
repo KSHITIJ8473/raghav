@@ -306,8 +306,7 @@ class AniWaves : MainAPI() {
                             foundAnySources = true
                         }
                     }
-                } catch (_: Exception) {
-                }
+                } catch (_: Exception) {}
             }
         }
 

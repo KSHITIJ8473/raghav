@@ -134,7 +134,6 @@ class NetNaijaAppSettingsFragment(
                 context.startActivity(restartIntent)
                 Runtime.getRuntime().exit(0)
             }
-        } catch (e: Exception) {
-        }
+        } catch (_: Exception) {}
     }
 }

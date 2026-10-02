@@ -1,6 +1,5 @@
 package com.laddu100
 
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -150,8 +149,7 @@ object LIVETVProviderManager {
                     cachedBaseUrl = url
                     return url
                 }
-            } catch (_: Exception) {
-            }
+            } catch (_: Exception) {}
         }
 
         cachedBaseUrl = DEFAULT_BASE_URLS.first()
@@ -173,8 +171,7 @@ object LIVETVProviderManager {
             } else {
                 null
             }
-        } catch (e: Exception) {
-            Log.e("LIVETV", "fetchDecrypted error for $url: ${e.message}")
+        } catch (_: Exception) {
             null
         }
     }
@@ -196,15 +193,12 @@ object LIVETVProviderManager {
                                 "type" to (cat.type ?: "custom")
                             )
                         } else null
-                    } catch (e: Exception) {
-                        Log.e("LIVETV", "category parse failed at $index: ${e.message}")
+                    } catch (_: Exception) {
                         null
                     }
                 }
             }
-        } catch (e: Exception) {
-            Log.e("LIVETV", "fetchProviders failed: ${e.message}")
-        }
+        } catch (_: Exception) {}
         emptyList()
     }
 
@@ -240,16 +234,13 @@ object LIVETVProviderManager {
                                 LIVELiveEventFormat(title = name, webLink = ev.links)
                             } ?: emptyList()
                         )
-                    } catch (e: Exception) {
-                        Log.e("LIVETV", "event parse failed at $index: ${e.message}")
+                    } catch (_: Exception) {
                         null
                     }
                 }
                 return@withContext events.filter { it.publish == 1 }
             }
-        } catch (e: Exception) {
-            Log.e("LIVETV", "fetchLiveEvents failed: ${e.message}")
-        }
+        } catch (_: Exception) {}
         emptyList()
     }
 
@@ -287,16 +278,13 @@ object LIVETVProviderManager {
                                     }
                                 }
                             )
-                        } catch (e: Exception) {
-                            Log.e("LIVETV", "custom event parse failed at $index: ${e.message}")
+                        } catch (_: Exception) {
                             null
                         }
                     }
                     return@withContext events.filter { it.publish == 1 }
                 }
-            } catch (e: Exception) {
-                Log.e("LIVETV", "fetchCustomEvents failed: ${e.message}")
-            }
+            } catch (_: Exception) {}
             emptyList()
         }
     }
@@ -307,9 +295,7 @@ object LIVETVProviderManager {
             if (!decrypted.isNullOrBlank()) {
                 return@withContext parseJson<List<LIVEStreamUrl>>(decrypted)
             }
-        } catch (e: Exception) {
-            Log.e("LIVETV", "fetchChannelStreams failed for $slug: ${e.message}")
-        }
+        } catch (_: Exception) {}
         null
     }
 }

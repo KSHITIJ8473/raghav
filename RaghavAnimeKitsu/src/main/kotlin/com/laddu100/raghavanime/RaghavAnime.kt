@@ -445,10 +445,12 @@ class RaghavAnime : MainAPI() {
                     RaghavAnikoto().loadLinks(epData, false, subtitleCallback, callback)
                 }
             },
-            "Enma" to {
-                if (aniId > 0) {
-                    val enma = RaghavEnma()
-                    enma.loadLinksByAnilistId(aniId, title, jpTitle, episode, isDub, subtitleCallback, callback)
+            "GoTaku" to {
+                val epData = SourceCache.episodeData("GoTaku", animeKey, isDub, episode) {
+                    resolveGoTaku(searchTitles, targetTitles, episode, isDub, linkData.year)
+                }
+                if (epData != null) {
+                    RaghavGoTaku().loadLinks(epData, false, subtitleCallback, callback)
                 }
             },
             "Animo" to {
@@ -600,8 +602,7 @@ class RaghavAnime : MainAPI() {
             SourceCache.warm(provider, animeKey, isDub, resolve)
         } catch (e: CancellationException) {
             throw e
-        } catch (_: Exception) {
-        }
+        } catch (_: Exception) {}
     }
 
     private fun prefetchSources(kitsuId: Int, anilistId: Int?, title: String, jpTitle: String?, year: Int?) {
@@ -620,6 +621,7 @@ class RaghavAnime : MainAPI() {
                     { warmSource("AniWaves", animeKey, isDub) { resolveAniWaves(titles, targets, null, isDub)?.episodes } },
                     { warmSource("2DHive", animeKey, isDub) { resolveTwoDHive(titles, targets, null, isDub, year)?.episodes } },
                     { warmSource("AniKoto", animeKey, isDub) { resolveAniKoto(titles, targets, null, isDub, year)?.episodes } },
+                    { warmSource("GoTaku", animeKey, isDub) { resolveGoTaku(titles, targets, null, isDub, year)?.episodes } },
                     { warmSource("Animo", animeKey, isDub) { resolveAnimo(titles, targets, null, isDub, year)?.episodes } },
                     { if (aniId > 0) warmSource("AniNami", animeKey, isDub) { resolveAniNami(aniId, null, isDub)?.episodes } }
                 ))
@@ -681,6 +683,14 @@ class RaghavAnime : MainAPI() {
             doSearch = { animo.search(it) },
             doLoad = { animo.load(it) as? com.lagradost.cloudstream3.AnimeLoadResponse },
             sourceTag = "Animo")
+    }
+
+    private suspend fun resolveGoTaku(titles: List<String>, targets: List<String>, episode: Int?, isDub: Boolean, year: Int?): SourceCache.Match? {
+        val gotaku = RaghavGoTaku()
+        return findEpisodeMap(titles, targets, episode, isDub, year,
+            doSearch = { gotaku.search(it) },
+            doLoad = { gotaku.load(it) as? com.lagradost.cloudstream3.AnimeLoadResponse },
+            sourceTag = "GoTaku")
     }
 
     private suspend fun resolveSenshi(titles: List<String>, targets: List<String>, episode: Int?, isDub: Boolean, year: Int?): SourceCache.Match? {

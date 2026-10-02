@@ -1,7 +1,6 @@
 package com.kdesa
 
 import com.fasterxml.jackson.annotation.JsonProperty
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
@@ -9,8 +8,6 @@ import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import java.net.URLEncoder
 import com.raghav.donation.DonationManager
-
-private const val TAG = "Kdesa"
 
 class KdesaProvider : MainAPI() {
     override var mainUrl = "https://kdesa.stream"
@@ -56,7 +53,6 @@ class KdesaProvider : MainAPI() {
         if (bearer.code == 200 && !bearer.text.contains("Invalid API key")) {
             return bearer.text
         }
-        Log.e(TAG, "tmdbGet bearer failed (${bearer.code}) for $path, falling back to api_key")
         return app.get(
             "$tmdbApi$path${sep}api_key=$tmdbApiKey&language=$language",
             headers = mapOf("Accept" to "application/json", "User-Agent" to ua),
@@ -198,10 +194,8 @@ class KdesaProvider : MainAPI() {
             val json = tmdbGet(path)
             val resp = parseJson<TmdbResp>(json)
             val items = resp.results?.mapNotNull { it.toSearch(defType) } ?: emptyList()
-            Log.d(TAG, "getMainPage ${request.name} -> ${items.size} items")
             newHomePageResponse(request.name, items, resp.totalPages != null && page < (resp.totalPages ?: 1))
-        } catch (e: Exception) {
-            Log.e(TAG, "getMainPage failed for ${request.name}: ${e.message}")
+        } catch (_: Exception) {
             newHomePageResponse(request.name, emptyList())
         }
     }
@@ -212,16 +206,13 @@ class KdesaProvider : MainAPI() {
             val json = tmdbGet("/search/multi?query=${URLEncoder.encode(query, "UTF-8")}&page=1&include_adult=false")
             val resp = parseJson<TmdbResp>(json)
             val results = resp.results?.mapNotNull { it.toSearch() } ?: emptyList()
-            Log.d(TAG, "search '$query' -> ${results.size} results")
             results
-        } catch (e: Exception) {
-            Log.e(TAG, "search failed: ${e.message}")
+        } catch (_: Exception) {
             emptyList()
         }
     }
 
     override suspend fun load(url: String): LoadResponse? {
-        Log.d(TAG, "load: $url")
         val parts = payloadParts(url)
         if (parts.size < 3) return null
         val type = parts[0]
@@ -270,11 +261,8 @@ class KdesaProvider : MainAPI() {
                                 }
                             )
                         }
-                    } catch (e: Exception) {
-                        Log.e(TAG, "load: failed fetching season ${season.seasonNumber}: ${e.message}")
-                    }
+                    } catch (_: Exception) {}
                 }
-                Log.d(TAG, "load: '$title' -> ${episodes.size} episodes")
 
                 val isAnime = genres.any { it.equals("Animation", true) }
                 val tvType = if (isAnime) TvType.Anime else TvType.TvSeries
@@ -292,8 +280,7 @@ class KdesaProvider : MainAPI() {
                     }
                 }
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "load failed for $url: ${e.message}")
+        } catch (_: Exception) {
             null
         }
     }
@@ -319,13 +306,11 @@ class KdesaProvider : MainAPI() {
             val episode = parts.getOrNull(3)?.toIntOrNull()
             val title = parts.drop(4).joinToString("|")
             if (season == null || episode == null) {
-                Log.e(TAG, "loadLinks: missing season/episode in data: $data")
                 return false
             }
             any = any or resolver.resolveShow(tmdbId, title, season, episode, subtitleCallback, callback)
         }
 
-        Log.d(TAG, "loadLinks: done, any=$any")
         return any
     }
 }

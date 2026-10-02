@@ -15,13 +15,11 @@ import com.lagradost.cloudstream3.utils.getQualityFromName
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
 import android.util.Base64
-import com.lagradost.api.Log
 import javax.crypto.Cipher
 import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
 object MegaPlayCipher {
-    private const val TAG = "MegaPlayCipher"
     private const val FALLBACK_KEY_SEED = "i?LMTAx0Q6,:}50U"
     private const val FALLBACK_IV_SEED = "W0;27ToaUpl_P%'c"
 
@@ -40,8 +38,7 @@ object MegaPlayCipher {
             keyPairRegex.find(js)?.groupValues?.let { g ->
                 Pair(g[1], g[2]).also { cachedSeeds = it }
             }
-        } catch (e: Exception) {
-            Log.w(TAG, "key seed fetch failed: ${e.message}")
+        } catch (_: Exception) {
             null
         }
         return listOfNotNull(dynamic, fallback())
@@ -64,8 +61,7 @@ object MegaPlayCipher {
             val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
             cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(keyBytes, "AES"), IvParameterSpec(ivBytes))
             String(cipher.doFinal(cipherBytes), Charsets.UTF_8)
-        } catch (e: Exception) {
-            Log.d(TAG, "token decrypt failed: ${e.message}")
+        } catch (_: Exception) {
             null
         }
     }
@@ -99,14 +95,12 @@ open class MegaPlayBaseExtractor(
     private suspend fun fetchSourcesRoot(endpoint: String, headers: Map<String, String>): JsonObject? {
         val text = try {
             app.get(endpoint, headers = headers).text
-        } catch (e: Exception) {
-            Log.e(name, "sources request failed ($endpoint): ${e.message}")
+        } catch (_: Exception) {
             return null
         }
         return try {
             JsonParser.parseString(text).asJsonObject
-        } catch (e: Exception) {
-            Log.e(name, "sources JSON parse failed: ${e.message}")
+        } catch (_: Exception) {
             null
         }
     }
@@ -124,8 +118,7 @@ open class MegaPlayBaseExtractor(
 
         val doc = try {
             app.get(url, headers = pageHeaders).document
-        } catch (e: Exception) {
-            Log.e(name, "Failed to load player iframe: ${e.message}")
+        } catch (_: Exception) {
             return
         }
 
@@ -151,7 +144,6 @@ open class MegaPlayBaseExtractor(
 
         val resolved = extractStreamUrl(root)
         if (resolved.isNullOrBlank()) {
-            Log.e(name, "No stream url in sources response for id=$streamId")
             return
         }
 
@@ -212,9 +204,7 @@ open class MegaPlayBaseExtractor(
                     }
                 )
             }
-        } catch (e: Exception) {
-            Log.w(name, "subtitle track parse failed: ${e.message}")
-        }
+        } catch (_: Exception) {}
     }
 }
 
@@ -237,8 +227,7 @@ class NineAnimeVidmoly : ExtractorApi() {
         )
         val res = try {
             app.get(url, headers = headers)
-        } catch (e: Exception) {
-            Log.e(name, "Failed to load Vidmoly iframe: ${e.message}")
+        } catch (_: Exception) {
             return
         }
         val html = res.text
@@ -247,7 +236,6 @@ class NineAnimeVidmoly : ExtractorApi() {
             ?.groupValues?.get(1)
             ?: Regex("""https?://[^'"\s]+?\.m3u8[^'"\s]*""").find(html)?.value
         if (m3u8 == null) {
-            Log.e(name, "No m3u8 found on Vidmoly page")
             return
         }
 
@@ -311,7 +299,6 @@ class NineAnimeMoon : ExtractorApi() {
                 )
             }
         }.onFailure { error ->
-            Log.e(name, "WebView extraction failed: ${error.message}")
         }
     }
 }

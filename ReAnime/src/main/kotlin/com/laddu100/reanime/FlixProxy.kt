@@ -1,6 +1,5 @@
 package com.laddu100.reanime
 
-import com.lagradost.api.Log
 import java.io.BufferedReader
 import java.io.ByteArrayOutputStream
 import java.io.InputStream
@@ -24,7 +23,6 @@ import okhttp3.Request
 
 object FlixProxy {
 
-    private const val TAG = "ReAnime"
     private const val MAX_STREAMS = 20
     private const val PREFETCH_COUNT = 3
     private const val CACHE_LIMIT_BYTES = 48L * 1024 * 1024
@@ -82,14 +80,10 @@ object FlixProxy {
                     try {
                         val conn = socket.accept()
                         pool.execute { handleRequest(conn) }
-                    } catch (e: Exception) {
-                        if (serverRunning) Log.e(TAG, "accept failed: ${e.message}")
-                    }
+                    } catch (_: Exception) {}
                 }
             }.start()
-        } catch (e: Exception) {
-            Log.e(TAG, "proxy start failed: ${e.message}")
-        }
+        } catch (_: Exception) {}
         return serverPort
     }
 
@@ -153,9 +147,7 @@ object FlixProxy {
                 }
                 else -> send404(conn)
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "proxy request failed: ${e.message}")
-        } finally {
+        } catch (_: Exception) {} finally {
             try { conn.close() } catch (_: Exception) {}
         }
     }
@@ -222,8 +214,7 @@ object FlixProxy {
                 out.append(line).append('\n')
             }
             return out.toString()
-        } catch (e: Exception) {
-            Log.e(TAG, "master rewrite failed: ${e.message}")
+        } catch (_: Exception) {
             return null
         }
     }
@@ -263,8 +254,7 @@ object FlixProxy {
             entry.servedPlaylists[target] = rewritten
             sendBytes(conn, rewritten.toByteArray(Charsets.UTF_8), HLS_TYPE)
             triggerFirstPrefetch(entry, target)
-        } catch (e: Exception) {
-            Log.e(TAG, "playlist fetch failed: ${e.message}")
+        } catch (_: Exception) {
             send404(conn)
         }
     }
@@ -285,9 +275,7 @@ object FlixProxy {
                 val body = resp.body ?: run { send404(conn); return }
                 streamSegment(conn, target, body.byteStream(), body.contentLength())
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "segment fetch failed: ${e.message}")
-        }
+        } catch (_: Exception) {}
     }
 
     private fun serveKey(conn: Socket, target: String) {
@@ -334,9 +322,7 @@ object FlixProxy {
             if (captured != null && outLen >= 0 && captured.size.toLong() == outLen) {
                 cachePut(target, captured)
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "segment stream failed: ${e.message}")
-        }
+        } catch (_: Exception) {}
     }
 
     private fun writeChunk(
@@ -426,9 +412,7 @@ object FlixProxy {
             try {
                 val raw = fetchBytes(url) ?: return@execute
                 cachePut(url, unwrapBytes(raw))
-            } catch (e: Exception) {
-                Log.e(TAG, "prefetch failed: ${e.message}")
-            } finally {
+            } catch (_: Exception) {} finally {
                 inFlight.remove(url)
             }
         }
@@ -477,7 +461,7 @@ object FlixProxy {
     private fun resolveUri(ref: String, base: URI): String? {
         return try {
             base.resolve(ref).toString()
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             null
         }
     }
@@ -485,7 +469,7 @@ object FlixProxy {
     private fun decodeUrl(seg: String): String? {
         return try {
             URLDecoder.decode(seg, "UTF-8")
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             null
         }
     }
@@ -502,7 +486,7 @@ object FlixProxy {
             client.newCall(buildRequest(url)).execute().use { resp ->
                 if (resp.isSuccessful) resp.body?.string() else null
             }
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             null
         }
     }
@@ -512,7 +496,7 @@ object FlixProxy {
             client.newCall(buildRequest(url)).execute().use { resp ->
                 if (resp.isSuccessful) resp.body?.bytes() else null
             }
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             null
         }
     }

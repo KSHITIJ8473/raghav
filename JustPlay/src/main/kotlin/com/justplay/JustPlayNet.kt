@@ -1,6 +1,5 @@
 package com.justplay
 
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.base64Decode
@@ -17,7 +16,6 @@ internal const val PLAY_UA =
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 
 internal object PlayNet {
-    const val TAG = "JustPlay"
 
     val cfKiller: CloudflareKiller by lazy { CloudflareKiller() }
 
@@ -57,7 +55,7 @@ internal object PlayNet {
                 timeout = 15L
             )
             res.code
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             null
         }
     }
@@ -65,7 +63,7 @@ internal object PlayNet {
     fun getBaseUrl(url: String): String = try {
         val uri = URI(url)
         "${uri.scheme}://${uri.host}"
-    } catch (e: Exception) {
+    } catch (_: Exception) {
         url
     }
 
@@ -157,7 +155,7 @@ internal object PlayNet {
 
     fun hostOf(url: String): String = try {
         URI(url).host?.lowercase() ?: ""
-    } catch (e: Exception) {
+    } catch (_: Exception) {
         ""
     }
 
@@ -179,7 +177,7 @@ internal object PlayNet {
                     allowRedirects = false,
                     timeout = 15L
                 )
-            } catch (e: Exception) {
+            } catch (_: Exception) {
                 return null
             }
             jar.putAll(res.cookies)
@@ -201,7 +199,7 @@ internal object PlayNet {
     // only the real challenge is worth a webview solve
     private fun isCfChallenge(res: NiceResponse): Boolean {
         if (res.headers["cf-mitigated"] == "challenge") return true
-        val body = try { res.text.lowercase() } catch (e: Exception) { "" }
+        val body = try { res.text.lowercase() } catch (_: Exception) { "" }
         return body.contains("just a moment") || body.contains("challenge-platform") ||
             body.contains("checking your browser")
     }
@@ -217,7 +215,7 @@ internal object PlayNet {
     ): NiceResponse? {
         val plain = try {
             app.get(url, headers = headers(referer), timeout = timeout)
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             null
         }
         if (plain != null && plain.code == 200 && !isCfChallenge(plain)) return plain
@@ -225,7 +223,7 @@ internal object PlayNet {
         runCatching { cfKiller.savedCookies.remove(URI(url).host) }
         val solved = try {
             app.get(url, headers = headers(referer), interceptor = cfKiller, timeout = solveTimeout)
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             null
         }
         if (solved != null && solved.code == 200 && !isCfChallenge(solved)) return solved
@@ -251,7 +249,7 @@ internal object PlayNet {
         repeat(7) {
             val res = try {
                 app.get(current, headers = headers(referer), allowRedirects = false, timeout = 8L)
-            } catch (e: Exception) {
+            } catch (_: Exception) {
                 return null
             }
             val loc = res.headers["location"]?.trim().orEmpty()
@@ -285,7 +283,7 @@ internal object PlayNet {
             }.getOrNull() ?: return null
             val obj = try {
                 JSONObject(decoded)
-            } catch (e: Exception) {
+            } catch (_: Exception) {
                 null
             }
             if (obj == null) {
@@ -309,8 +307,7 @@ internal object PlayNet {
             if (target.startsWith("http")) return target
             val unbased = runCatching { base64Decode(target) }.getOrNull() ?: target
             return unbased.trim().takeIf { it.startsWith("http") } ?: target.ifBlank { null }
-        } catch (e: Exception) {
-            Log.d(TAG, "decryptIdLink: ${e.message}")
+        } catch (_: Exception) {
             null
         }
     }
@@ -358,9 +355,7 @@ internal object PlayNet {
             for (link in collected) {
                 buildSiteLink(site, label, quality, link)?.let(callback)
             }
-        } catch (e: Exception) {
-            Log.d(TAG, "$site emit: ${e.message}")
-        }
+        } catch (_: Exception) {}
     }
 
     // routes through justplay's own extractors because loadExtractor picks
@@ -402,8 +397,6 @@ internal object PlayNet {
             for (link in collected) {
                 buildSiteLink(site, label, quality, link)?.let(callback)
             }
-        } catch (e: Exception) {
-            Log.d(TAG, "$site emit: ${e.message}")
-        }
+        } catch (_: Exception) {}
     }
 }

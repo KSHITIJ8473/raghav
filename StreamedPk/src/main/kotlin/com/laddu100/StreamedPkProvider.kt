@@ -23,7 +23,6 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.Dispatchers
 import kotlin.coroutines.resume
-import android.util.Log
 import com.raghav.donation.DonationManager
 
 class StreamedPkProvider : MainAPI() {
@@ -208,7 +207,7 @@ class StreamedPkProvider : MainAPI() {
             val sdf = java.text.SimpleDateFormat("dd MMM, HH:mm", java.util.Locale.US)
             sdf.timeZone = java.util.TimeZone.getDefault()
             sdf.format(date)
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             "soon"
         }
     }
@@ -263,7 +262,7 @@ class StreamedPkProvider : MainAPI() {
                 }
  lists.add(HomePageList(" Upcoming Matches", upcomingItems, isHorizontalImages = true))
             }
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             fetchFailed = true
         }
 
@@ -318,8 +317,7 @@ class StreamedPkProvider : MainAPI() {
                     }
                 )
             }
-        } catch (e: Exception) {
-        }
+        } catch (_: Exception) {}
         return results
     }
 
@@ -349,8 +347,7 @@ class StreamedPkProvider : MainAPI() {
                 dateVal = freshMatch.date
                 posterUrl = getPosterForMatch(freshMatch.category, freshMatch.poster)
             }
-        } catch (e: Exception) {
-        }
+        } catch (_: Exception) {}
 
         val isUpcoming = sources.isNullOrEmpty()
         val dateStr = formatMatchDate(dateVal)
@@ -374,8 +371,7 @@ class StreamedPkProvider : MainAPI() {
 
                         streamsList.add(StreamInfo(name = serverName, url = customUrl))
                     }
-                } catch (e: Exception) {
-                }
+                } catch (_: Exception) {}
             }
         }
 
@@ -398,7 +394,7 @@ class StreamedPkProvider : MainAPI() {
         val embedHost = try {
             val uri = java.net.URI(embedUrl)
             "${uri.scheme}://${uri.host}"
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             "https://embed.st"
         }
         return mapOf(
@@ -420,7 +416,7 @@ class StreamedPkProvider : MainAPI() {
                     if (captured.compareAndSet(false, true)) {
                         try {
                             webView?.destroy()
-                        } catch (e: Exception) {}
+                        } catch (_: Exception) {}
                         continuation.resume(null)
                     }
                 }
@@ -462,7 +458,7 @@ class StreamedPkProvider : MainAPI() {
                                         Handler(Looper.getMainLooper()).post {
                                             try {
                                                 webView?.destroy()
-                                            } catch (e: Exception) {}
+                                            } catch (_: Exception) {}
                                         }
                                         continuation.resume(reqUrl)
                                     }
@@ -481,26 +477,23 @@ class StreamedPkProvider : MainAPI() {
                     val embedHost = try {
                         val uri = java.net.URI(url)
                         "${uri.scheme}://${uri.host}"
-                    } catch (e: Exception) {
+                    } catch (_: Exception) {
                         "https://embed.st"
                     }
                     headers["Origin"] = embedHost
 
-                    Log.d("StreamedPk", "Loading URL in WebView: $url")
                     webView.loadUrl(url, headers)
 
                     Handler(Looper.getMainLooper()).postDelayed({
                         if (captured.compareAndSet(false, true)) {
-                            Log.d("StreamedPk", "Timeout waiting for stream link")
                             try {
                                 webView.destroy()
-                            } catch (e: Exception) {}
+                            } catch (_: Exception) {}
                             continuation.resume(null)
                         }
                     }, 30000)
 
-                } catch (e: Exception) {
-                    Log.e("StreamedPk", "Error initializing WebView: ${e.message}")
+                } catch (_: Exception) {
                     cleanUp()
                 }
             }
@@ -580,7 +573,7 @@ class StreamedPkProvider : MainAPI() {
     ): Boolean {
         val streamData = try {
             parseJson<StreamLoadData>(data)
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             return false
         }
 
@@ -614,16 +607,14 @@ class StreamedPkProvider : MainAPI() {
                     }
 
                     if (fallbackUrl.isNotEmpty()) {
-                        Log.d("StreamedPk", "Resolving embed URL via WebView: $fallbackUrl")
                         try {
                             val resolvedUrl = resolveStreamUrl(fallbackUrl, "https://streamed.pk/")
                             if (resolvedUrl != null) {
-                                Log.d("StreamedPk", "Successfully resolved URL: $resolvedUrl")
 
                                 val embedHost = try {
                                     val uri = java.net.URI(fallbackUrl)
                                     "${uri.scheme}://${uri.host}"
-                                } catch (e: Exception) {
+                                } catch (_: Exception) {
                                     "https://embed.st"
                                 }
                                 callback.invoke(
@@ -639,15 +630,11 @@ class StreamedPkProvider : MainAPI() {
                                 )
                                 foundAny = true
                             } else {
-                                Log.w("StreamedPk", "WebView resolver returned null for $fallbackUrl")
                             }
-                        } catch (e: Exception) {
-                            Log.e("StreamedPk", "WebView resolution failed for $fallbackUrl: ${e.message}")
-                        }
+                        } catch (_: Exception) {}
                     }
                 }
-            } catch (e: Exception) {
-            }
+            } catch (_: Exception) {}
         }
 
         return foundAny

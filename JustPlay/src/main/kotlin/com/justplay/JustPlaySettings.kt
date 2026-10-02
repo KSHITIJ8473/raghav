@@ -18,13 +18,10 @@ import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.widget.SwitchCompat
 import androidx.fragment.app.DialogFragment
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.CloudStreamApp
 import com.lagradost.cloudstream3.MainActivity
 
 class JustPlaySettingsFragment : DialogFragment() {
-
-    private val TAG = "JustPlaySettings"
 
     private val cText = Color.parseColor("#FFFFFF")
     private val cSub = Color.parseColor("#9AA4B8")
@@ -161,9 +158,7 @@ class JustPlaySettingsFragment : DialogFragment() {
         sites.forEach { site ->
             try {
                 CloudStreamApp.setKey("JUSTPLAY_SITE_${site.id}", site.id !in pending)
-            } catch (e: Exception) {
-                Log.d(TAG, "save ${site.id}: ${e.message}")
-            }
+            } catch (_: Exception) {}
         }
         AlertDialog.Builder(ctx)
             .setTitle("Restart Required")
@@ -172,9 +167,7 @@ class JustPlaySettingsFragment : DialogFragment() {
             .setNegativeButton("Later") { _, _ ->
                 try {
                     MainActivity.reloadHomeEvent.invoke(true)
-                } catch (e: Throwable) {
-                    Log.d(TAG, "home reload failed: ${e.message}")
-                }
+                } catch (_: Throwable) {}
                 dismiss()
             }
             .show()
@@ -191,9 +184,7 @@ class JustPlaySettingsFragment : DialogFragment() {
                 context.startActivity(restartIntent)
                 Runtime.getRuntime().exit(0)
             }
-        } catch (e: Throwable) {
-            Log.d(TAG, "restart failed: ${e.message}")
-        }
+        } catch (_: Throwable) {}
     }
 
     @SuppressLint("UseSwitchCompatOrMaterialCode")

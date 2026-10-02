@@ -125,7 +125,7 @@ class RaghavTwoDHive : MainAPI() {
         return node
     }
 
-    override suspend fun load(url: String): LoadResponse? {
+    override suspend fun load(url: String): LoadResponse? = coroutineScope {
         mainUrl = FirebaseDomainHelper.getDomain("twodhive") ?: mainUrl
         val malId = url.substringAfter("anime=").substringBefore("&").substringBefore("/").toIntOrNull()
         val html = quickGet(url)
@@ -147,6 +147,21 @@ class RaghavTwoDHive : MainAPI() {
             poster = soup.selectFirst("meta[property=og:image]")?.attr("content")
         }
 
+        val summary = if (malId != null) {
+            async {
+                try {
+                    mapper.readTree(quickGet("$mainUrl/api/anime/summary?malId=$malId"))
+                } catch (e: Exception) {
+                    if (e is CancellationException) throw e
+                    null
+                }
+            }
+        } else null
+
+        val dubProbe = if (malId != null) {
+            async { probeDub(malId) }
+        } else null
+
         var plot = ""
         val summaryLabel = soup.select("p").firstOrNull { it.text().trim() == "Synopsis" }
         if (summaryLabel != null) {
@@ -155,26 +170,19 @@ class RaghavTwoDHive : MainAPI() {
                 plot = summaryP.text().trim()
             }
         }
-        if (plot.isBlank() && malId != null) {
-            try {
-                val apiResp = quickGet("$mainUrl/api/anime/summary?malId=$malId")
-                val apiJson = mapper.readTree(apiResp)
-                plot = apiJson.get("anime")?.get("synopsis")?.asText() ?: ""
-            } catch (e: Exception) { if (e is CancellationException) throw e }
-        }
 
         val genres = mutableListOf<String>()
         var year: Int? = null
-        if (malId != null) {
-            try {
-                val apiResp = quickGet("$mainUrl/api/anime/summary?malId=$malId")
-                val apiJson = mapper.readTree(apiResp)
-                val genresNode = apiJson.get("anime")?.get("genres")
-                if (genresNode != null && genresNode.isArray) {
-                    genresNode.forEach { g -> genres.add(g.asText()) }
-                }
-                year = apiJson.get("anime")?.get("year")?.asInt()
-            } catch (e: Exception) { if (e is CancellationException) throw e }
+        val summaryNode = summary?.await()
+        if (summaryNode != null) {
+            if (plot.isBlank()) {
+                plot = summaryNode.get("anime")?.get("synopsis")?.asText() ?: ""
+            }
+            val genresNode = summaryNode.get("anime")?.get("genres")
+            if (genresNode != null && genresNode.isArray) {
+                genresNode.forEach { g -> genres.add(g.asText()) }
+            }
+            year = summaryNode.get("anime")?.get("year")?.asInt()
         }
         if (year == null) {
             soup.select("div, span, p, small").forEach { el ->
@@ -236,7 +244,7 @@ class RaghavTwoDHive : MainAPI() {
                 this.posterUrl = ep.posterUrl
             }
         }
-        val hasDub = malId != null && probeDub(malId)
+        val hasDub = dubProbe?.await() == true
         val dubEpisodes = if (hasDub) {
             episodes.map { ep ->
                 newEpisode("${ep.data}|dub") {
@@ -247,7 +255,7 @@ class RaghavTwoDHive : MainAPI() {
             }
         } else emptyList()
 
-        return newAnimeLoadResponse(title, url, TvType.Anime) {
+        return@coroutineScope newAnimeLoadResponse(title, url, TvType.Anime) {
             this.posterUrl = poster
             this.year = year
             this.plot = plot
@@ -461,7 +469,7 @@ class RaghavTwoDHive : MainAPI() {
             val resolver = WebViewResolver(
                 interceptUrl = Regex("""(?i)\.(m3u8|mp4)(?:[?#]|$)"""),
                 script = babaSolverScript,
-                useOkhttp = false, timeout = 120_000L
+                useOkhttp = false, timeout = 30_000L
             )
             val resolved = RaghavPerf.withWebView { app.get(embedUrl, referer = epUrl, interceptor = resolver).url }
             if (resolved.contains(".m3u8") || resolved.contains(".mp4")) {

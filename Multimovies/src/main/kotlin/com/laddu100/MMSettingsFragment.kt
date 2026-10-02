@@ -13,7 +13,6 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import com.google.android.material.bottomsheet.BottomSheetDialogFragment
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.plugins.Plugin
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -83,9 +82,7 @@ class MMSettingsFragment(private val plugin: Plugin) : BottomSheetDialogFragment
                     cm.setCookie(host, "$name=; Max-Age=0; expires=Thu, 01 Jan 1970 00:00:00 GMT")
                 }
                 cm.flush()
-            } catch (e: Exception) {
-                Log.e("MM_Settings", "clear: ${e.message}")
-            }
+            } catch (_: Exception) {}
             MMCFStore.clear()
 
             bypassBtn.text = "Solving..."
@@ -113,7 +110,7 @@ class MMSettingsFragment(private val plugin: Plugin) : BottomSheetDialogFragment
                             cm.setCookie(host, "$name=; Max-Age=0; expires=Thu, 01 Jan 1970 00:00:00 GMT")
                         }
                         cm.flush()
-                    } catch (e: Exception) {}
+                    } catch (_: Exception) {}
                     MMCFStore.clear()
                     bypassBtn.text = "Bypass Cloudflare"
                     Toast.makeText(ctx, "Cleared", Toast.LENGTH_SHORT).show()

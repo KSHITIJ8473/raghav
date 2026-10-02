@@ -1,6 +1,5 @@
 package com.laddu100
 
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.app
 import com.lagradost.nicehttp.NiceResponse
 import kotlinx.coroutines.sync.Mutex
@@ -9,7 +8,6 @@ import org.jsoup.nodes.Document
 import java.util.concurrent.ConcurrentHashMap
 
 object TmfNet {
-    private const val TAG = "TMF"
 
     const val DESKTOP_UA =
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
@@ -59,7 +57,7 @@ object TmfNet {
             for (candidate in candidates) {
                 val res = try {
                     app.get("$candidate/?s=the", headers = browserHeaders(), timeout = 15L)
-                } catch (e: Exception) {
+                } catch (_: Exception) {
                     null
                 }
                 if (res != null && res.isSuccessful) {
@@ -74,15 +72,13 @@ object TmfNet {
     suspend fun fetchPage(url: String, referer: String? = null): Document? {
         val res = try {
             app.get(url, headers = browserHeaders(referer), timeout = 25L)
-        } catch (e: Exception) {
-            Log.d(TAG, "page fetch failed: ${e.message}")
+        } catch (_: Exception) {
             return null
         }
         if (!res.isSuccessful) return null
         return try {
             res.document
-        } catch (e: Exception) {
-            Log.d(TAG, "page parse failed: ${e.message}")
+        } catch (_: Exception) {
             null
         }
     }
@@ -174,7 +170,7 @@ object TmfNet {
                     allowRedirects = false,
                     timeout = 20L
                 )
-            } catch (e: Exception) {
+            } catch (_: Exception) {
                 return null
             }
             jar.putAll(res.cookies)
@@ -183,7 +179,7 @@ object TmfNet {
                 if (res.code != 200) return null
                 val body = try {
                     res.text
-                } catch (e: Exception) {
+                } catch (_: Exception) {
                     return null
                 }
                 if (body.contains("challenge-platform") || body.contains("Just a moment", true)) {
@@ -224,7 +220,7 @@ object TmfNet {
             val page = res?.let {
                 val doc = try {
                     it.document
-                } catch (e: Exception) {
+                } catch (_: Exception) {
                     null
                 }
                 doc?.let { d ->
@@ -249,7 +245,7 @@ object TmfNet {
                 timeout = 15L
             )
             res.code
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             null
         }
     }
@@ -257,7 +253,7 @@ object TmfNet {
     fun originOf(url: String): String = try {
         val uri = java.net.URI(url)
         "${uri.scheme}://${uri.host}"
-    } catch (e: Exception) {
+    } catch (_: Exception) {
         url
     }
 }

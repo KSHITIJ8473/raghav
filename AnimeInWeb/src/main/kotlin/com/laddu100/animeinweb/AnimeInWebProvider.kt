@@ -1,7 +1,6 @@
 package com.laddu100.animeinweb
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.DubStatus
 import com.lagradost.cloudstream3.Episode
 import com.lagradost.cloudstream3.LoadResponse
@@ -85,8 +84,7 @@ class AnimeInWebProvider : MainAPI() {
             if (found != null && !found.contains("X-Amz-")) posterCache[key] = found
             else if (found == null) posterCache[key] = ""
             found ?: fallback
-        } catch (e: Exception) {
-            Log.e(TAG, "kitsu poster lookup failed: ${e.message}")
+        } catch (_: Exception) {
             fallback
         }
     }
@@ -379,9 +377,7 @@ class AnimeInWebProvider : MainAPI() {
                     if (host == "www.blogger.com" || host == "gdplayer.to") {
                         try {
                             if (loadExtractor(link, "$mainUrl/", subtitleCallback, callback)) found = true
-                        } catch (e: Exception) {
-                            Log.e(TAG, "extractor failed for $host: ${e.message}")
-                        }
+                        } catch (_: Exception) {}
                     }
                 }
             }
@@ -391,7 +387,6 @@ class AnimeInWebProvider : MainAPI() {
     }
 
     companion object {
-        private const val TAG = "AnimeInWeb"
         private const val USER_AGENT =
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
         private const val IMG_USER_AGENT = "okhttp/4.12.0"

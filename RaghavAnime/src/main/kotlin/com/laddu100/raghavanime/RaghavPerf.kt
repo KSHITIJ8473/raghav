@@ -42,7 +42,7 @@ object RaghavPerf {
     }
 
     fun sourceConcurrency(): Int = when (profile()) {
-        DeviceProfile.LOW_END -> 8
+        DeviceProfile.LOW_END -> 6
         DeviceProfile.MID_RANGE -> 12
         DeviceProfile.HIGH_END -> 16
     }
@@ -68,15 +68,17 @@ object RaghavPerf {
                             task()
                         } catch (c: CancellationException) {
                             throw c
-                        } catch (_: Throwable) {
-                        }
+                        } catch (_: Throwable) {}
                     }
                 }
             }.awaitAll()
         }
     }
 
-    private val webViewGate = Semaphore(2)
+    // a single webview at a time on weak hardware, two keep a queue moving elsewhere
+    private val webViewGate by lazy {
+        Semaphore(if (profile() == DeviceProfile.LOW_END) 1 else 2)
+    }
 
     suspend fun <T> withWebView(block: suspend () -> T): T {
         webViewGate.acquire()

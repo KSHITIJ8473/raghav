@@ -1,6 +1,5 @@
 package com.laddu100
 
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.DubStatus
 import com.lagradost.cloudstream3.Episode
 import com.lagradost.cloudstream3.HomePageResponse
@@ -40,7 +39,6 @@ class AniPMProvider : MainAPI() {
     override val supportedTypes = setOf(TvType.Anime, TvType.AnimeMovie, TvType.OVA)
 
     private companion object {
-        const val TAG = "AniPM"
         const val SETTLAR_REFERER = "https://embed.settlar.io/"
         const val MEGAPLAY_REFERER = "https://megaplay.buzz/"
 
@@ -184,8 +182,6 @@ class AniPMProvider : MainAPI() {
             else -> null
         }
 
-        Log.d(TAG, "load $title: ${subEpisodes.size} sub / ${dubEpisodes.size} dub episodes")
-
         return newAnimeLoadResponse(title, url, tvType) {
             posterUrl = AniPMApi.absolute(series.poster)
             backgroundPosterUrl = AniPMApi.absolute(series.banner)
@@ -272,9 +268,7 @@ class AniPMProvider : MainAPI() {
             subtitleCallback.invoke(newSubtitleFile(label, url) {
                 this.headers = headers
             })
-        } catch (e: Exception) {
-            Log.d(TAG, "subtitle emit failed: ${e.message}")
-        }
+        } catch (_: Exception) {}
     }
 
     private suspend fun emitSettlar(
@@ -289,7 +283,6 @@ class AniPMProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         if (selection == null) {
-            Log.d(TAG, "no settlar selection for ep$episode $channel")
             return false
         }
 
@@ -360,7 +353,6 @@ class AniPMProvider : MainAPI() {
             )
             return true
         }
-        Log.d(TAG, "megaplay resolve failed for ep$episode $channel")
         return false
     }
 }

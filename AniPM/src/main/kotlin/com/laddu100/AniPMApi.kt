@@ -1,6 +1,5 @@
 package com.laddu100
 
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import java.net.URLEncoder
@@ -8,7 +7,6 @@ import java.net.URLEncoder
 object AniPMApi {
     const val MAIN_URL = "https://ani.pm"
     private const val SETTLAR_EMBED = "https://embed.settlar.io"
-    private const val TAG = "AniPM"
 
     const val USER_AGENT =
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
@@ -23,11 +21,9 @@ object AniPMApi {
         return try {
             val res = app.get(url, headers = headers(referer), timeout = 30_000L)
             if (res.code == 200) res.text else {
-                Log.d(TAG, "${url.substringBefore('?')} answered ${res.code}")
                 null
             }
-        } catch (e: Exception) {
-            Log.d(TAG, "${url.substringBefore('?')} failed: ${e.message}")
+        } catch (_: Exception) {
             null
         }
     }
@@ -42,8 +38,7 @@ object AniPMApi {
         val text = getJson("$MAIN_URL/api/anime/search?q=${encode(query)}") ?: return emptyList()
         return try {
             parseJson<AniPMSearchResponse>(text).items.orEmpty().filter { it.id != null }
-        } catch (e: Exception) {
-            Log.d(TAG, "search parse failed: ${e.message}")
+        } catch (_: Exception) {
             emptyList()
         }
     }
@@ -56,8 +51,7 @@ object AniPMApi {
         val text = getJson(url) ?: return null
         return try {
             parseJson<AniPMBrowseResponse>(text)
-        } catch (e: Exception) {
-            Log.d(TAG, "browse parse failed: ${e.message}")
+        } catch (_: Exception) {
             null
         }
     }
@@ -66,8 +60,7 @@ object AniPMApi {
         val text = getJson("$MAIN_URL/api/anime/latest-episodes?page=$page") ?: return null
         return try {
             parseJson<AniPMLatestResponse>(text)
-        } catch (e: Exception) {
-            Log.d(TAG, "latest parse failed: ${e.message}")
+        } catch (_: Exception) {
             null
         }
     }
@@ -76,8 +69,7 @@ object AniPMApi {
         val text = getJson("$MAIN_URL/api/anime/series/$id?routes=e3") ?: return null
         return try {
             parseJson<AniPMSeries>(text)
-        } catch (e: Exception) {
-            Log.d(TAG, "series $id parse failed: ${e.message}")
+        } catch (_: Exception) {
             null
         }
     }
@@ -87,8 +79,7 @@ object AniPMApi {
         val text = getJson("$MAIN_URL/api/anime/anipm-server/_packages?anilistId=$anilistId") ?: return null
         return try {
             parseJson<AniPMPackages>(text)
-        } catch (e: Exception) {
-            Log.d(TAG, "packages parse failed: ${e.message}")
+        } catch (_: Exception) {
             null
         }
     }
@@ -100,8 +91,7 @@ object AniPMApi {
                 ?: return null
         return try {
             parseJson<AniPMFillerRanges>(text).ranges
-        } catch (e: Exception) {
-            Log.d(TAG, "filler parse failed: ${e.message}")
+        } catch (_: Exception) {
             null
         }
     }
@@ -111,8 +101,7 @@ object AniPMApi {
         val text = getJson(url) ?: return null
         return try {
             parseJson<AniPMBootstrap>(text)
-        } catch (e: Exception) {
-            Log.d(TAG, "bootstrap $id ep$episode parse failed: ${e.message}")
+        } catch (_: Exception) {
             null
         }
     }
@@ -123,8 +112,7 @@ object AniPMApi {
         val text = getJson(url) ?: return null
         return try {
             parseJson<AniPMEmbedSession>(text).embedUrl
-        } catch (e: Exception) {
-            Log.d(TAG, "settlar session parse failed: ${e.message}")
+        } catch (_: Exception) {
             null
         }
     }
@@ -136,8 +124,7 @@ object AniPMApi {
                 ?: return null
         return try {
             parseJson<SettlarStream>(text)
-        } catch (e: Exception) {
-            Log.d(TAG, "settlar resolve parse failed: ${e.message}")
+        } catch (_: Exception) {
             null
         }
     }

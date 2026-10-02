@@ -12,9 +12,9 @@ import java.net.URLEncoder
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Deferred
 import android.util.Base64
-import com.lagradost.api.Log
 import javax.crypto.Cipher
 import javax.crypto.Mac
 import javax.crypto.spec.IvParameterSpec
@@ -23,7 +23,6 @@ import com.raghav.donation.DonationManager
 
 // megaplay encrypts the enc stream url, the AES seeds live in lib/newclient.min.js and move over time
 object MegaPlayCipher {
-    private const val TAG = "MegaPlayCipher"
     private const val FALLBACK_KEY_SEED = "i?LMTAx0Q6,:}50U"
     private const val FALLBACK_IV_SEED = "W0;27ToaUpl_P%'c"
 
@@ -42,8 +41,7 @@ object MegaPlayCipher {
             keyPairRegex.find(js)?.groupValues?.let { g ->
                 Pair(g[1], g[2]).also { cachedSeeds = it }
             }
-        } catch (e: Exception) {
-            Log.w(TAG, "key seed fetch failed: ${e.message}")
+        } catch (_: Exception) {
             null
         }
         return listOfNotNull(dynamic, fallback())
@@ -66,8 +64,7 @@ object MegaPlayCipher {
             val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
             cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(keyBytes, "AES"), IvParameterSpec(ivBytes))
             String(cipher.doFinal(cipherBytes), Charsets.UTF_8)
-        } catch (e: Exception) {
-            Log.d(TAG, "token decrypt failed: ${e.message}")
+        } catch (_: Exception) {
             null
         }
     }
@@ -82,7 +79,6 @@ object MegaPlayCipher {
 }
 
 class TwoDHiveProvider : MainAPI() {
-    private val TAG = "TwoDHive"
 
     // the cdn only serves master.m3u8 with a valid HMAC token, variants just
     // need the referer
@@ -196,7 +192,7 @@ class TwoDHiveProvider : MainAPI() {
         return node
     }
 
-    override suspend fun load(url: String): LoadResponse? {
+    override suspend fun load(url: String): LoadResponse? = coroutineScope {
         mainUrl = FirebaseDomainHelper.getDomain("twodhive") ?: mainUrl
         val malId = url.substringAfter("anime=").substringBefore("&").substringBefore("/").toIntOrNull()
         val html = quickGet(url)
@@ -218,6 +214,21 @@ class TwoDHiveProvider : MainAPI() {
             poster = soup.selectFirst("meta[property=og:image]")?.attr("content")
         }
 
+        val summary = if (malId != null) {
+            async {
+                try {
+                    mapper.readTree(quickGet("$mainUrl/api/anime/summary?malId=$malId"))
+                } catch (e: Exception) {
+                    if (e is CancellationException) throw e
+                    null
+                }
+            }
+        } else null
+
+        val dubProbe = if (malId != null) {
+            async { probeDub(malId) }
+        } else null
+
         var plot = ""
         val summaryLabel = soup.select("p").firstOrNull { it.text().trim() == "Synopsis" }
         if (summaryLabel != null) {
@@ -226,30 +237,19 @@ class TwoDHiveProvider : MainAPI() {
                 plot = summaryP.text().trim()
             }
         }
-        if (plot.isBlank() && malId != null) {
-            try {
-                val apiResp = quickGet("$mainUrl/api/anime/summary?malId=$malId")
-                val apiJson = mapper.readTree(apiResp)
-                plot = apiJson.get("anime")?.get("synopsis")?.asText() ?: ""
-            } catch (e: Exception) {
-                Log.w(TAG, "synopsis fetch failed: ${e.message}")
-            }
-        }
 
         val genres = mutableListOf<String>()
         var year: Int? = null
-        if (malId != null) {
-            try {
-                val apiResp = quickGet("$mainUrl/api/anime/summary?malId=$malId")
-                val apiJson = mapper.readTree(apiResp)
-                val genresNode = apiJson.get("anime")?.get("genres")
-                if (genresNode != null && genresNode.isArray) {
-                    genresNode.forEach { g -> genres.add(g.asText()) }
-                }
-                year = apiJson.get("anime")?.get("year")?.asInt()
-            } catch (e: Exception) {
-                Log.w(TAG, "metadata fetch failed: ${e.message}")
+        val summaryNode = summary?.await()
+        if (summaryNode != null) {
+            if (plot.isBlank()) {
+                plot = summaryNode.get("anime")?.get("synopsis")?.asText() ?: ""
             }
+            val genresNode = summaryNode.get("anime")?.get("genres")
+            if (genresNode != null && genresNode.isArray) {
+                genresNode.forEach { g -> genres.add(g.asText()) }
+            }
+            year = summaryNode.get("anime")?.get("year")?.asInt()
         }
         if (year == null) {
             soup.select("div, span, p, small").forEach { el ->
@@ -285,9 +285,7 @@ class TwoDHiveProvider : MainAPI() {
                             }
                         }
                     }
-                } catch (e: Exception) {
-                    Log.w(TAG, "episode props parse failed: ${e.message}")
-                }
+                } catch (_: Exception) {}
             }
         }
 
@@ -314,7 +312,7 @@ class TwoDHiveProvider : MainAPI() {
             }
         }
         // only show the dub tab when megaplay actually carries a dub track
-        val hasDub = malId != null && probeDub(malId)
+        val hasDub = dubProbe?.await() == true
         val dubEpisodes = if (hasDub) {
             episodes.map { ep ->
                 newEpisode("${ep.data}|dub") {
@@ -325,7 +323,7 @@ class TwoDHiveProvider : MainAPI() {
             }
         } else emptyList()
 
-        return newAnimeLoadResponse(title, url, TvType.Anime) {
+        return@coroutineScope newAnimeLoadResponse(title, url, TvType.Anime) {
             this.posterUrl = poster
             this.year = year
             this.plot = plot
@@ -343,8 +341,7 @@ class TwoDHiveProvider : MainAPI() {
                 timeout = 15_000L
             ).text
             html.contains("data-id=") || html.contains("data-realid=")
-        } catch (e: Exception) {
-            Log.w(TAG, "dub probe failed: ${e.message}")
+        } catch (_: Exception) {
             false
         }
     }
@@ -386,8 +383,7 @@ class TwoDHiveProvider : MainAPI() {
         results.add(async {
             try {
                 resolveMegaPlay(malId, epNum, type, epUrl, subtitleCallback, callback)
-            } catch (e: Exception) {
-                Log.w(TAG, "megaplay resolve failed: ${e.message}")
+            } catch (_: Exception) {
                 false
             }
         })
@@ -395,8 +391,7 @@ class TwoDHiveProvider : MainAPI() {
         results.add(async {
             try {
                 resolveBabaStream(malId, epNum, type, epUrl, callback)
-            } catch (e: Exception) {
-                Log.w(TAG, "babastream resolve failed: ${e.message}")
+            } catch (_: Exception) {
                 false
             }
         })
@@ -459,8 +454,7 @@ class TwoDHiveProvider : MainAPI() {
         val signedMaster = signCdnUrl(m3u8Url)
         val masterText = try {
             app.get(signedMaster, headers = playHeaders, timeout = 15_000L).text
-        } catch (e: Exception) {
-            Log.w(TAG, "master playlist fetch failed: ${e.message}")
+        } catch (_: Exception) {
             null
         }
 
@@ -544,14 +538,12 @@ class TwoDHiveProvider : MainAPI() {
     private suspend fun fetchJson(url: String, headers: Map<String, String>): JsonNode? {
         val text = try {
             app.get(url, headers = headers, timeout = 15_000L).text
-        } catch (e: Exception) {
-            Log.e("MegaPlay", "sources request failed ($url): ${e.message}")
+        } catch (_: Exception) {
             return null
         }
         return try {
             mapper.readTree(text)
-        } catch (e: Exception) {
-            Log.e("MegaPlay", "sources JSON parse failed: ${e.message}")
+        } catch (_: Exception) {
             null
         }
     }
@@ -694,7 +686,7 @@ class TwoDHiveProvider : MainAPI() {
                 interceptUrl = Regex("""(?i)\.(m3u8|mp4)(?:[?#]|$)"""),
                 script = babaSolverScript,
                 // the cap pow solve alone can take half a minute on slow hardware
-                useOkhttp = false, timeout = 120_000L
+                useOkhttp = false, timeout = 30_000L
             )
             val resolved = app.get(embedUrl, referer = epUrl, interceptor = resolver).url
             if (resolved.contains(".m3u8") || resolved.contains(".mp4")) {
@@ -708,8 +700,7 @@ class TwoDHiveProvider : MainAPI() {
             } else {
                 false
             }
-        } catch (e: Exception) {
-            Log.e("BabaStream", "WebView extraction failed: ${e.message}")
+        } catch (_: Exception) {
             false
         }
     }

@@ -1,7 +1,6 @@
 package com.laddu100.reanime
 
 import android.util.Base64
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.app
 import java.security.MessageDigest
 import javax.crypto.Cipher
@@ -10,8 +9,6 @@ import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
 object FlixResolver {
-
-    private const val TAG = "ReAnime"
 
     data class FlixSubtitle(
         val url: String,
@@ -98,8 +95,7 @@ object FlixResolver {
 
             val subs = extractSubtitles(region)
             Result(url, pk, masterBody, subs)
-        } catch (e: Exception) {
-            Log.d(TAG, "flix resolve failed: ${e.message}")
+        } catch (_: Exception) {
             null
         }
     }
@@ -117,7 +113,7 @@ object FlixResolver {
             for (i in raw.indices) out[i] = (raw[i].toInt() xor pk[i % pk.size].toInt()).toByte()
             val text = String(out, Charsets.UTF_8)
             if (text.startsWith("#EXTM3U")) text else null
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             null
         }
     }

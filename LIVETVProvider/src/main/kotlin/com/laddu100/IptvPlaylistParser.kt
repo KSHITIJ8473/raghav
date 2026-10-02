@@ -173,8 +173,7 @@ class IptvPlaylistParser {
                             if (map.containsKey("user-agent")) {
                                 bufferedUserAgent = map["user-agent"]
                             }
-                        } catch (_: Exception) {
-                        }
+                        } catch (_: Exception) {}
                     }
                     line.startsWith(LIVETV.EXT_VLC_OPT) -> {
                         val userAgent = line.getTagValue("http-user-agent")

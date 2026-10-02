@@ -1,6 +1,5 @@
 package com.anikoto
 
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.utils.ExtractorApi
 import com.lagradost.cloudstream3.utils.ExtractorLink
@@ -28,7 +27,6 @@ open class MegaPlay : ExtractorApi() {
     ) {
         val stream = MegaPlayResolver.resolveStream(url, referer)
             ?: run {
-                Log.e("MegaPlay", "resolveStream failed for $url")
                 return
             }
 

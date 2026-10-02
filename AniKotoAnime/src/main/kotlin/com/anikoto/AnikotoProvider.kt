@@ -2,7 +2,6 @@ package com.anikoto
 
 import android.util.Base64
 import com.google.gson.JsonParser
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 
@@ -57,7 +56,7 @@ class AnikotoProvider : MainAPI() {
         mainUrl = FirebaseDomainHelper.getDomain("anikoto") ?: mainUrl
         val response = try {
             app.get(url, headers = browserHeaders)
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             return null
         }
         val doc = response.document
@@ -113,9 +112,7 @@ class AnikotoProvider : MainAPI() {
                         })
                     }
                 }
-            } catch (e: Exception) {
-                Log.e("AniKoto", "episode list failed: ${e.message}")
-            }
+            } catch (_: Exception) {}
         }
 
         // last resort when the ajax list never answered: walk the episode links
@@ -193,8 +190,7 @@ class AnikotoProvider : MainAPI() {
             if (serverIds.isBlank()) return false
 
             resolveServers(serverIds, data, audioType, subtitleCallback, callback)
-        } catch (e: Exception) {
-            Log.e("AniKoto", "episode page fallback failed: ${e.message}")
+        } catch (_: Exception) {
             false
         }
     }
@@ -212,7 +208,7 @@ class AnikotoProvider : MainAPI() {
         val serverListJson = try {
             app.get("$mainUrl/ajax/server/list?servers=$encodedIds",
                 referer = referer, headers = ajaxHeaders(referer)).text
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             return false
         }
 
@@ -261,9 +257,7 @@ class AnikotoProvider : MainAPI() {
                 if (resolveEmbedInline(embedUrl, referer, audioType, serverName, subtitleCallback, callback)) {
                     found = true
                 }
-            } catch (e: Exception) {
-                Log.e("AniKoto", "server $serverName failed: ${e.message}")
-            }
+            } catch (_: Exception) {}
         }
         return found
     }
@@ -302,7 +296,7 @@ class AnikotoProvider : MainAPI() {
         } else {
             try {
                 loadExtractor(normalizedUrl, referer, subtitleCallback, callback)
-            } catch (e: Exception) {
+            } catch (_: Exception) {
                 false
             }
         }
@@ -333,7 +327,7 @@ class AnikotoProvider : MainAPI() {
             val obj = JsonParser.parseString(json).asJsonObject
             if (obj.get("status")?.asInt != 200) ""
             else obj.get("result")?.asString.orEmpty()
-        } catch (e: Exception) { "" }
+        } catch (_: Exception) { "" }
     }
 
     private fun jsonResultUrl(json: String): String? {
@@ -341,12 +335,12 @@ class AnikotoProvider : MainAPI() {
             val obj = JsonParser.parseString(json).asJsonObject
             if (obj.get("status")?.asInt != 200) null
             else obj.get("result")?.asJsonObject?.get("url")?.asString
-        } catch (e: Exception) { null }
+        } catch (_: Exception) { null }
     }
 
     private fun getHashM3u8(url: String): String? {
         val encoded = url.substringAfter("#", "").substringBefore("#").takeIf { it.isNotBlank() } ?: return null
-        val decoded = try { String(Base64.decode(encoded, Base64.DEFAULT)) } catch (e: Exception) { null } ?: return null
+        val decoded = try { String(Base64.decode(encoded, Base64.DEFAULT)) } catch (_: Exception) { null } ?: return null
         return proxyPlayerHost(decoded).takeIf { it.startsWith("http") && it.contains(".m3u8") }
     }
 

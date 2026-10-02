@@ -1,7 +1,6 @@
 package com.laddu100
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 
@@ -37,8 +36,7 @@ object FirebaseDomainHelper {
             }.toMap()
             lastLoadTime = now
             everLoadedSuccessfully = true
-        } catch (e: Exception) {
-            Log.d("FirebaseDomainHelper", "load failed: ${e.message}")
+        } catch (_: Exception) {
             lastLoadTime = now
         }
     }

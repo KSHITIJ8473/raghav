@@ -1,15 +1,12 @@
 package com.laddu100
 
 import android.util.Base64
-import android.util.Log
 import java.util.Arrays
 import javax.crypto.Cipher
 import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
 object LIVETVCryptoUtils {
-
-    private const val TAG = "LIVETVCrypto"
 
     private const val LIVE_AES_KEY = "bTVLbDVuazR4SzFrTjdwTg=="
     private const val LIVE_AES_IV = "azVLNG5NOG1LbE5MN2wxNQ=="
@@ -107,8 +104,7 @@ object LIVETVCryptoUtils {
                 IvParameterSpec(iv)
             )
             cipher.doFinal(cipherBytes)
-        } catch (e: Exception) {
-            Log.e(TAG, "AES failed: ${e.message}")
+        } catch (_: Exception) {
             null
         }
     }
@@ -118,8 +114,7 @@ object LIVETVCryptoUtils {
             val cipherBytes = Base64.decode(normalizeBase64(dataB64), Base64.DEFAULT)
             aesCbcDecryptBytes(cipherBytes, keyInfo.key, keyInfo.iv)
                 ?.let { String(it, Charsets.UTF_8).trim() }
-        } catch (e: Exception) {
-            Log.e(TAG, "AES failed: ${e.message}")
+        } catch (_: Exception) {
             null
         }
     }
@@ -137,8 +132,7 @@ object LIVETVCryptoUtils {
             val text = String(pt, Charsets.UTF_8).trim()
             if (!text.startsWith("{") && !text.startsWith("[")) return null
             text
-        } catch (e: Exception) {
-            Log.e(TAG, "Native decrypt failed: ${e.message}")
+        } catch (_: Exception) {
             null
         }
     }
@@ -158,7 +152,7 @@ object LIVETVCryptoUtils {
             val text = String(pt, Charsets.UTF_8).trim()
             if (!text.startsWith("{") && !text.startsWith("[")) return null
             text
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             null
         }
     }
@@ -171,7 +165,7 @@ object LIVETVCryptoUtils {
             val text = String(pt, Charsets.UTF_8).trim()
             if (!text.startsWith("{") && !text.startsWith("[")) return null
             text
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             null
         }
     }
@@ -185,7 +179,6 @@ object LIVETVCryptoUtils {
         decryptPrimary(raw)?.let { return it }
         decryptFallback(raw)?.let { return it }
 
-        Log.e(TAG, "All decryption strategies failed")
         return null
     }
 }

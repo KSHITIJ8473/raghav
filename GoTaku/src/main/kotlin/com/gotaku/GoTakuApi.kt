@@ -1,14 +1,12 @@
 package com.gotaku
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import kotlinx.coroutines.delay
 
 object GoTakuApi {
 
-    private const val TAG = "GoTaku"
     const val SITE = "https://gotaku.to"
     private const val API = "$SITE/api/v1"
 
@@ -43,12 +41,9 @@ object GoTakuApi {
                     return response.body.bytes()
                 }
                 if (response.code != 426) {
-                    Log.d(TAG, "request $url answered ${response.code}")
                     return null
                 }
-            } catch (e: Exception) {
-                Log.d(TAG, "request failed: ${e.message}")
-            }
+            } catch (_: Exception) {}
             delay(700L + attempt * 500L)
         }
         return null
@@ -96,8 +91,7 @@ object GoTakuApi {
                 stamp = node.stamp ?: stamp,
                 segmentBytes = node.obf?.segmentBytes ?: 0
             )
-        } catch (e: Exception) {
-            Log.d(TAG, "manifest parse failed: ${e.message}")
+        } catch (_: Exception) {
             null
         }
     }
@@ -190,8 +184,7 @@ object GoTakuApi {
         val text = fetchText("$API/episodes/$episodeId/embed?type=$type", k = true) ?: return null
         val parsed = try {
             parseJson<EmbedResponse>(text)
-        } catch (e: Exception) {
-            Log.d(TAG, "embed response parse failed: ${e.message}")
+        } catch (_: Exception) {
             null
         }
         return parsed?.data?.url?.takeIf { it.isNotBlank() }
@@ -201,8 +194,7 @@ object GoTakuApi {
         val text = fetchText("$API/titles/$titleId/episodes", k = true) ?: return emptyList()
         val parsed = try {
             parseJson<EpisodesResponse>(text)
-        } catch (e: Exception) {
-            Log.d(TAG, "episode list parse failed: ${e.message}")
+        } catch (_: Exception) {
             null
         }
         return parsed?.data.orEmpty()
@@ -212,8 +204,7 @@ object GoTakuApi {
         val text = fetchText("$API/titles/$titleId") ?: return null
         val parsed = try {
             parseJson<TitleDetailResponse>(text)
-        } catch (e: Exception) {
-            Log.d(TAG, "title detail parse failed: ${e.message}")
+        } catch (_: Exception) {
             null
         }
         return parsed?.data?.title
@@ -224,8 +215,7 @@ object GoTakuApi {
         val text = fetchText("$API/titles?$query") ?: return Pair(emptyList(), false)
         val parsed = try {
             parseJson<TitlesResponse>(text)
-        } catch (e: Exception) {
-            Log.d(TAG, "titles parse failed: ${e.message}")
+        } catch (_: Exception) {
             null
         }
         return Pair(parsed?.data.orEmpty(), parsed?.meta?.has_more == true)

@@ -25,7 +25,6 @@ import android.widget.TextView
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.fragment.app.DialogFragment
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.CommonActivity
 import com.lagradost.cloudstream3.app
 import com.lagradost.nicehttp.NiceResponse
@@ -36,8 +35,6 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.coroutines.resume
-
-private const val TAG = "Kdesa_CF"
 
 private const val POLL_INTERVAL_MS = 1000L
 private const val SOLVER_TIMEOUT_MS = 120_000L
@@ -71,7 +68,6 @@ internal object KdesaCF {
     fun saveSession(host: String, cookies: String, ua: String) {
         sessions[host] = CfSession(cookies, ua, System.currentTimeMillis())
         prefs?.edit()?.putString("cf_$host", "$host|||$cookies|||$ua")?.apply()
-        Log.d(TAG, "saved CF session for $host")
     }
 
     fun clearSession(host: String) {
@@ -94,7 +90,7 @@ internal object KdesaCF {
                 body.contains("cf-mitigated") ||
                 body.contains("checking your browser") ||
                 body.contains("_cf_chl")
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             true
         }
     }
@@ -122,7 +118,6 @@ internal object KdesaCF {
         val host = Uri.parse(url).host ?: ""
         var res = app.get(url, headers = buildHeaders(url, headers), timeout = timeout)
         if (!isBlocked(res)) return res
-        Log.e(TAG, "GET $url -> ${res.code} blocked by Cloudflare, starting bypass")
 
         bypassMutex.withLock {
             validSession(host)?.let {
@@ -131,7 +126,6 @@ internal object KdesaCF {
             }
             clearSession(host)
             if (!showBypassDialog("https://$host/")) {
-                Log.e(TAG, "CF bypass dialog failed for $host")
                 return res
             }
             repeat(2) {
@@ -151,7 +145,6 @@ internal object KdesaCF {
         val host = Uri.parse(url).host ?: ""
         var res = app.post(url, headers = buildHeaders(url, headers), data = data, timeout = timeout)
         if (!isBlocked(res)) return res
-        Log.e(TAG, "POST $url -> ${res.code} blocked by Cloudflare, starting bypass")
 
         bypassMutex.withLock {
             validSession(host)?.let {
@@ -160,7 +153,6 @@ internal object KdesaCF {
             }
             clearSession(host)
             if (!showBypassDialog("https://$host/")) {
-                Log.e(TAG, "CF bypass dialog failed for $host")
                 return res
             }
             repeat(2) {
@@ -200,9 +192,7 @@ class KdesaCFDialog(private val targetUrl: String, private val onFinished: (Bool
                     saveCookiesAndDismiss(cookies, host)
                     return
                 }
-            } catch (e: Exception) {
-                Log.e(TAG, "cookie poll: ${e.message}")
-            }
+            } catch (_: Exception) {}
             handler.postDelayed(this, POLL_INTERVAL_MS)
         }
     }
@@ -300,9 +290,7 @@ class KdesaCFDialog(private val targetUrl: String, private val onFinished: (Bool
                         if (cookies.contains("cf_clearance")) {
                             saveCookiesAndDismiss(cookies, host)
                         }
-                    } catch (e: Exception) {
-                        Log.e(TAG, "onPageFinished: ${e.message}")
-                    }
+                    } catch (_: Exception) {}
                 }
             }
         }
@@ -346,7 +334,6 @@ class KdesaCFDialog(private val targetUrl: String, private val onFinished: (Bool
 private suspend fun showBypassDialog(url: String): Boolean = withContext(Dispatchers.Main) {
     val activity = CommonActivity.activity as? AppCompatActivity
     if (activity == null || activity.isFinishing || activity.isDestroyed) {
-        Log.e(TAG, "no activity available for CF dialog")
         return@withContext false
     }
     suspendCancellableCoroutine { cont ->
@@ -355,8 +342,7 @@ private suspend fun showBypassDialog(url: String): Boolean = withContext(Dispatc
         }
         try {
             dialog.show(activity.supportFragmentManager, "KdesaCFDialog")
-        } catch (e: Exception) {
-            Log.e(TAG, "failed to show CF dialog: ${e.message}")
+        } catch (_: Exception) {
             if (cont.isActive) cont.resume(false)
         }
         cont.invokeOnCancellation { dialog.dismissAllowingStateLoss() }

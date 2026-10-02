@@ -1,6 +1,5 @@
 package com.laddu100
 
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.app
 import java.net.URI
 import java.net.URLEncoder
@@ -44,8 +43,7 @@ object MMCrypto {
         val ct = cipher.doFinal(pkcs7Pad(plain.toByteArray(Charsets.UTF_8)))
         val out = "Salted__".toByteArray(Charsets.UTF_8) + salt + ct
         Base64.getEncoder().encodeToString(out)
-    } catch (e: Exception) {
-        Log.e("MMCrypto", "encrypt: ${e.message}")
+    } catch (_: Exception) {
         null
     }
 
@@ -61,7 +59,7 @@ object MMCrypto {
         val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
         cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(key, "AES"), IvParameterSpec(iv))
         String(cipher.doFinal(raw.copyOfRange(16, raw.size)), Charsets.UTF_8)
-    } catch (e: Exception) {
+    } catch (_: Exception) {
         null
     }
 }
@@ -89,14 +87,14 @@ object MMNet {
 
     fun hostOf(url: String): String = try {
         URI(url).host?.lowercase() ?: ""
-    } catch (e: Exception) {
+    } catch (_: Exception) {
         ""
     }
 
     fun originOf(url: String): String = try {
         val u = URI(url)
         "${u.scheme}://${u.host}"
-    } catch (e: Exception) {
+    } catch (_: Exception) {
         ""
     }
 
@@ -109,7 +107,7 @@ object MMNet {
         if (referer != null) h["Referer"] = referer
         val resp = app.get(url, headers = h, timeout = 30_000L)
         if (resp.isSuccessful) resp.text else null
-    } catch (e: Exception) {
+    } catch (_: Exception) {
         null
     }
 }

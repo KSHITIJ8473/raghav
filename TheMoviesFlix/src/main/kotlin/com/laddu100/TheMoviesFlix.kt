@@ -1,6 +1,5 @@
 package com.laddu100
 
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.LoadResponse.Companion.addImdbId
 import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
@@ -12,8 +11,6 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import org.jsoup.nodes.Element
 import java.net.URLEncoder
-
-private const val TAG = "TMF"
 
 class TheMoviesFlix : MainAPI() {
     override var mainUrl = "https://themoviesflixhq.com"
@@ -278,8 +275,7 @@ class TheMoviesFlix : MainAPI() {
                             hrefs, page.quality, page.info,
                             "https://nexdrive.fit/", subtitleCallback, callback
                         )
-                    } catch (e: Exception) {
-                        Log.e(TAG, "loadLinks: ${e.message}")
+                    } catch (_: Exception) {
                         false
                     }
                 }

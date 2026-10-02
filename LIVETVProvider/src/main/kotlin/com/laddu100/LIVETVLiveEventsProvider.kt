@@ -1,7 +1,6 @@
 package com.laddu100
 
 import android.util.Base64
-import android.util.Log
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.AppUtils.toJson
@@ -308,9 +307,7 @@ class LIVETVLiveEventsProvider(
                         )
                     }
                 }
-            } catch (e: Exception) {
-                Log.e("LIVETV", "stream: ${e.message}")
-            }
+            } catch (_: Exception) {}
         }
         return true
     }

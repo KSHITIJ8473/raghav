@@ -1,7 +1,6 @@
 package com.gotaku
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.AppUtils.toJson
@@ -22,10 +21,6 @@ class GoTaku : MainAPI() {
         TvType.AnimeMovie,
         TvType.OVA
     )
-
-    companion object {
-        private const val TAG = "GoTaku"
-    }
 
     override val mainPage = mainPageOf(
         "trending_day" to "Trending Today",
@@ -135,8 +130,7 @@ class GoTaku : MainAPI() {
     ): Boolean {
         val epData = try {
             parseJson<GoTakuEpisodeData>(data)
-        } catch (e: Exception) {
-            Log.d(TAG, "episode data parse failed: ${e.message}")
+        } catch (_: Exception) {
             return false
         }
         if (epData.episodeId.isBlank()) return false
@@ -151,18 +145,18 @@ class GoTaku : MainAPI() {
             callback.invoke(
                 newExtractorLink(
                     source = name,
-                    name = trackLabel,
+                    name = "$name $trackLabel",
                     url = "${stream.proxyUrl}/m/0/master.m3u8",
                     type = ExtractorLinkType.M3U8
                 )
             )
             return true
         }
-        qualities.forEach { (label, quality, index) ->
+        qualities.forEach { (_, quality, index) ->
             callback.invoke(
                 newExtractorLink(
                     source = name,
-                    name = "$trackLabel $label",
+                    name = "$name $trackLabel",
                     url = "${stream.proxyUrl}/m/$index/master.m3u8",
                     type = ExtractorLinkType.M3U8
                 ) {
@@ -203,8 +197,7 @@ class GoTaku : MainAPI() {
                         )
                     )
                     if (response.isSuccessful) response.body.bytes() else null
-                } catch (e: Exception) {
-                    Log.d(TAG, "master attempt ${attempt + 1} failed: ${e.message}")
+                } catch (_: Exception) {
                     null
                 } ?: continue
 
@@ -225,13 +218,12 @@ class GoTaku : MainAPI() {
             ) ?: return null
 
             ResolvedStream(proxyBase, master)
-        } catch (e: Exception) {
-            Log.d(TAG, "stream resolve failed: ${e.message}")
+        } catch (_: Exception) {
             null
         }
     }
 
-    // each link pins one variant so the label matches what plays
+    // each link pins one variant, the player adds the resolution to the label
     private fun parseQualities(master: String): List<Triple<String, Int, Int>> {
         val lines = master.split("\n").map { it.trim() }.filter { it.isNotEmpty() }
         val out = mutableListOf<Triple<String, Int, Int>>()

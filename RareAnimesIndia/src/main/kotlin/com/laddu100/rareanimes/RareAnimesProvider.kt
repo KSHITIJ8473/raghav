@@ -2,7 +2,6 @@ package com.laddu100.rareanimes
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties
 import com.fasterxml.jackson.annotation.JsonProperty
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.HomePageResponse
 import com.lagradost.cloudstream3.LoadResponse
 import com.lagradost.cloudstream3.MainAPI
@@ -116,7 +115,6 @@ class RareAnimesProvider : MainAPI() {
     override val hasDownloadSupport = true
     override val supportedTypes = setOf(TvType.Anime, TvType.Cartoon, TvType.TvSeries, TvType.Movie)
 
-    private val TAG = "RareAnimes"
     private val SOURCE = "Rare Toons India"
     private val EPISODE_HEADER = Regex("""^(?:Episode|EP)\s*[.\-]?\s*(\d{1,3})\b""", RegexOption.IGNORE_CASE)
     private val SEASON_MARKER = Regex("""^\s*Seasons?\s*[-\u2013:.]?\s*(\d{1,2})\s*$""", RegexOption.IGNORE_CASE)
@@ -165,8 +163,7 @@ class RareAnimesProvider : MainAPI() {
                 }
             }
             newHomePageResponse(request.name, items, hasNext = entries.isNotEmpty())
-        } catch (e: Exception) {
-            Log.e(TAG, "getMainPage: ${e.message}")
+        } catch (_: Exception) {
             newHomePageResponse(request.name, emptyList(), hasNext = false)
         }
     }
@@ -189,8 +186,7 @@ class RareAnimesProvider : MainAPI() {
                     this.posterUrl = it.poster
                 }
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "search: ${e.message}")
+        } catch (_: Exception) {
             emptyList()
         }
     }
@@ -446,8 +442,7 @@ class RareAnimesProvider : MainAPI() {
                     val single = eps.first()
                     val target = try {
                         CodedewResolver.resolveUrl(single.second)
-                    } catch (e: Exception) {
-                        Log.e(TAG, "single chase: ${e.message}")
+                    } catch (_: Exception) {
                         null
                     }
                     if (target is ResolvedTarget.Archive) {
@@ -466,8 +461,7 @@ class RareAnimesProvider : MainAPI() {
                     )?.attr("abs:href") ?: return null
                     val target = try {
                         CodedewResolver.resolveUrl(codedew)
-                    } catch (e: Exception) {
-                        Log.e(TAG, "archive chase: ${e.message}")
+                    } catch (_: Exception) {
                         null
                     }
                     when (target) {
@@ -484,8 +478,7 @@ class RareAnimesProvider : MainAPI() {
                     }
                 }
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "loadArchive: ${e.message}")
+        } catch (_: Exception) {
             null
         }
     }
@@ -578,7 +571,7 @@ class RareAnimesProvider : MainAPI() {
             ) return false
             if (HUB_SELF_SLUG.containsMatchIn(path)) return false
             path.length > 8
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             false
         }
     }
@@ -729,8 +722,7 @@ class RareAnimesProvider : MainAPI() {
                     seasonKnown = pageHasSeasonIdentity(doc, content, subMeta)
                 )
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "hub page ${link.url}: ${e.message}")
+        } catch (_: Exception) {
             null
         }
     }
@@ -1118,8 +1110,7 @@ class RareAnimesProvider : MainAPI() {
             if (useHub) {
                 val hub = try {
                     buildHubResponse(title, url, poster, year, plot, genres, hubLinks)
-                } catch (e: Exception) {
-                    Log.e(TAG, "hub: ${e.message}")
+                } catch (_: Exception) {
                     null
                 }
                 if (hub != null) return hub
@@ -1127,8 +1118,7 @@ class RareAnimesProvider : MainAPI() {
 
             val content = parsePageContent(doc, defaultSeason)
             buildNormalResponse(title, url, poster, year, plot, genres, content)
-        } catch (e: Exception) {
-            Log.e(TAG, "load: ${e.message}")
+        } catch (_: Exception) {
             null
         }
     }
@@ -1188,9 +1178,7 @@ class RareAnimesProvider : MainAPI() {
                 )
                 found = true
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "argon embed: ${e.message}")
-        }
+        } catch (_: Exception) {}
         return found
     }
 
@@ -1290,7 +1278,6 @@ class RareAnimesProvider : MainAPI() {
                 )
             )
             if (api.code != 200) {
-                Log.e(TAG, "argon dl api: ${api.code}")
                 return false
             }
             val links = parseJson<ArgonLinks>(api.text)
@@ -1318,9 +1305,7 @@ class RareAnimesProvider : MainAPI() {
                 )
                 found = true
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "argon download: ${e.message}")
-        }
+        } catch (_: Exception) {}
         return found
     }
 
@@ -1359,7 +1344,7 @@ class RareAnimesProvider : MainAPI() {
                 timeout = timeoutMs
             )
             r.code in 200..299 || r.code == 206
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             false
         }
     }
@@ -1420,9 +1405,7 @@ class RareAnimesProvider : MainAPI() {
                     }
                 }
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "streambeta: ${e.message}")
-        }
+        } catch (_: Exception) {}
         return found
     }
 
@@ -1461,8 +1444,7 @@ class RareAnimesProvider : MainAPI() {
             goFileTokenCache = token
             goFileTokenAt = System.currentTimeMillis()
             token
-        } catch (e: Exception) {
-            Log.e(TAG, "gofile account: ${e.message}")
+        } catch (_: Exception) {
             null
         }
     }
@@ -1500,7 +1482,6 @@ class RareAnimesProvider : MainAPI() {
             )
             if (content.status != "ok") {
                 goFileTokenCache = null
-                Log.e(TAG, "gofile contents: ${content.status}")
                 return false
             }
             content.data?.children.orEmpty().values.forEach { child ->
@@ -1525,9 +1506,7 @@ class RareAnimesProvider : MainAPI() {
                 )
                 found = true
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "gofile: ${e.message}")
-        }
+        } catch (_: Exception) {}
         return found
     }
 
@@ -1555,9 +1534,7 @@ class RareAnimesProvider : MainAPI() {
                 }
             )
             found = true
-        } catch (e: Exception) {
-            Log.e(TAG, "mediafire: ${e.message}")
-        }
+        } catch (_: Exception) {}
         return found
     }
 
@@ -1640,9 +1617,7 @@ class RareAnimesProvider : MainAPI() {
                             break
                         }
                     }
-                } catch (e: Exception) {
-                    Log.e(TAG, "hubcloud 10gbps: ${e.message}")
-                }
+                } catch (_: Exception) {}
             }
 
             Regex("""https?://pixel(?:drain|dra)\.[a-z]+/u/([A-Za-z0-9]+)""")
@@ -1657,9 +1632,7 @@ class RareAnimesProvider : MainAPI() {
                         found = true
                     }
                 }
-        } catch (e: Exception) {
-            Log.e(TAG, "hubcloud: ${e.message}")
-        }
+        } catch (_: Exception) {}
         return found
     }
 
@@ -1740,7 +1713,6 @@ class RareAnimesProvider : MainAPI() {
             is ResolvedTarget.GoFile -> resolveGoFile(t.code, label, callback)
             is ResolvedTarget.MediaFire -> resolveMediaFire(t.url, label, callback)
             is ResolvedTarget.Mega -> {
-                Log.i(TAG, "mega link is not streamable, skipped")
                 false
             }
             is ResolvedTarget.Archive -> {
@@ -1751,13 +1723,9 @@ class RareAnimesProvider : MainAPI() {
                         try {
                             val t2 = CodedewResolver.resolveUrl(epUrl)
                             if (resolveTarget(t2, label, callback)) emitted = true
-                        } catch (e: Exception) {
-                            Log.e(TAG, "archive ep resolve: ${e.message}")
-                        }
+                        } catch (_: Exception) {}
                     }
-                } catch (e: Exception) {
-                    Log.e(TAG, "archive fetch: ${e.message}")
-                }
+                } catch (_: Exception) {}
                 emitted
             }
             is ResolvedTarget.Direct -> {
@@ -1785,7 +1753,7 @@ class RareAnimesProvider : MainAPI() {
     ): Boolean {
         val variants = try {
             parseJson<RAIEpisodeData>(data).v
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             listOf(RAIVariant("Default", data))
         }.filter { it.u.isNotBlank() }
 
@@ -1795,9 +1763,7 @@ class RareAnimesProvider : MainAPI() {
         for (v in variants) {
             try {
                 if (resolveTarget(CodedewResolver.resolveUrl(v.u), v.n, callback)) any = true
-            } catch (e: Exception) {
-                Log.e(TAG, "variant ${v.n}: ${e.message}")
-            }
+            } catch (_: Exception) {}
         }
 
         if (!any) {

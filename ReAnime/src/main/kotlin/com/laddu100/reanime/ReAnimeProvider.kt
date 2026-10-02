@@ -1,6 +1,5 @@
 package com.laddu100.reanime
 
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.DubStatus
 import com.lagradost.cloudstream3.Episode
 import com.lagradost.cloudstream3.HomePageResponse
@@ -191,7 +190,7 @@ class ReAnimeProvider : MainAPI() {
             val sdf = SimpleDateFormat("yyyy-MM-dd", Locale.US)
             sdf.timeZone = TimeZone.getTimeZone("UTC")
             sdf.parse(raw.substringBefore("T").take(10))
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             null
         }
     }
@@ -209,8 +208,7 @@ class ReAnimeProvider : MainAPI() {
     ): Boolean {
         val ref = try {
             parseJson<EpisodeRef>(data)
-        } catch (e: Exception) {
-            Log.e("ReAnime", "bad episode data: ${e.message}")
+        } catch (_: Exception) {
             null
         } ?: return false
         if (ref.ep <= 0) return false

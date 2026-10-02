@@ -2,7 +2,6 @@ package com.kdesa
 
 import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.network.WebViewResolver
@@ -17,8 +16,6 @@ import kotlinx.coroutines.delay
 import java.net.URL
 import java.net.URLEncoder
 import java.text.Normalizer
-
-private const val TAG = "Kdesa"
 
 private val mapper = ObjectMapper()
 
@@ -63,7 +60,7 @@ class KdesaSources {
 
     private fun parseJsonSafe(text: String): JsonNode? = try {
         mapper.readTree(text)
-    } catch (e: Exception) {
+    } catch (_: Exception) {
         null
     }
 
@@ -144,8 +141,7 @@ class KdesaSources {
                 }
             }
             HlsProbe(audioLangs.distinct(), maxHeight, variants, (audioLangs.sorted() + hashParts.sorted()).joinToString("|"))
-        } catch (e: Exception) {
-            Log.d(TAG, "probeHls failed ${url.take(80)}: ${e.message}")
+        } catch (_: Exception) {
             null
         }
     }
@@ -186,8 +182,7 @@ class KdesaSources {
             val links = M3u8Helper.generateM3u8(label, url, referer, headers = headers)
             links.forEach(callback)
             links.size
-        } catch (e: Exception) {
-            Log.e(TAG, "emitHls: generateM3u8 failed for '$label': ${e.message}")
+        } catch (_: Exception) {
             0
         }
     }
@@ -257,15 +252,12 @@ class KdesaSources {
                 timeout = 30_000L
             )
             if (res.code != 200) {
-                Log.e(TAG, "[$label] HTTP ${res.code} for $path")
                 return false
             }
             val root = parseJsonSafe(res.text) ?: run {
-                Log.e(TAG, "[$label] invalid JSON response")
                 return false
             }
             val sources = root.get("sources")?.takeIf { it.isArray } ?: run {
-                Log.e(TAG, "[$label] no sources in response")
                 return false
             }
             val subs = root.get("subtitles")?.takeIf { it.isArray }
@@ -305,8 +297,7 @@ class KdesaSources {
                 }
             }
             return count > 0
-        } catch (e: Exception) {
-            Log.e(TAG, "[$label] failed: ${e.message}")
+        } catch (_: Exception) {
             return false
         }
     }
@@ -339,12 +330,10 @@ class KdesaSources {
                 timeout = 30_000L
             )
             if (tokenRes.code != 200) {
-                Log.e(TAG, "[$label] token HTTP ${tokenRes.code}")
                 return false
             }
             val token = parseJsonSafe(tokenRes.text)?.str("token")
             if (token.isNullOrBlank()) {
-                Log.e(TAG, "[$label] no token in response")
                 return false
             }
             val srcPath = if (isShow) {
@@ -363,16 +352,13 @@ class KdesaSources {
                 timeout = 30_000L
             )
             if (srcRes.code != 200) {
-                Log.e(TAG, "[$label] source HTTP ${srcRes.code}")
                 return false
             }
             val root = parseJsonSafe(srcRes.text) ?: return false
             if (root.get("success")?.asBoolean() != true) {
-                Log.e(TAG, "[$label] success=false: ${root.str("error")}")
                 return false
             }
             val streams = root.get("streams")?.takeIf { it.isArray } ?: run {
-                Log.e(TAG, "[$label] no streams")
                 return false
             }
             var count = 0
@@ -388,7 +374,7 @@ class KdesaSources {
                             ?.substringAfter("url=")
                             ?.let { java.net.URLDecoder.decode(it, "UTF-8") }
                         if (inner != null && inner.startsWith("http")) inner else full
-                    } catch (e: Exception) {
+                    } catch (_: Exception) {
                         full
                     }
                 }
@@ -407,8 +393,7 @@ class KdesaSources {
                 )
             }
             return count > 0
-        } catch (e: Exception) {
-            Log.e(TAG, "[$label] failed: ${e.message}")
+        } catch (_: Exception) {
             return false
         }
     }
@@ -426,18 +411,15 @@ class KdesaSources {
                 timeout = 20_000L
             )
             if (res.code != 200) {
-                Log.e(TAG, "[1Embed] token HTTP ${res.code}")
                 return null
             }
             val token = parseJsonSafe(res.text)?.str("token")
             if (token.isNullOrBlank()) {
-                Log.e(TAG, "[1Embed] token missing")
                 return null
             }
             oneEmbedToken = token to (System.currentTimeMillis() + 25 * 60 * 1000)
             token
-        } catch (e: Exception) {
-            Log.e(TAG, "[1Embed] token failed: ${e.message}")
+        } catch (_: Exception) {
             null
         }
     }
@@ -471,12 +453,10 @@ class KdesaSources {
                         timeout = 30_000L
                     )
                     if (res.code != 200) {
-                        Log.e(TAG, "[$label] $server HTTP ${res.code}")
                         continue
                     }
                     val root = parseJsonSafe(res.text) ?: continue
                     if (root.get("success")?.asBoolean() != true) {
-                        Log.e(TAG, "[$label] $server success=false ${root.str("error")}")
                         continue
                     }
                     // raw_m3u8 is IP-locked to the API server, the proxy streamUrl works
@@ -484,7 +464,6 @@ class KdesaSources {
                         ?: root.get("streams")?.str("proxy_m3u8")
                         ?: root.get("streams")?.str("raw_m3u8")
                     if (streamUrl.isNullOrBlank() || !streamUrl.startsWith("http")) {
-                        Log.e(TAG, "[$label] $server no streamUrl")
                         continue
                     }
                     val audioNames = root.get("audioTracks")?.takeIf { it.isArray }
@@ -514,13 +493,10 @@ class KdesaSources {
                             subtitleCallback.invoke(newSubtitleFile(subLabel, subUrl) {})
                         }
                     }
-                } catch (e: Exception) {
-                    Log.e(TAG, "[$label] server $server failed: ${e.message}")
-                }
+                } catch (_: Exception) {}
             }
             return any
-        } catch (e: Exception) {
-            Log.e(TAG, "[$label] failed: ${e.message}")
+        } catch (_: Exception) {
             return false
         }
     }
@@ -550,12 +526,10 @@ class KdesaSources {
                 timeout = 20_000L
             )
             if (apiRes.code != 200) {
-                Log.e(TAG, "[$label] api HTTP ${apiRes.code}")
                 return false
             }
             val src = parseJsonSafe(apiRes.text)?.str("src")
             if (src.isNullOrBlank()) {
-                Log.e(TAG, "[$label] api returned no src")
                 return false
             }
             val embedUrl = if (src.startsWith("http")) src else "$VIXSRC$src"
@@ -566,7 +540,6 @@ class KdesaSources {
                 timeout = 20_000L
             )
             if (embedRes.code != 200) {
-                Log.e(TAG, "[$label] embed HTTP ${embedRes.code}")
                 return false
             }
             val html = embedRes.text
@@ -578,7 +551,6 @@ class KdesaSources {
             val asn = Regex("""'asn'\s*:\s*'([^']*)'""").find(html)?.groupValues?.get(1) ?: ""
             val canPlayFhd = html.contains("window.canPlayFHD = true")
             if (masterUrl.isNullOrBlank() || token.isNullOrBlank() || expires.isNullOrBlank()) {
-                Log.e(TAG, "[$label] stream fields missing")
                 return false
             }
 
@@ -596,8 +568,7 @@ class KdesaSources {
                 }
             )
             return true
-        } catch (e: Exception) {
-            Log.e(TAG, "[$label] failed: ${e.message}")
+        } catch (_: Exception) {
             return false
         }
     }
@@ -635,7 +606,6 @@ class KdesaSources {
                 timeout = 20_000L
             )
             if (res.code != 200) {
-                Log.e(TAG, "[Anidap] anilist HTTP ${res.code}")
                 return null
             }
             val media = parseJsonSafe(res.text)
@@ -664,10 +634,8 @@ class KdesaSources {
             }
             val chosen = best ?: media.get(0)
             val id = chosen.get("id")?.asInt()
-            Log.d(TAG, "[Anidap] anilist matched '${chosen.get("title")?.str("romaji")}' id=$id score=$bestScore")
             id
-        } catch (e: Exception) {
-            Log.e(TAG, "[Anidap] anilist failed: ${e.message}")
+        } catch (_: Exception) {
             null
         }
     }
@@ -683,7 +651,6 @@ class KdesaSources {
         try {
             val anilistId = anilistSearch(title, null)
             if (anilistId == null) {
-                Log.e(TAG, "[$label] no anilist id for '$title'")
                 return false
             }
             val animeRes = app.get(
@@ -696,12 +663,10 @@ class KdesaSources {
                 timeout = 20_000L
             )
             if (animeRes.code != 200) {
-                Log.e(TAG, "[$label] anime HTTP ${animeRes.code}")
                 return false
             }
             val animeId = parseJsonSafe(animeRes.text)?.get("data")?.str("id")
             if (animeId.isNullOrBlank()) {
-                Log.e(TAG, "[$label] anime not on Anidap")
                 return false
             }
 
@@ -719,12 +684,10 @@ class KdesaSources {
                             timeout = 30_000L
                         )
                         if (srcRes.code != 200) {
-                            Log.e(TAG, "[$label] $provider/$audioType HTTP ${srcRes.code}")
                             continue
                         }
                         val root = parseJsonSafe(srcRes.text) ?: continue
                         if (root.has("error") || root.get("sources")?.takeIf { it.isArray } == null) {
-                            Log.e(TAG, "[$label] $provider/$audioType error=${root.str("error")}")
                             continue
                         }
                         val resHeaders = root.get("headers")?.takeIf { it.isObject }
@@ -768,14 +731,11 @@ class KdesaSources {
                             }
                         }
                         if (count >= 2) break@outer
-                    } catch (e: Exception) {
-                        Log.e(TAG, "[$label] $provider/$audioType failed: ${e.message}")
-                    }
+                    } catch (_: Exception) {}
                 }
             }
             return count > 0
-        } catch (e: Exception) {
-            Log.e(TAG, "[$label] failed: ${e.message}")
+        } catch (_: Exception) {
             return false
         }
     }
@@ -817,7 +777,6 @@ class KdesaSources {
             timeout = 30_000L
         )
         if (res.code != 200) {
-            Log.e(TAG, "[TQQ] search HTTP ${res.code} on $base")
             return emptyList()
         }
         val doc = res.document
@@ -845,12 +804,9 @@ class KdesaSources {
         val label = "TQQ"
         for (base in TQQ_MIRRORS) {
             try {
-                Log.d(TAG, "[$label] trying mirror $base")
                 val ok = tqqResolveMirror(base, title, season, episode, subtitleCallback, callback)
                 if (ok) return true
-            } catch (e: Exception) {
-                Log.e(TAG, "[$label] mirror $base failed: ${e.message}")
-            }
+            } catch (_: Exception) {}
         }
         return false
     }
@@ -893,11 +849,9 @@ class KdesaSources {
             }
         }
         if (best == null || bestScore < 80) {
-            Log.e(TAG, "[$label] no close title match for '$title' (best=$bestScore)")
             return false
         }
         val anime = best
-        Log.d(TAG, "[$label] matched '${anime.title}' slug=${anime.slug} score=$bestScore")
 
         val watchRes = app.get(
             "$base/watch/${anime.slug}/ep-1",
@@ -905,13 +859,11 @@ class KdesaSources {
             timeout = 30_000L
         )
         if (watchRes.code != 200) {
-            Log.e(TAG, "[$label] watch page HTTP ${watchRes.code}")
             return false
         }
         val animeId = watchRes.document.selectFirst("#watch-main")?.attr("data-id")?.takeIf { it.isNotBlank() }
             ?: anime.animeId
         if (animeId.isNullOrBlank()) {
-            Log.e(TAG, "[$label] could not resolve anime id")
             return false
         }
 
@@ -922,7 +874,6 @@ class KdesaSources {
         )
         val epRes = app.get("$base/ajax/episode/list/$animeId", headers = ajaxHeaders, timeout = 30_000L)
         if (epRes.code != 200) {
-            Log.e(TAG, "[$label] episode list HTTP ${epRes.code}")
             return false
         }
         val epRoot = parseJsonSafe(epRes.text)
@@ -939,7 +890,6 @@ class KdesaSources {
             }
         }
         if (serverIds.isNullOrBlank()) {
-            Log.e(TAG, "[$label] episode $episode not found")
             return false
         }
 
@@ -949,7 +899,6 @@ class KdesaSources {
             timeout = 30_000L
         )
         if (listRes.code != 200) {
-            Log.e(TAG, "[$label] server list HTTP ${listRes.code}")
             return false
         }
         val listRoot = parseJsonSafe(listRes.text)
@@ -969,7 +918,6 @@ class KdesaSources {
                     }
             }
         if (servers.isEmpty()) {
-            Log.e(TAG, "[$label] no servers parsed")
             return false
         }
         // sub first, then hsub, then dub; hd-1 first, then vidplay, vidstream
@@ -983,7 +931,6 @@ class KdesaSources {
             }
         }
         servers.sortWith(compareBy({ typeOrder[it.type] ?: 3 }, { nameOrder(it.name) }))
-        Log.d(TAG, "[$label] servers=${servers.joinToString { "${it.type}/${it.name}" }}")
 
         var emitted = 0
         val seenAudio = mutableSetOf<String>()
@@ -1002,7 +949,6 @@ class KdesaSources {
                     timeout = 30_000L
                 )
                 if (serverRes.code != 200) {
-                    Log.e(TAG, "[$label] server HTTP ${serverRes.code} (${server.type}/${server.name})")
                     continue
                 }
                 val serverRoot = parseJsonSafe(serverRes.text)
@@ -1011,10 +957,9 @@ class KdesaSources {
                     embedUrl = try {
                         val inner = serverRoot.get("result").asText()
                         parseJsonSafe(inner)?.str("url")
-                    } catch (e: Exception) { null }
+                    } catch (_: Exception) { null }
                 }
                 if (embedUrl.isNullOrBlank()) {
-                    Log.e(TAG, "[$label] no embed url for ${server.type}/${server.name}")
                     continue
                 }
                 // per-type rewrite: swap /sub and /dub path segments to the requested audio
@@ -1025,9 +970,7 @@ class KdesaSources {
                     emitted++
                     seenAudio.add(audioLang)
                 }
-            } catch (e: Exception) {
-                Log.e(TAG, "[$label] server ${server.type}/${server.name} failed: ${e.message}")
-            }
+            } catch (_: Exception) {}
         }
         return emitted > 0
     }
@@ -1043,7 +986,7 @@ class KdesaSources {
         val host = try {
             val u = URL(embedUrl)
             "https://${u.host}"
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             return false
         }
         val res = app.get(
@@ -1055,14 +998,12 @@ class KdesaSources {
             timeout = 30_000L
         )
         if (res.code != 200) {
-            Log.e(TAG, "[$label] embed HTTP ${res.code} for $embedUrl")
             return false
         }
         val html = res.text
         val dataId = Regex("""data-id="(\d+)"""").find(html)?.groupValues?.get(1)
             ?: Regex("""/stream/s-\d+/(\d+)""").find(embedUrl)?.groupValues?.get(1)
         if (dataId.isNullOrBlank()) {
-            Log.e(TAG, "[$label] no data-id on embed page")
             return false
         }
         val srcRes = app.get(
@@ -1076,7 +1017,6 @@ class KdesaSources {
             timeout = 30_000L
         )
         if (srcRes.code != 200) {
-            Log.e(TAG, "[$label] getSources HTTP ${srcRes.code}")
             return false
         }
         val root = parseJsonSafe(srcRes.text) ?: return false
@@ -1087,7 +1027,6 @@ class KdesaSources {
             else -> null
         }
         if (m3u8.isNullOrBlank()) {
-            Log.e(TAG, "[$label] no m3u8 in getSources")
             return false
         }
         val audioLabel = when (audioType) {
@@ -1095,7 +1034,6 @@ class KdesaSources {
             "hsub" -> "Japanese (HS)"
             else -> "Japanese Sub"
         }
-        Log.d(TAG, "[$label] m3u8=${m3u8.take(90)} audio=$audioLabel")
         val playbackHeaders = hdr(
             "Referer" to "$host/",
             "Origin" to host
@@ -1109,7 +1047,6 @@ class KdesaSources {
             callback
         )
         if (emitted == 0) {
-            Log.e(TAG, "[$label] no playable link from embed $serverName ($audioLabel)")
             return false
         }
 
@@ -1160,12 +1097,10 @@ class KdesaSources {
             for (attempt in 1..3) {
                 val res = KdesaCF.get("$NOVA$path", headers = novaHeaders)
                 if (res.code != 200) {
-                    Log.e(TAG, "[$label] HTTP ${res.code} attempt $attempt")
                     if (res.code == 403 || res.code == 503) return false
                     continue
                 }
                 val parsed = parseJsonSafe(res.text) ?: run {
-                    Log.e(TAG, "[$label] invalid JSON attempt $attempt")
                     continue
                 }
                 if (parsed.get("ready")?.asBoolean() == false) {
@@ -1176,14 +1111,11 @@ class KdesaSources {
                 break
             }
             if (root == null) {
-                Log.e(TAG, "[$label] gave up after retries")
                 return false
             }
             val sources = root.get("sources")?.takeIf { it.isArray } ?: run {
-                Log.e(TAG, "[$label] no sources")
                 return false
             }
-            Log.d(TAG, "[$label] got ${sources.size()} sources")
 
             val subs = root.get("subtitles")?.takeIf { it.isArray }
             if (subs != null) {
@@ -1299,13 +1231,11 @@ class KdesaSources {
                         )
                         count++
                     } else {
-                        Log.e(TAG, "[$label] no playable stream for lang=$lang")
                     }
                 }
             }
             return count > 0
-        } catch (e: Exception) {
-            Log.e(TAG, "[$label] failed: ${e.message}")
+        } catch (_: Exception) {
             return false
         }
     }
@@ -1351,7 +1281,6 @@ class KdesaSources {
                 }
                 val res = KdesaCF.get(url, headers = pageHeaders)
                 if (res.code != 200) {
-                    Log.e(TAG, "[$label] HTTP ${res.code} for slug '$slug'")
                     continue
                 }
                 movieId = res.document.selectFirst("#show_player_lazy")?.attr("movie-id")?.takeIf { it.isNotBlank() }
@@ -1361,7 +1290,6 @@ class KdesaSources {
                 }
             }
             if (movieId == null) {
-                Log.e(TAG, "[$label] movie not found on fsonline")
                 return false
             }
 
@@ -1376,7 +1304,6 @@ class KdesaSources {
                 data = mapOf("action" to "lazy_player", "movieID" to movieId)
             )
             if (ajaxRes.code != 200) {
-                Log.e(TAG, "[$label] lazy_player HTTP ${ajaxRes.code}")
                 return false
             }
             val doc = ajaxRes.document
@@ -1386,7 +1313,6 @@ class KdesaSources {
                 val vs = li.attr("data-vs").takeIf { it.isNotBlank() } ?: return@forEach
                 options[name] = vs
             }
-            Log.d(TAG, "[$label] player options=${options.keys}")
 
             var any = false
             for (hostName in listOf("Filemoon", "Doodstream")) {
@@ -1395,8 +1321,7 @@ class KdesaSources {
                 if (loaded) any = true
             }
             return any
-        } catch (e: Exception) {
-            Log.e(TAG, "[$label] failed: ${e.message}")
+        } catch (_: Exception) {
             return false
         }
     }
@@ -1413,13 +1338,11 @@ class KdesaSources {
                 timeout = 20_000L
             )
             if (res.code != 200) {
-                Log.e(TAG, "tmdbTitle HTTP ${res.code}")
                 return null
             }
             val root = parseJsonSafe(res.text) ?: return null
             root.str("title") ?: root.str("name")
-        } catch (e: Exception) {
-            Log.e(TAG, "tmdbTitle failed: ${e.message}")
+        } catch (_: Exception) {
             null
         }
     }
@@ -1439,8 +1362,7 @@ class KdesaSources {
             val root = parseJsonSafe(res.text) ?: return null
             val date = root.str("release_date") ?: root.str("first_air_date") ?: return null
             return date.take(4).toIntOrNull()
-        } catch (e: Exception) {
-            Log.e(TAG, "tmdbYear failed: ${e.message}")
+        } catch (_: Exception) {
             return null
         }
     }
@@ -1467,7 +1389,6 @@ class KdesaSources {
             val isShow = season != null && episode != null
             val type = if (isShow) "tv" else "movie"
             val esTitle = tmdbTitle(type, tmdbId, "es-ES")
-            Log.d(TAG, "[$label] tmdbId=$tmdbId esTitle='$esTitle' enTitle='$title'")
 
             val candidates = mutableListOf<Pair<String, String>>() // slug -> langTag
             if (!esTitle.isNullOrBlank()) {
@@ -1487,19 +1408,16 @@ class KdesaSources {
                 }
                 val res = app.get(url, headers = hdr(), timeout = 30_000L)
                 if (res.code != 200) {
-                    Log.e(TAG, "[$label] HTTP ${res.code} for slug '$slug'")
                     continue
                 }
                 val html = res.text
                 val jsonStart = html.indexOf("{\"props\":{\"pageProps\":")
                 if (jsonStart == -1) {
-                    Log.e(TAG, "[$label] no pageProps JSON for slug '$slug'")
                     continue
                 }
                 val jsonEnd = html.indexOf("</script>", jsonStart)
                 val rawJson = html.substring(jsonStart, jsonEnd).trim().trimEnd(';')
                 val root = parseJsonSafe(rawJson) ?: run {
-                    Log.e(TAG, "[$label] pageProps JSON parse failed")
                     continue
                 }
                 val pageProps = root.get("props")?.get("pageProps") ?: continue
@@ -1508,12 +1426,10 @@ class KdesaSources {
                 } else {
                     pageProps.get("thisMovie")?.get("videos")
                 }?.takeIf { it.isObject } ?: run {
-                    Log.e(TAG, "[$label] no videos object")
                     continue
                 }
                 val langFields = mutableListOf<String>()
                 videosNode.fieldNames().forEach { langFields.add(it) }
-                Log.d(TAG, "[$label] videos langs=$langFields")
 
                 var any = false
                 for (langField in langFields) {
@@ -1536,7 +1452,7 @@ class KdesaSources {
                                 "japanese" -> "Japanese"
                                 else -> langField
                             }
-                            val host = try { URL(embed).host } catch (e: Exception) { continue }
+                            val host = try { URL(embed).host } catch (_: Exception) { continue }
                             val hostLabel = when {
                                 host.contains("filemoon") -> "Filemoon"
                                 host.contains("streamwish") -> "StreamWish"
@@ -1552,17 +1468,13 @@ class KdesaSources {
                                 any = true
                                 langDone = true
                             }
-                        } catch (e: Exception) {
-                            Log.e(TAG, "[$label] player.php failed: ${e.message}")
-                        }
+                        } catch (_: Exception) {}
                     }
                 }
                 if (any) return true
             }
-            Log.e(TAG, "[$label] no playable embeds")
             return false
-        } catch (e: Exception) {
-            Log.e(TAG, "[$label] failed: ${e.message}")
+        } catch (_: Exception) {
             return false
         }
     }
@@ -1593,7 +1505,6 @@ class KdesaSources {
                 }
             )
         }
-        Log.d(TAG, "loadExtractor($url) -> $loaded (emitted=${collected.size})")
         return loaded
     }
 
@@ -1605,11 +1516,9 @@ class KdesaSources {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         if (loadExtractorRelabeled(url, referer, labelPrefix, subtitleCallback, callback)) return true
-        Log.d(TAG, "resolveEmbed: built-in extractor missed $url, trying inline fallbacks")
         if (filemoonInline(url, labelPrefix, subtitleCallback, callback)) return true
         if (doodInline(url, labelPrefix, callback)) return true
         if (webViewIntercept(url, referer, labelPrefix, callback)) return true
-        Log.e(TAG, "resolveEmbed: all methods failed for $url")
         return false
     }
 
@@ -1626,7 +1535,7 @@ class KdesaSources {
             val origin = try {
                 val u = URL(url)
                 "${u.protocol}://${u.host}"
-            } catch (e: Exception) {
+            } catch (_: Exception) {
                 return false
             }
             val pageHeaders = mapOf(
@@ -1646,28 +1555,23 @@ class KdesaSources {
 
             if (iframeSrc != null) {
                 if (!iframeSrc.startsWith("http")) iframeSrc = "$origin${if (iframeSrc.startsWith("/")) "" else "/"}$iframeSrc"
-                Log.d(TAG, "filemoonInline: iframe -> $iframeSrc")
                 val iframeDoc = app.get(iframeSrc, headers = pageHeaders, timeout = 30_000L).document
                 scriptData = iframeDoc.selectFirst("script:containsData(eval(function(p,a,c,k,e,d)))")?.data()
             } else {
                 scriptData = doc.selectFirst("script:containsData(eval(function(p,a,c,k,e,d)))")?.data()
             }
             if (scriptData.isNullOrBlank()) {
-                Log.e(TAG, "filemoonInline: no packed script for $url")
                 return false
             }
             val unpacked = JsUnpacker(scriptData).unpack()
             if (unpacked.isNullOrBlank()) {
-                Log.e(TAG, "filemoonInline: unpack failed for $url")
                 return false
             }
             val m3u8 = Regex("""file:"([^"]+)"""").find(unpacked)?.groupValues?.get(1)
                 ?: Regex("""file:\s*"([^"]+)"""").find(unpacked)?.groupValues?.get(1)
             if (m3u8.isNullOrBlank() || !m3u8.startsWith("http")) {
-                Log.e(TAG, "filemoonInline: no file url in unpacked js")
                 return false
             }
-            Log.d(TAG, "filemoonInline: m3u8=${m3u8.take(90)}")
             val emitted = emitHls(
                 labelPrefix,
                 m3u8,
@@ -1676,8 +1580,7 @@ class KdesaSources {
                 callback
             )
             return emitted > 0
-        } catch (e: Exception) {
-            Log.e(TAG, "filemoonInline failed for $url: ${e.message}")
+        } catch (_: Exception) {
             return false
         }
     }
@@ -1705,13 +1608,12 @@ class KdesaSources {
             val html = res.text
             val passMd5 = Regex("""\$\.get\(['"](\/pass_md5\/[^'"]+)['"]""").find(html)?.groupValues?.get(1)
             if (passMd5.isNullOrBlank()) {
-                Log.e(TAG, "doodInline: no pass_md5 for $url")
                 return false
             }
             val host = try {
                 val u = URL(finalUrl)
                 "${u.protocol}://${u.host}"
-            } catch (e: Exception) {
+            } catch (_: Exception) {
                 return false
             }
             val token = Regex("""token["']?\s*[:=]\s*["']([^"']+)["']""").find(html)?.groupValues?.get(1)
@@ -1722,7 +1624,6 @@ class KdesaSources {
             )
             val md5Body = md5Res.text.trim()
             if (md5Body.isBlank() || !md5Body.startsWith("http")) {
-                Log.e(TAG, "doodInline: pass_md5 gave no url")
                 return false
             }
             val random = buildString {
@@ -1734,15 +1635,13 @@ class KdesaSources {
             } else {
                 md5Body
             }
-            Log.d(TAG, "doodInline: mp4=${final.take(90)}")
             callback.invoke(
                 newExtractorLink(labelPrefix, labelPrefix, final, ExtractorLinkType.VIDEO) {
                     this.headers = mapOf("Referer" to "$host/", "User-Agent" to iphoneUa)
                 }
             )
             return true
-        } catch (e: Exception) {
-            Log.e(TAG, "doodInline failed for $url: ${e.message}")
+        } catch (_: Exception) {
             return false
         }
     }
@@ -1755,7 +1654,6 @@ class KdesaSources {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         return try {
-            Log.d(TAG, "webViewIntercept: $url")
             val resolver = WebViewResolver(
                 interceptUrl = Regex("""(?i)\.(m3u8|mp4)(?:\?|$)"""),
                 additionalUrls = listOf(Regex("""(?i)\.(m3u8|mp4)(?:\?|$)""")),
@@ -1765,7 +1663,6 @@ class KdesaSources {
             )
             val resolved = app.get(url, referer = referer, interceptor = resolver).url
             if (resolved.isBlank()) {
-                Log.e(TAG, "webViewIntercept: nothing intercepted for $url")
                 return false
             }
             val headers = mapOf("Referer" to url)
@@ -1784,8 +1681,7 @@ class KdesaSources {
                 }
                 else -> false
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "webViewIntercept failed for $url: ${e.message}")
+        } catch (_: Exception) {
             false
         }
     }

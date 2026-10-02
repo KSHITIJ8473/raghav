@@ -414,8 +414,7 @@ class AniSugeProvider : MainAPI() {
                     ).text
                     val serverInfoJson = parseJson<ServerInfoResponse>(serverInfoText)
                     embedUrl = serverInfoJson.result?.url
-                } catch (_: Exception) {
-                }
+                } catch (_: Exception) {}
                 if (embedUrl.isNullOrBlank()) embedUrl = streamUrl
 
                 try {

@@ -1,6 +1,5 @@
 package com.gotaku
 
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.app
 import kotlinx.coroutines.runBlocking
 import java.io.BufferedReader
@@ -18,7 +17,6 @@ import java.util.concurrent.Executors
 
 object GoTakuProxy {
 
-    private const val TAG = "GoTaku"
     private const val MAX_STREAMS = 10
     private const val HLS_TYPE = "application/vnd.apple.mpegurl"
 
@@ -61,20 +59,15 @@ object GoTakuProxy {
             serverSocket = socket
             serverPort = socket.localPort
             serverRunning = true
-            Log.d(TAG, "proxy listening on 127.0.0.1:$serverPort")
             Thread {
                 while (serverRunning) {
                     try {
                         val conn = socket.accept()
                         pool.execute { handleRequest(conn) }
-                    } catch (e: Exception) {
-                        if (serverRunning) Log.e(TAG, "proxy accept failed: ${e.message}")
-                    }
+                    } catch (_: Exception) {}
                 }
             }.start()
-        } catch (e: Exception) {
-            Log.e(TAG, "proxy start failed: ${e.message}")
-        }
+        } catch (_: Exception) {}
         return serverPort
     }
 
@@ -150,12 +143,8 @@ object GoTakuProxy {
                 }
                 else -> send404(conn)
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "proxy request failed: ${e.message}")
-        } finally {
-            try { conn.close() } catch (e: Exception) {
-                Log.d(TAG, "socket close failed: ${e.message}")
-            }
+        } catch (_: Exception) {} finally {
+            try { conn.close() } catch (_: Exception) {}
         }
     }
 
@@ -256,7 +245,6 @@ object GoTakuProxy {
         try {
             val response = runBlocking { app.get(target, headers = cdnHeaders(target)) }
             if (!response.isSuccessful) {
-                Log.e(TAG, "segment ${response.code}: ${shortUrl(target)}")
                 send404(conn)
                 return
             }
@@ -264,8 +252,7 @@ object GoTakuProxy {
             val path = URI(target).path
             val plain = GoTakuCrypto.decryptSegment(bytes, path, session.keySeed, session.segmentBytes)
             serveByteRange(conn, plain, range)
-        } catch (e: Exception) {
-            Log.e(TAG, "segment fetch failed: ${shortUrl(target)}: ${e.message}")
+        } catch (_: Exception) {
             send404(conn)
         }
     }
@@ -315,7 +302,7 @@ object GoTakuProxy {
             }
             val port = if (uri.port > 0) ":${uri.port}" else ""
             "https://${uri.host}$port/${parts.joinToString("/")}"
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             url
         }
     }
@@ -331,7 +318,6 @@ object GoTakuProxy {
                     session.token = fresh.token
                     session.expiresAt = fresh.expiresAt
                     session.playlistCache.clear()
-                    Log.d(TAG, "token refreshed for ${session.id}")
                 }
             } finally {
                 session.refreshPending = false
@@ -352,9 +338,7 @@ object GoTakuProxy {
                         return plain
                     }
                 }
-            } catch (e: Exception) {
-                Log.d(TAG, "playlist attempt ${attempt + 1} failed: ${shortUrl(url)}: ${e.message}")
-            }
+            } catch (_: Exception) {}
             refreshSession(session)
             url = rewriteWithToken(target, session.token, session.expiresAt)
         }
@@ -365,7 +349,7 @@ object GoTakuProxy {
         return try {
             val parts = URI(url).path.split("/").filter { it.isNotEmpty() }
             if (parts.size > 3 && parts[0] == "p") parts[3] else session.token
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             session.token
         }
     }
@@ -385,7 +369,7 @@ object GoTakuProxy {
     private fun resolveUri(ref: String, base: URI): String? {
         return try {
             base.resolve(ref).toString()
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             null
         }
     }
@@ -393,7 +377,7 @@ object GoTakuProxy {
     private fun decodeUrl(seg: String): String? {
         return try {
             URLDecoder.decode(seg, "UTF-8")
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             null
         }
     }
@@ -402,7 +386,7 @@ object GoTakuProxy {
         return try {
             val uri = URI(url)
             "${uri.host}${uri.path.substringBeforeLast('/')}/"
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             url.take(60)
         }
     }
@@ -418,9 +402,7 @@ object GoTakuProxy {
             out.write(head.toByteArray(Charsets.ISO_8859_1))
             out.write(bytes)
             out.flush()
-        } catch (e: Exception) {
-            Log.d(TAG, "socket write failed: ${e.message}")
-        }
+        } catch (_: Exception) {}
     }
 
     private fun sendStatus(conn: Socket, code: Int) {
@@ -428,9 +410,7 @@ object GoTakuProxy {
             val out: OutputStream = conn.getOutputStream()
             out.write("HTTP/1.1 $code Status\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".toByteArray(Charsets.ISO_8859_1))
             out.flush()
-        } catch (e: Exception) {
-            Log.d(TAG, "status write failed: ${e.message}")
-        }
+        } catch (_: Exception) {}
     }
 
     private fun send404(conn: Socket) {

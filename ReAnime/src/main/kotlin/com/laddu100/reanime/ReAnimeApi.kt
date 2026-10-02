@@ -2,7 +2,6 @@ package com.laddu100.reanime
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.KotlinModule
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.app
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -27,13 +26,10 @@ object ReAnimeApi {
     private val homeMutex = Mutex()
     private val homeCursors = mutableMapOf<String, String?>()
 
-    private const val TAG = "ReAnime"
-
     private inline fun <reified T> parse(text: String): T? =
         try {
             mapper.readValue(text, T::class.java)
-        } catch (e: Exception) {
-            Log.d(TAG, "parse failed: ${e.message}")
+        } catch (_: Exception) {
             null
         }
 
@@ -43,8 +39,7 @@ object ReAnimeApi {
     ): String? = try {
         val resp = app.get(url, headers = headers)
         if (resp.isSuccessful) resp.text else null
-    } catch (e: Exception) {
-        Log.d(TAG, "GET $url failed: ${e.message}")
+    } catch (_: Exception) {
         null
     }
 

@@ -1,6 +1,5 @@
 package com.csksy.anichan
 
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.DubStatus
 import com.lagradost.cloudstream3.Episode
 import com.lagradost.cloudstream3.HomePageResponse
@@ -170,7 +169,7 @@ class AniChanProvider : MainAPI() {
             val sdf = SimpleDateFormat("yyyy-MM-dd", Locale.US)
             sdf.timeZone = TimeZone.getTimeZone("UTC")
             sdf.parse(raw.substringBefore("T").take(10))
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             null
         }
     }
@@ -183,8 +182,7 @@ class AniChanProvider : MainAPI() {
     ): Boolean {
         val ref = try {
             parseJson<EpisodeRef>(data)
-        } catch (e: Exception) {
-            Log.e("AniChan", "bad episode data: ${e.message}")
+        } catch (_: Exception) {
             null
         } ?: return false
         val category = if (ref.isDub) "dub" else "sub"

@@ -28,15 +28,12 @@ import android.widget.ProgressBar
 import android.widget.TextView
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.CommonActivity
 import com.lagradost.cloudstream3.ui.settings.Globals
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlin.coroutines.resume
-
-private const val TAG = "RareAnimes_Resolver"
 
 internal class RAIResolvedLink(
     val url: String,
@@ -85,7 +82,7 @@ private fun isAllowedHost(url: String): Boolean {
         val host = Uri.parse(url).host ?: return false
         if (AD_URL_HINTS.any { url.contains(it, ignoreCase = true) }) return false
         ALLOWED_HOSTS.any { host == it || host.endsWith(".$it") }
-    } catch (e: Exception) {
+    } catch (_: Exception) {
         false
     }
 }
@@ -137,10 +134,10 @@ private class RAIResolverDialog(
     private fun finishWithCapture() {
         if (!resolved.compareAndSet(false, true)) return
         handler.removeCallbacksAndMessages(null)
-        try { webView?.stopLoading() } catch (e: Exception) {}
-        try { webView?.destroy() } catch (e: Exception) {}
-        try { dialog?.dismiss() } catch (e: Exception) {}
-        try { onFinished?.invoke(captured) } catch (e: Exception) {}
+        try { webView?.stopLoading() } catch (_: Exception) {}
+        try { webView?.destroy() } catch (_: Exception) {}
+        try { dialog?.dismiss() } catch (_: Exception) {}
+        try { onFinished?.invoke(captured) } catch (_: Exception) {}
     }
 
     private fun finishManual() {
@@ -149,10 +146,10 @@ private class RAIResolverDialog(
         } else {
             if (!resolved.compareAndSet(false, true)) return
             handler.removeCallbacksAndMessages(null)
-            try { webView?.stopLoading() } catch (e: Exception) {}
-            try { webView?.destroy() } catch (e: Exception) {}
-            try { dialog?.dismiss() } catch (e: Exception) {}
-            try { onFinished?.invoke(null) } catch (e: Exception) {}
+            try { webView?.stopLoading() } catch (_: Exception) {}
+            try { webView?.destroy() } catch (_: Exception) {}
+            try { dialog?.dismiss() } catch (_: Exception) {}
+            try { onFinished?.invoke(null) } catch (_: Exception) {}
         }
     }
 
@@ -160,10 +157,10 @@ private class RAIResolverDialog(
         captured = null
         if (!resolved.compareAndSet(false, true)) return
         handler.removeCallbacksAndMessages(null)
-        try { webView?.stopLoading() } catch (e: Exception) {}
-        try { webView?.destroy() } catch (e: Exception) {}
-        try { dialog?.dismiss() } catch (e: Exception) {}
-        try { onFinished?.invoke(null) } catch (e: Exception) {}
+        try { webView?.stopLoading() } catch (_: Exception) {}
+        try { webView?.destroy() } catch (_: Exception) {}
+        try { dialog?.dismiss() } catch (_: Exception) {}
+        try { onFinished?.invoke(null) } catch (_: Exception) {}
     }
 
     private fun smartBack() {
@@ -175,14 +172,12 @@ private class RAIResolverDialog(
             } else {
                 statusText?.text = "Already at the first page"
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "back: ${e.message}")
-        }
+        } catch (_: Exception) {}
     }
 
     private fun reloadPage() {
         statusText?.text = "Reloading..."
-        try { webView?.reload() } catch (e: Exception) {}
+        try { webView?.reload() } catch (_: Exception) {}
     }
 
     private fun navButton(
@@ -272,7 +267,7 @@ private class RAIResolverDialog(
             layoutParams = LinearLayout.LayoutParams(-1, -2).also { it.bottomMargin = (4 * dp).toInt() }
         })
 
-        val isTv = try { Globals.isLayout(Globals.TV) } catch (e: Throwable) { false }
+        val isTv = try { Globals.isLayout(Globals.TV) } catch (_: Throwable) { false }
 
         val webContainer = FrameLayout(activity).apply {
             layoutParams = LinearLayout.LayoutParams(-1, webViewHeight)
@@ -366,8 +361,8 @@ private class RAIResolverDialog(
             handler.removeCallbacksAndMessages(null)
             if (!resolved.get()) {
                 resolved.set(true)
-                try { webView?.destroy() } catch (e: Exception) {}
-                try { onFinished?.invoke(captured) } catch (e: Exception) {}
+                try { webView?.destroy() } catch (_: Exception) {}
+                try { onFinished?.invoke(captured) } catch (_: Exception) {}
             }
         }
         dialog?.show()
@@ -397,7 +392,7 @@ private class RAIResolverDialog(
         val t = SystemClock.uptimeMillis()
         val down = MotionEvent.obtain(t, t, MotionEvent.ACTION_DOWN, pos.x, pos.y, 0)
         val up = MotionEvent.obtain(t, t + 120, MotionEvent.ACTION_UP, pos.x, pos.y, 0)
-        try { wv.dispatchTouchEvent(down); wv.dispatchTouchEvent(up) } catch (e: Exception) {}
+        try { wv.dispatchTouchEvent(down); wv.dispatchTouchEvent(up) } catch (_: Exception) {}
         finally { down.recycle(); up.recycle() }
     }
 
@@ -466,9 +461,9 @@ private class RAIResolverDialog(
 
     fun dismiss() {
         handler.removeCallbacksAndMessages(null)
-        try { webView?.apply { stopLoading(); destroy() } } catch (e: Exception) {}
+        try { webView?.apply { stopLoading(); destroy() } } catch (_: Exception) {}
         webView = null
-        try { dialog?.dismiss() } catch (e: Exception) {}
+        try { dialog?.dismiss() } catch (_: Exception) {}
         dialog = null
     }
 }
@@ -483,8 +478,7 @@ internal suspend fun showRAIResolverPopupAndWait(url: String): RAIResolvedLink? 
             val resolverDialog = RAIResolverDialog(url) { link ->
                 if (cont.isActive) cont.resume(link)
             }
-            try { resolverDialog.show(activity) } catch (e: Exception) {
-                Log.e(TAG, "show resolver: ${e.message}")
+            try { resolverDialog.show(activity) } catch (_: Exception) {
                 if (cont.isActive) cont.resume(null)
             }
             cont.invokeOnCancellation { resolverDialog.dismiss() }

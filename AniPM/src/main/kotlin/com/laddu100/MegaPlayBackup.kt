@@ -3,7 +3,6 @@ package com.laddu100
 import android.util.Base64
 import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
@@ -14,7 +13,6 @@ import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
 object MegaPlayCipher {
-    private const val TAG = "MegaPlay"
     private const val FALLBACK_KEY_SEED = "i?LMTAx0Q6,:}50U"
     private const val FALLBACK_IV_SEED = "W0;27ToaUpl_P%'c"
 
@@ -33,8 +31,7 @@ object MegaPlayCipher {
             keyPairRegex.find(js)?.groupValues?.let { g ->
                 Pair(g[1], g[2]).also { cachedSeeds = it }
             }
-        } catch (e: Exception) {
-            Log.d(TAG, "seed fetch failed: ${e.message}")
+        } catch (_: Exception) {
             null
         }
         return listOfNotNull(dynamic, fallback())
@@ -57,8 +54,7 @@ object MegaPlayCipher {
             val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
             cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(keyBytes, "AES"), IvParameterSpec(ivBytes))
             String(cipher.doFinal(cipherBytes), Charsets.UTF_8)
-        } catch (e: Exception) {
-            Log.d(TAG, "token decrypt failed: ${e.message}")
+        } catch (_: Exception) {
             null
         }
     }
@@ -73,7 +69,6 @@ object MegaPlayCipher {
 }
 
 object MegaPlayBackup {
-    private const val TAG = "MegaPlay"
     private val mapper = ObjectMapper()
 
     class MegaPlayStream(val m3u8: String, val subtitles: List<Pair<String, String>>)
@@ -90,8 +85,7 @@ object MegaPlayBackup {
 
         val pageHtml = try {
             app.get(embedUrl, headers = pageHeaders).text
-        } catch (e: Exception) {
-            Log.d(TAG, "embed page failed for $host: ${e.message}")
+        } catch (_: Exception) {
             return null
         }
 
@@ -159,8 +153,7 @@ object MegaPlayBackup {
     private suspend fun fetchJson(url: String, headers: Map<String, String>): JsonNode? {
         return try {
             mapper.readTree(app.get(url, headers = headers, timeout = 15_000L).text)
-        } catch (e: Exception) {
-            Log.d(TAG, "sources request failed: ${e.message}")
+        } catch (_: Exception) {
             null
         }
     }
@@ -224,8 +217,7 @@ object MegaPlayBackup {
     ): Boolean {
         val masterText = try {
             app.get(signUrl(m3u8), headers = headers, timeout = 15_000L).text
-        } catch (e: Exception) {
-            Log.d(TAG, "master playlist fetch failed: ${e.message}")
+        } catch (_: Exception) {
             null
         }
 

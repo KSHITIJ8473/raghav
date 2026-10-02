@@ -1,14 +1,11 @@
 package com.laddu100
 
 import android.util.Base64
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.utils.ExtractorLink
 
 object MMGdmirror {
-
-    private const val TAG = "MM_Gdmirror"
 
     val PLATFORMS = mapOf(
         "smwh" to ("streamhg" to "StreamHG"),
@@ -37,7 +34,7 @@ object MMGdmirror {
                     ),
                     timeout = 30_000L,
                 )
-            } catch (e: Exception) {
+            } catch (_: Exception) {
                 null
             } ?: return false
             if (!resp.isSuccessful) return false
@@ -71,7 +68,7 @@ object MMGdmirror {
                         ?: continue
                     val decoded = try {
                         String(Base64.decode(mresult, Base64.DEFAULT))
-                    } catch (e: Exception) {
+                    } catch (_: Exception) {
                         continue
                     }
                     val shortName = shortenName(namePart)
@@ -96,13 +93,10 @@ object MMGdmirror {
                         }
                         any = any || handled
                     }
-                } catch (e: Exception) {
-                    Log.d(TAG, "slug $slug failed: ${e.message?.take(60)}")
-                }
+                } catch (_: Exception) {}
             }
             return any
-        } catch (e: Exception) {
-            Log.d(TAG, "resolve failed: ${e.message?.take(80)}")
+        } catch (_: Exception) {
             return false
         }
     }
@@ -138,8 +132,7 @@ object MMGdmirror {
             val site = Regex("\"siteUrl\"\\s*:\\s*\"([^\"]+)\"").find(block)?.groupValues?.get(1) ?: return null
             val suffix = Regex("\"embed_suffix\"\\s*:\\s*\"([^\"]*)\"").find(block)?.groupValues?.get(1) ?: ""
             MMNet.deEsc(site) + code + MMNet.deEsc(suffix)
-        } catch (e: Exception) {
-            Log.d(TAG, "directEmbedSite: ${e.message?.take(60)}")
+        } catch (_: Exception) {
             null
         }
     }
@@ -156,8 +149,7 @@ object MMGdmirror {
             timeout = 30_000L,
         )
         if (resp.isSuccessful) resp.text else null
-    } catch (e: Exception) {
-        Log.d(TAG, "embedhelper $slug: ${e.message?.take(60)}")
+    } catch (_: Exception) {
         null
     }
 

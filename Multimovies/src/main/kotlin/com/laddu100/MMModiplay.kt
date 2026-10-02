@@ -1,6 +1,5 @@
 package com.laddu100
 
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.newSubtitleFile
 import com.lagradost.cloudstream3.utils.ExtractorLink
@@ -8,8 +7,6 @@ import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.newExtractorLink
 
 object MMModiplay {
-
-    private const val TAG = "MM_Modiplay"
 
     data class CineServer(
         val embed: String,
@@ -50,16 +47,14 @@ object MMModiplay {
                     handled = MMPacker.resolvePackerEmbed(
                         server.embed, linkLabel, subtitleCallback, callback,
                     )
-                } catch (e: Exception) {
-                    Log.d(TAG, "server ${server.name}: ${e.message?.take(60)}")
+                } catch (_: Exception) {
                     handled = false
                 }
             }
             if (!handled) {
                 try {
                     resolveProxyFile(base, server.platform, server.code, linkLabel, callback)
-                } catch (e: Exception) {
-                    Log.d(TAG, "proxy ${server.name}: ${e.message?.take(60)}")
+                } catch (_: Exception) {
                     continue
                 }
             }
@@ -115,9 +110,7 @@ object MMModiplay {
                     subtitleCallback(newSubtitleFile(langName, url) {})
                 }
             }
-        } catch (e: Exception) {
-            Log.d(TAG, "loadSubs: ${e.message?.take(60)}")
-        }
+        } catch (_: Exception) {}
     }
 }
 

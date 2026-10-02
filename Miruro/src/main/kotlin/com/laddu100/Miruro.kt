@@ -1,7 +1,6 @@
 package com.laddu100
 
 import android.content.Context
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.DubStatus
 import com.lagradost.cloudstream3.Episode
 import com.lagradost.cloudstream3.HomePageResponse
@@ -289,8 +288,7 @@ class Miruro : MainAPI() {
                     timestamp = System.currentTimeMillis()
                 )
             }
-        } catch (e: Exception) {
-            Log.d("Miruro", "load failed: ${e.message}")
+        } catch (_: Exception) {
             epsCache.remove(anilistId)
         }
 
@@ -449,9 +447,7 @@ class Miruro : MainAPI() {
                             }
                         }
                     }
-                } catch (e: Exception) {
-                    Log.d("Miruro", "embed failed: ${e.message}")
-                }
+                } catch (_: Exception) {}
             }
 
             sourcesData.subtitles?.forEach { sub ->
@@ -461,7 +457,7 @@ class Miruro : MainAPI() {
             }
 
             return if (found) true else null
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             return null
         }
     }

@@ -1,6 +1,5 @@
 package com.laddu100
 
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.Episode
 import com.lagradost.cloudstream3.HomePageResponse
 import com.lagradost.cloudstream3.LoadResponse
@@ -26,8 +25,6 @@ import kotlinx.coroutines.coroutineScope
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 import com.raghav.donation.DonationManager
-
-private const val TAG = "Multimovies"
 
 class MultimoviesProvider : MainAPI() {
     override var mainUrl = "https://multimovies.casa"
@@ -62,13 +59,11 @@ class MultimoviesProvider : MainAPI() {
             validatedDomain = remote
             val ok = try {
                 app.get("$remote/", headers = headers, timeout = 10_000L).isSuccessful
-            } catch (e: Exception) {
+            } catch (_: Exception) {
                 false
             }
             if (ok) mainUrl = remote
-        } catch (e: Exception) {
-            Log.e(TAG, "refreshDomain: ${e.message}")
-        }
+        } catch (_: Exception) {}
     }
 
     private fun firstImg(el: Element): String {
@@ -87,8 +82,7 @@ class MultimoviesProvider : MainAPI() {
                 .distinctBy { it.url }
             val hasNext = doc.selectFirst("a[href*='/page/${page + 1}/'], a.next.page-numbers") != null
             newHomePageResponse(request.name, items, hasNext = hasNext && items.isNotEmpty())
-        } catch (e: Exception) {
-            Log.e(TAG, "getMainPage: ${e.message}")
+        } catch (_: Exception) {
             newHomePageResponse(request.name, emptyList(), hasNext = false)
         }
     }
@@ -100,8 +94,7 @@ class MultimoviesProvider : MainAPI() {
             val doc = mmGet("$mainUrl/?s=${query.trim().replace(" ", "+")}", headers = headers).document
             doc.select(".result-item article").mapNotNull { it.toSearchResult() }
                 .distinctBy { it.url }
-        } catch (e: Exception) {
-            Log.e(TAG, "search: ${e.message}")
+        } catch (_: Exception) {
             emptyList()
         }
     }
@@ -172,8 +165,7 @@ class MultimoviesProvider : MainAPI() {
                     this.duration = duration
                 }
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "load: ${e.message}")
+        } catch (_: Exception) {
             null
         }
     }
@@ -248,7 +240,7 @@ class MultimoviesProvider : MainAPI() {
                             val embed = Regex("\"embed_url\"\\s*:\\s*\"([^\"]+)\"").find(body)
                                 ?.groupValues?.get(1)?.let { MMNet.deEsc(it) } ?: ""
                             embed to opt.label
-                        } catch (e: Exception) {
+                        } catch (_: Exception) {
                             "" to opt.label
                         }
                     }
@@ -299,13 +291,11 @@ class MultimoviesProvider : MainAPI() {
                         }
                     }
                     any = any || handled
-                } catch (e: Exception) {
+                } catch (_: Exception) {
                     // one broken source must not kill the rest
-                    Log.e(TAG, "loadLinks $label: ${e.message}")
                 }
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "loadLinks: ${e.message}")
+        } catch (_: Exception) {
             return any
         }
         return any

@@ -1,6 +1,5 @@
 package com.laddu100
 
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.newSubtitleFile
 import com.lagradost.cloudstream3.utils.ExtractorLink
@@ -8,8 +7,6 @@ import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.newExtractorLink
 
 object MMVidout {
-
-    private const val TAG = "MM_Vidout"
 
     // stream hosts 403 unless referred from vidout
     const val REFERER = "https://vidout.pages.dev/"
@@ -82,8 +79,7 @@ object MMVidout {
             loadUrlsetSubtitles(url, subtitleCallback)
             loadGithubSubtitles(tmdbId, season, episode, subtitleCallback)
             return true
-        } catch (e: Exception) {
-            Log.d(TAG, "resolve failed: ${e.message?.take(80)}")
+        } catch (_: Exception) {
             return false
         }
     }
@@ -101,9 +97,7 @@ object MMVidout {
                     this.headers = mapOf("Referer" to REFERER)
                 })
             }
-        } catch (e: Exception) {
-            Log.d(TAG, "urlset subs: ${e.message?.take(60)}")
-        }
+        } catch (_: Exception) {}
     }
 
     // sub/movie/{tmdb}/subtitles.json or sub/tv/{tmdb}/{s}/{e}/subtitles.json
@@ -126,8 +120,6 @@ object MMVidout {
                 val url = MMNet.deEsc(m.groupValues[2])
                 subtitleCallback(newSubtitleFile(name, url) {})
             }
-        } catch (e: Exception) {
-            Log.d(TAG, "github subs: ${e.message?.take(60)}")
-        }
+        } catch (_: Exception) {}
     }
 }

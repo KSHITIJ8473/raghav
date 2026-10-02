@@ -2,7 +2,6 @@ package com.laddu100
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.KotlinModule
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.newSubtitleFile
 import com.lagradost.cloudstream3.utils.ExtractorLink
@@ -15,7 +14,6 @@ import kotlinx.coroutines.withContext
 
 object MMNxsha {
 
-    private const val TAG = "MM_Nxsha"
     private const val PASSPHRASE = "S8x!Jk4ZP1uG8\$my"
     private const val BASE = "https://nxsha.space"
     private const val TMDB_PROXY = "https://db.speedracelight.com/3"
@@ -75,8 +73,7 @@ object MMNxsha {
         val plain = MMCrypto.aesDecrypt(hash, PASSPHRASE) ?: return null
         return try {
             json.readValue(plain, T::class.java)
-        } catch (e: Exception) {
-            Log.d(TAG, "decode failed: ${e.message?.take(60)}")
+        } catch (_: Exception) {
             null
         }
     }
@@ -147,7 +144,7 @@ object MMNxsha {
                                 ),
                                 embedUrl,
                             )
-                        } catch (e: Exception) {
+                        } catch (_: Exception) {
                             null
                         } ?: return@async
                         val sources = decodeHash<NxSourcesResp>(sourcesBody)?.sources ?: return@async
@@ -193,13 +190,10 @@ object MMNxsha {
                         ?: sub.language?.takeIf { it.isNotBlank() } ?: "English"
                     subtitleCallback(newSubtitleFile(name, uri) {})
                 }
-            } catch (e: Exception) {
-                Log.d(TAG, "subtitles: ${e.message?.take(60)}")
-            }
+            } catch (_: Exception) {}
 
             any
-        } catch (e: Exception) {
-            Log.d(TAG, "resolve failed: ${e.message?.take(80)}")
+        } catch (_: Exception) {
             false
         }
     }

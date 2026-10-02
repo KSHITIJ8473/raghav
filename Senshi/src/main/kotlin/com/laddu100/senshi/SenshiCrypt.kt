@@ -1,14 +1,12 @@
 package com.laddu100.senshi
 
 import android.util.Base64
-import com.lagradost.api.Log
 import javax.crypto.Cipher
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
 object SenshiCrypt {
 
-    private const val TAG = "Senshi"
     private const val MARKER = "EM3U8v1:"
 
     // hidden in the site player bundle as two arrays that xor into this key
@@ -23,15 +21,13 @@ object SenshiCrypt {
         return try {
             val raw = Base64.decode(text.substring(MARKER.length).trim(), Base64.DEFAULT)
             if (raw.size < 29) {
-                Log.e(TAG, "playlist payload truncated: ${raw.size} bytes")
                 return null
             }
             val iv = raw.copyOfRange(0, 12)
             val cipher = Cipher.getInstance("AES/GCM/NoPadding")
             cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(KEY, "AES"), GCMParameterSpec(128, iv))
             String(cipher.doFinal(raw.copyOfRange(12, raw.size)), Charsets.UTF_8)
-        } catch (e: Exception) {
-            Log.e(TAG, "playlist decrypt failed: ${e.message}")
+        } catch (_: Exception) {
             null
         }
     }

@@ -1,7 +1,6 @@
 package com.justplay
 
 import android.content.Context
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.plugins.CloudstreamPlugin
 import com.lagradost.cloudstream3.plugins.Plugin
 
@@ -26,9 +25,7 @@ class JustPlayPlugin : Plugin() {
             if (activity != null) {
                 try {
                     JustPlaySettingsFragment().show(activity.supportFragmentManager, "JustPlaySettings")
-                } catch (e: Exception) {
-                    Log.d(PlayNet.TAG, "settings: ${e.message}")
-                }
+                } catch (_: Exception) {}
             }
         }
     }

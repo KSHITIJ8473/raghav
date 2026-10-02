@@ -2,7 +2,6 @@ package com.justplay
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties
 import com.fasterxml.jackson.annotation.JsonProperty
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.utils.AppUtils
@@ -131,9 +130,7 @@ internal object NetNaijaSite {
             val xUser = response.headers["x-user"] ?: return
             if (xUser.isBlank()) return
             JSONObject(xUser).optString("token").takeIf { it.isNotBlank() }?.let { token = it }
-        } catch (e: Exception) {
-            Log.d(PlayNet.TAG, "token refresh: ${e.message}")
-        }
+        } catch (_: Exception) {}
     }
 
     private suspend fun ensureToken(site: String): String? {
@@ -148,7 +145,7 @@ internal object NetNaijaSite {
                 )
                 readToken(response)
                 token
-            } catch (e: Exception) {
+            } catch (_: Exception) {
                 null
             }
         }
@@ -222,7 +219,7 @@ internal object NetNaijaSite {
             readToken(searchRes)
             val items = try {
                 AppUtils.parseJson<NaSearchResponse>(searchRes.text).data?.items.orEmpty()
-            } catch (e: Exception) {
+            } catch (_: Exception) {
                 emptyList()
             }
             val subject = pickSubject(items, res) ?: return
@@ -237,7 +234,7 @@ internal object NetNaijaSite {
             readToken(detailRes)
             val detail = try {
                 AppUtils.parseJson<NaDetailResponse>(detailRes.text).data
-            } catch (e: Exception) {
+            } catch (_: Exception) {
                 null
             } ?: return
             val subj = detail.subject ?: return
@@ -287,7 +284,7 @@ internal object NetNaijaSite {
                             readToken(playRes)
                             val play = try {
                                 AppUtils.parseJson<NaPlayResponse>(playRes.text).data
-                            } catch (e: Exception) {
+                            } catch (_: Exception) {
                                 null
                             } ?: return@async
 
@@ -405,17 +402,12 @@ internal object NetNaijaSite {
                                             )
                                         }
                                     }
-                                } catch (e: Exception) {
-                                }
+                                } catch (_: Exception) {}
                             }
-                        } catch (e: Exception) {
-                            Log.d(PlayNet.TAG, "netnaija $audioLabel: ${e.message}")
-                        }
+                        } catch (_: Exception) {}
                     }
                 }
             }
-        } catch (e: Exception) {
-            Log.d(PlayNet.TAG, "netnaija: ${e.message}")
-        }
+        } catch (_: Exception) {}
     }
 }

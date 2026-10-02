@@ -2,7 +2,6 @@ package com.justplay
 
 import android.net.Uri
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.AppUtils.toJson
@@ -50,7 +49,6 @@ class JustPlay : MainAPI() {
     override var lang = "en"
 
     companion object {
-        private const val TAG = "JustPlay"
         private const val TMDB = "https://api.themoviedb.org/3"
         private const val TMDB_KEY = "1865f43a0549ca50d341dd9ab8b29f49"
         private const val TMDB_KEY_ALT = "98ae14df2b8d8f8f8136499daf79f0e0"
@@ -62,7 +60,7 @@ class JustPlay : MainAPI() {
 
         fun siteEnabled(id: String): Boolean = try {
             CloudStreamApp.getKey<Boolean>("JUSTPLAY_SITE_$id") ?: true
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             true
         }
     }
@@ -74,7 +72,7 @@ class JustPlay : MainAPI() {
         } catch (e: Exception) {
             try {
                 JSONObject(app.get("$TMDB$path?api_key=$TMDB_KEY_ALT&$query", timeout = 12000L).text)
-            } catch (e2: Exception) {
+            } catch (_: Exception) {
                 null
             }
         }
@@ -153,7 +151,7 @@ class JustPlay : MainAPI() {
     override suspend fun load(url: String): LoadResponse? {
         val data = try {
             parseJson<PlayTmdbData>(url)
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             return null
         }
         val id = data.id ?: return null
@@ -289,7 +287,7 @@ class JustPlay : MainAPI() {
                                     ep.optString("air_date").takeIf { it.isNotBlank() }?.let { addDate(it) }
                                 }
                             }
-                        } catch (e: Exception) {
+                        } catch (_: Exception) {
                             emptyList()
                         }
                     }
@@ -323,7 +321,7 @@ class JustPlay : MainAPI() {
     ): Boolean {
         val res = try {
             parseJson<PlayLinkData>(data)
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             return false
         }
 
@@ -350,9 +348,7 @@ class JustPlay : MainAPI() {
                 async(Dispatchers.IO) {
                     try {
                         site.invoke(res, subtitleCallback, callback)
-                    } catch (e: Exception) {
-                        Log.d(TAG, "${site.id}: ${e.message}")
-                    }
+                    } catch (_: Exception) {}
                 }
             }
         }

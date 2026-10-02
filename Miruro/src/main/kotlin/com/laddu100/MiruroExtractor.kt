@@ -1,7 +1,6 @@
 package com.laddu100
 
 import com.fasterxml.jackson.annotation.JsonProperty
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.network.WebViewResolver
@@ -55,7 +54,6 @@ open class MiruroMegaPlay(private val sourceName: String = "MegaPlay") : Extract
                 })
             }
         }.onFailure { error ->
-            Log.e(name, "extraction failed: ${error.message}")
             val resolver = WebViewResolver(
                 interceptUrl = Regex("""\.m3u8"""),
                 additionalUrls = listOf(Regex("""\.m3u8""")),
@@ -150,7 +148,6 @@ class MiruroWebView(private val sourceName: String, private val baseUrl: String)
                 }
             }
         }.onFailure { error ->
-            Log.e(name, "extraction failed: ${error.message}")
         }
     }
 }

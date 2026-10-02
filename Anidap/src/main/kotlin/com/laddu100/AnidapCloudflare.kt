@@ -26,7 +26,6 @@ import androidx.appcompat.app.AppCompatActivity
 import com.google.android.material.bottomsheet.BottomSheetBehavior
 import com.google.android.material.bottomsheet.BottomSheetDialog
 import com.google.android.material.bottomsheet.BottomSheetDialogFragment
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.CommonActivity
 import com.lagradost.cloudstream3.app
 import com.lagradost.nicehttp.NiceResponse
@@ -36,8 +35,6 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlin.coroutines.resume
-
-private const val TAG = "Anidap_CFBypass"
 
 // The API subdomain that issues and validates the _amx_id cookie
 private const val CHAD_HOST = "https://chad.anidap.lol"
@@ -144,7 +141,7 @@ class AnidapCFDialog(
         try {
             val uri = Uri.parse(targetUrl)
             "${uri.scheme}://${uri.host}"
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             targetUrl
         }
     }
@@ -294,7 +291,7 @@ class AnidapCFDialog(
                         try {
                             val uri = Uri.parse(it)
                             CookieManager.getInstance().getCookie("${uri.scheme}://${uri.host}")
-                        } catch (e: Exception) { null }
+                        } catch (_: Exception) { null }
                     } ?: ""
 
                     val bestCookies = when {
@@ -366,7 +363,6 @@ class AnidapCFDialog(
 private suspend fun showCFBypassDialogAndWait(url: String = CF_TRIGGER_URL): Boolean = withContext(Dispatchers.Main) {
     val activity = CommonActivity.activity as? AppCompatActivity
     if (activity == null || activity.isFinishing || activity.isDestroyed) {
-        Log.e(TAG, "No activity available to show Anidap CF dialog")
         return@withContext false
     }
     suspendCancellableCoroutine { cont ->
@@ -375,8 +371,7 @@ private suspend fun showCFBypassDialogAndWait(url: String = CF_TRIGGER_URL): Boo
         }
         try {
             dialog.show(activity.supportFragmentManager, "AnidapCFDialog")
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to show Anidap CF dialog: ${e.message}")
+        } catch (_: Exception) {
             if (cont.isActive) cont.resume(false)
         }
         cont.invokeOnCancellation { dialog.dismissAllowingStateLoss() }
@@ -391,7 +386,7 @@ suspend fun cfAppGet(
     val targetHost = try {
         val uri = Uri.parse(url)
         "${uri.scheme}://${uri.host}"
-    } catch (e: Exception) { url }
+    } catch (_: Exception) { url }
 
     fun buildCfHeaders(): Map<String, String> {
         val h = headers.toMutableMap()
@@ -429,8 +424,6 @@ suspend fun cfAppGet(
 
     if (!isAnidapBlocked(response)) return response
 
-    Log.e(TAG, "anti-bot blocked (HTTP ${response.code}), triggering bypass")
-
     // Use mutex so only ONE bypass dialog shows at a time
     cfBypassMutex.withLock {
         // Double-check: another coroutine may have already bypassed while we waited
@@ -444,7 +437,6 @@ suspend fun cfAppGet(
         val bypassSuccess = showCFBypassDialogAndWait()
 
         if (!bypassSuccess) {
-            Log.e(TAG, "Anidap CF bypass dialog failed/cancelled")
             return@withLock // response is still the blocked one
         }
 
@@ -453,7 +445,6 @@ suspend fun cfAppGet(
             if (!isAnidapBlocked(response)) {
                 return@withLock
             }
-            Log.e(TAG, "Still blocked after retry $attempt")
         }
     }
 

@@ -2,7 +2,6 @@ package com.laddu100
 
 import android.content.Context
 import androidx.appcompat.app.AppCompatActivity
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.CommonActivity.activity
 import com.lagradost.cloudstream3.plugins.Plugin
 import com.lagradost.cloudstream3.plugins.CloudstreamPlugin
@@ -26,7 +25,6 @@ class LIVETVPlugin : Plugin() {
         registerMainAPI(LIVETVLiveEventsProvider())
 
         iptvProviders = runBlocking { LIVETVProviderManager.fetchProviders() }
-        Log.d("LIVETV", "fetched ${iptvProviders.size} providers")
 
         val providerSettings = iptvProviders.mapNotNull { p ->
             val title = p["title"] as? String ?: return@mapNotNull null

@@ -1,6 +1,5 @@
 package com.laddu100
 
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.base64Decode
@@ -19,7 +18,6 @@ import java.net.URLDecoder
 // loadExtractor, whose result depends on which other extension registered
 // last for the same host
 object TmfSources {
-    private const val TAG = "TMF"
 
     class Stream(
         val name: String,
@@ -45,7 +43,7 @@ object TmfSources {
                     allowRedirects = false,
                     timeout = 15L
                 )
-            } catch (e: Exception) {
+            } catch (_: Exception) {
                 return null
             }
             val loc = res.headers["location"]?.trim().orEmpty()
@@ -89,8 +87,7 @@ object TmfSources {
             val direct = URLDecoder.decode(googleUrl, "UTF-8")
             if (!direct.startsWith("http")) return emptyList()
             listOf(Stream("G-Direct", direct, ExtractorLinkType.VIDEO, mapOf("Referer" to TmfNet.originOf(url) + "/")))
-        } catch (e: Exception) {
-            Log.d(TAG, "fastdl: ${e.message}")
+        } catch (_: Exception) {
             emptyList()
         }
     }
@@ -116,7 +113,7 @@ object TmfSources {
                 val hopUrl = absolute(hop, base)
                 val hopRes = try {
                     app.get(hopUrl, headers = TmfNet.browserHeaders(base), timeout = 30L)
-                } catch (e: Exception) {
+                } catch (_: Exception) {
                     null
                 }
                 hopRes?.let {
@@ -136,7 +133,7 @@ object TmfSources {
 
             val targetRes = try {
                 app.get(target, headers = TmfNet.browserHeaders(base), timeout = 25L)
-            } catch (e: Exception) {
+            } catch (_: Exception) {
                 null
             }
             val targetDoc = targetRes?.document ?: return emptyList()
@@ -146,8 +143,7 @@ object TmfSources {
                 return listOf(Stream("V-Cloud", target, ExtractorLinkType.VIDEO))
             }
             emptyList()
-        } catch (e: Exception) {
-            Log.d(TAG, "vcloud: ${e.message}")
+        } catch (_: Exception) {
             emptyList()
         }
     }
@@ -217,8 +213,7 @@ object TmfSources {
             }
 
             out.distinctBy { it.url }
-        } catch (e: Exception) {
-            Log.d(TAG, "vegadrive: ${e.message}")
+        } catch (_: Exception) {
             emptyList()
         }
     }
@@ -257,7 +252,7 @@ object TmfSources {
             if (!infoRes.isSuccessful) return emptyList()
             val info = try {
                 JSONObject(infoRes.text).optJSONObject("data") ?: return emptyList()
-            } catch (e: Exception) {
+            } catch (_: Exception) {
                 return emptyList()
             }
             val name = info.optString("name")
@@ -293,8 +288,7 @@ object TmfSources {
             }
 
             out.distinctBy { it.url }
-        } catch (e: Exception) {
-            Log.d(TAG, "filepress: ${e.message}")
+        } catch (_: Exception) {
             emptyList()
         }
     }
@@ -320,7 +314,7 @@ object TmfSources {
             if (!res.isSuccessful) return null
             val parsed = try {
                 JSONObject(res.text)
-            } catch (e: Exception) {
+            } catch (_: Exception) {
                 return null
             }
             if (!parsed.optBoolean("status")) return null
@@ -328,8 +322,7 @@ object TmfSources {
                 is String -> data.takeIf { it.isNotBlank() }
                 else -> null
             }
-        } catch (e: Exception) {
-            Log.d(TAG, "filepress download: ${e.message}")
+        } catch (_: Exception) {
             null
         }
     }
@@ -355,7 +348,7 @@ object TmfSources {
             if (!res.isSuccessful) return null
             val parsed = try {
                 JSONObject(res.text)
-            } catch (e: Exception) {
+            } catch (_: Exception) {
                 return null
             }
             if (!parsed.optBoolean("status")) return null
@@ -367,8 +360,7 @@ object TmfSources {
                     }
                 else -> null
             }
-        } catch (e: Exception) {
-            Log.d(TAG, "filepress final: ${e.message}")
+        } catch (_: Exception) {
             null
         }
     }
@@ -414,13 +406,12 @@ object TmfSources {
             if (!res.isSuccessful) return null
             val parsed = try {
                 JSONObject(res.text)
-            } catch (e: Exception) {
+            } catch (_: Exception) {
                 return null
             }
             if (!parsed.optBoolean("success")) return null
             parsed.optString("downloadUrl").takeIf { it.startsWith("http") }
-        } catch (e: Exception) {
-            Log.d(TAG, "dotflix: ${e.message}")
+        } catch (_: Exception) {
             null
         }
     }
@@ -475,9 +466,7 @@ object TmfSources {
                 ).document
                 val nested = hubStreams(genDoc, base, pageUrl, depth + 1)
                 if (nested.isNotEmpty()) return nested
-            } catch (e: Exception) {
-                Log.d(TAG, "generate: ${e.message}")
-            }
+            } catch (_: Exception) {}
         }
 
         if (pageUrl.contains("/video/") && depth < 3) {
@@ -491,9 +480,7 @@ object TmfSources {
                     ).document
                     val nested = hubStreams(innerDoc, base, inner, depth + 1)
                     if (nested.isNotEmpty()) return nested
-                } catch (e: Exception) {
-                    Log.d(TAG, "video page: ${e.message}")
-                }
+                } catch (_: Exception) {}
             }
         }
 
@@ -566,8 +553,7 @@ object TmfSources {
                 link.contains("fastdl.") || link.contains("hubcdn.") -> resolveFastDl(abs)
                 else -> emptyList()
             }
-        } catch (e: Exception) {
-            Log.d(TAG, "hub button: ${e.message}")
+        } catch (_: Exception) {
             emptyList()
         }
     }
@@ -602,8 +588,7 @@ object TmfSources {
                     if (resolves(href)) {
                         val streams = try {
                             resolveOne(href)
-                        } catch (e: Exception) {
-                            Log.d(TAG, "source failed: ${e.message}")
+                        } catch (_: Exception) {
                             emptyList()
                         }
                         for (s in streams) {
@@ -627,9 +612,7 @@ object TmfSources {
                                 callback.invoke(link)
                                 emitted.set(true)
                             }
-                        } catch (e: Exception) {
-                            Log.d(TAG, "fallback failed: ${e.message}")
-                        }
+                        } catch (_: Exception) {}
                     }
                 }
             }.awaitAll()

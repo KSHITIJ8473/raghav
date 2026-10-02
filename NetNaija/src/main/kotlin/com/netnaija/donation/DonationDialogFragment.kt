@@ -26,15 +26,12 @@ import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.fragment.app.DialogFragment
-import com.lagradost.api.Log
 import java.util.Calendar
 import java.util.Locale
 
 class DonationDialogFragment : DialogFragment() {
 
     companion object {
-        private const val TAG = "RaghavDonation"
-
         private const val DONATE_URL = "https://buymeacoffee.com/raghav766"
         private const val DISCORD_URL = "https://discord.gg/V9VC8w29U"
         private const val REPO_URL = "https://github.com/KSHITIJ8473/raghav"
@@ -380,9 +377,7 @@ class DonationDialogFragment : DialogFragment() {
             val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             context.startActivity(intent)
-        } catch (e: Exception) {
-            Log.e(TAG, "open url failed: ${e.message}")
-        }
+        } catch (_: Exception) {}
     }
 
     override fun onDismiss(dialog: DialogInterface) {

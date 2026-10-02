@@ -13,7 +13,6 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import com.google.android.material.bottomsheet.BottomSheetDialogFragment
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.plugins.Plugin
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -85,8 +84,7 @@ class RAISettingsFragment(private val plugin: Plugin) : BottomSheetDialogFragmen
                                 if (success) "Saved" else "Cancelled",
                                 Toast.LENGTH_SHORT
                             ).show()
-                        } catch (e: Exception) {
-                            Log.e("RAI_Settings", "bypass: ${e.message}")
+                        } catch (_: Exception) {
                             statusView.text = "Bypass failed"
                         }
                     }

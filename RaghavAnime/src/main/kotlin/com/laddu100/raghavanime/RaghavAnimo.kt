@@ -11,7 +11,12 @@ import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.newExtractorLink
 import com.lagradost.cloudstream3.newSubtitleFile
 import java.net.URLEncoder
+import java.util.Collections
+import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import com.raghav.donation.DonationManager
 
 class RaghavAnimo : MainAPI() {
@@ -166,29 +171,27 @@ class RaghavAnimo : MainAPI() {
             embeds.add("hd-2" to "$cdnUrl/embed/hd-2/ani/${epData.ani}/$type$query")
         }
 
-        var found = false
-        var subsAdded = false
+        val seenSubs = Collections.newSetFromMap(ConcurrentHashMap<String, Boolean>())
 
-        for ((key, embedUrl) in embeds) {
-            try {
-                if (!resolveSource(embedUrl, key, type, subsAdded, subtitleCallback, callback)) {
-                    continue
+        return coroutineScope {
+            embeds.map { (key, embedUrl) ->
+                async {
+                    try {
+                        resolveSource(embedUrl, key, type, seenSubs, subtitleCallback, callback)
+                    } catch (e: Exception) {
+                        if (e is CancellationException) throw e
+                        false
+                    }
                 }
-                found = true
-                subsAdded = true
-            } catch (e: Exception) {
-                if (e is CancellationException) throw e
-            }
+            }.awaitAll().any { it }
         }
-
-        return found
     }
 
     private suspend fun resolveSource(
         embedUrl: String,
         key: String,
         type: String,
-        subsAlreadyAdded: Boolean,
+        seenSubs: MutableSet<String>,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
@@ -196,7 +199,7 @@ class RaghavAnimo : MainAPI() {
             "User-Agent" to ua,
             "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             "Accept-Language" to "en-US,en;q=0.7"
-        ), timeout = 15L)
+        ), timeout = 10L)
         if (embedResp.code != 200) return false
 
         val token = Regex("getSources\\?t=([A-Za-z0-9_.-]+)")
@@ -211,7 +214,7 @@ class RaghavAnimo : MainAPI() {
             "Sec-Fetch-Dest" to "empty"
         )
 
-        val sourcesResp = app.get("$cdnUrl/stream/getSources?t=$token", headers = reqHeaders, timeout = 15L)
+        val sourcesResp = app.get("$cdnUrl/stream/getSources?t=$token", headers = reqHeaders, timeout = 10L)
         if (sourcesResp.code != 200) return false
 
         val sourcesText = sourcesResp.text
@@ -221,7 +224,7 @@ class RaghavAnimo : MainAPI() {
         val masterFile = sources.sources?.firstOrNull()?.file ?: return false
         val masterUrl = if (masterFile.startsWith("http")) masterFile else "$cdnUrl/${masterFile.removePrefix("/")}"
 
-        val masterResp = app.get(masterUrl, headers = reqHeaders, timeout = 15L)
+        val masterResp = app.get(masterUrl, headers = reqHeaders, timeout = 10L)
         if (masterResp.code != 200 || !masterResp.text.trim().startsWith("#EXTM3U")) return false
 
         val playHeaders = mapOf(
@@ -239,10 +242,10 @@ class RaghavAnimo : MainAPI() {
             }
         )
 
-        if (!subsAlreadyAdded) {
-            sources.tracks?.forEach { t ->
-                val file = t.file ?: return@forEach
-                val subUrl = if (file.startsWith("http")) file else "$cdnUrl/${file.removePrefix("/")}"
+        sources.tracks?.forEach { t ->
+            val file = t.file ?: return@forEach
+            val subUrl = if (file.startsWith("http")) file else "$cdnUrl/${file.removePrefix("/")}"
+            if (seenSubs.add(subUrl)) {
                 subtitleCallback.invoke(newSubtitleFile(t.label ?: "English", subUrl) {
                     this.headers = playHeaders
                 })

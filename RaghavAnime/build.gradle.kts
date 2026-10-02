@@ -1,4 +1,4 @@
-version = 71
+version = 72
 
 android {
     buildFeatures {

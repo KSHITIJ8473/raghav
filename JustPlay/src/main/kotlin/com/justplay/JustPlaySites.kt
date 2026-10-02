@@ -3,7 +3,6 @@ package com.justplay
 import android.net.Uri
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties
 import com.fasterxml.jackson.annotation.JsonProperty
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import kotlinx.coroutines.Dispatchers
@@ -29,7 +28,7 @@ internal object DrivePages {
     private fun isSelfLink(href: String, hosts: Set<String>): Boolean {
         return try {
             hosts.contains(URI(href).host?.lowercase())
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             false
         }
     }
@@ -85,13 +84,13 @@ internal object DrivePages {
             if (pageTitle.contains("zip", true)) return
             val driveHost = try {
                 URI(res.url).host?.lowercase()
-            } catch (e: Exception) {
+            } catch (_: Exception) {
                 null
             }
             val hosts = listOfNotNull(driveHost, siteDomain?.let {
                 try {
                     URI(it).host?.lowercase()
-                } catch (e: Exception) {
+                } catch (_: Exception) {
                     null
                 }
             }).toSet()
@@ -153,9 +152,7 @@ internal object DrivePages {
                     }
                 }
             }
-        } catch (e: Exception) {
-            Log.d(PlayNet.TAG, "$site drive page: ${e.message}")
-        }
+        } catch (_: Exception) {}
     }
 }
 
@@ -192,7 +189,7 @@ internal object VegaMoviesSite {
             timeout = 15L
         ).text
         AppUtils.parseJson<VegaResponse>(text).hits.mapNotNull { it.document }
-    } catch (e: Exception) {
+    } catch (_: Exception) {
         emptyList()
     }
 
@@ -294,9 +291,7 @@ internal object VegaMoviesSite {
                     )
                 }
             }
-        } catch (e: Exception) {
-            Log.d(PlayNet.TAG, "vegamovies: ${e.message}")
-        }
+        } catch (_: Exception) {}
     }
 }
 
@@ -324,7 +319,7 @@ internal object HdHub4uSite {
                     // the indexed permalinks point at dead mirrors, only the path is stable
                     val path = try {
                         URI(permalink).path
-                    } catch (e: Exception) {
+                    } catch (_: Exception) {
                         null
                     }
                     if (path.isNullOrBlank()) permalink else domain + path
@@ -333,7 +328,7 @@ internal object HdHub4uSite {
                 }
                 postTitle to url2
             }
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             emptyList()
         }
     }
@@ -386,9 +381,7 @@ internal object HdHub4uSite {
                     emitResolved(href, el.text().trim(), domain, subtitleCallback, callback)
                 }
             }
-        } catch (e: Exception) {
-            Log.d(PlayNet.TAG, "hdhub4u post: ${e.message}")
-        }
+        } catch (_: Exception) {}
     }
 
     suspend fun invoke(
@@ -426,9 +419,7 @@ internal object HdHub4uSite {
                     }
                 }
             }
-        } catch (e: Exception) {
-            Log.d(PlayNet.TAG, "hdhub4u: ${e.message}")
-        }
+        } catch (_: Exception) {}
     }
 }
 
@@ -538,9 +529,7 @@ internal object FourKhdHubSite {
                     emitLinks(hrefs, doc.title(), domain, subtitleCallback, callback)
                 }
             }
-        } catch (e: Exception) {
-            Log.d(PlayNet.TAG, "4khdhub: ${e.message}")
-        }
+        } catch (_: Exception) {}
     }
 }
 
@@ -567,7 +556,7 @@ internal object Movies4uSite {
             registryDomain = try {
                 val text = app.get(DOMAIN_REGISTRY, timeout = 10L).text
                 JSONObject(text).optString("movies4u").takeIf { it.startsWith("http") }
-            } catch (e: Exception) {
+            } catch (_: Exception) {
                 null
             }
         }
@@ -598,7 +587,7 @@ internal object Movies4uSite {
                 if (postTitle.isBlank() || permalink.isBlank()) null
                 else postTitle to PlayNet.absolute(permalink, domain)
             }
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             null
         }
     }
@@ -615,7 +604,7 @@ internal object Movies4uSite {
 
     private suspend fun getDoc(url: String): Document? = try {
         app.get(url, headers = PlayNet.headers(PlayNet.getBaseUrl(url)), timeout = 20L).document
-    } catch (e: Exception) {
+    } catch (_: Exception) {
         null
     }
 
@@ -770,13 +759,9 @@ internal object Movies4uSite {
                             emitM4uLinks(href, label, res.episode, res.season, subtitleCallback, callback)
                         }
                     }
-                } catch (e: Exception) {
-                    Log.d(PlayNet.TAG, "movies4u post: ${e.message}")
-                }
+                } catch (_: Exception) {}
             }
-        } catch (e: Exception) {
-            Log.d(PlayNet.TAG, "movies4u: ${e.message}")
-        }
+        } catch (_: Exception) {}
     }
 }
 
@@ -885,9 +870,7 @@ internal object TmfSite {
                     )
                 }
             }
-        } catch (e: Exception) {
-            Log.d(PlayNet.TAG, "themoviesflix: ${e.message}")
-        }
+        } catch (_: Exception) {}
     }
 }
 
@@ -936,7 +919,7 @@ internal object MultimoviesSite {
                 .trim()
                 .removeSurrounding("\"")
                 .takeIf { it.startsWith("http") && !it.contains("youtube", true) }
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             null
         }
     }
@@ -949,7 +932,7 @@ internal object MultimoviesSite {
     ) {
         val host = try {
             Uri.parse(embedUrl).host ?: ""
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             ""
         }
         when {
@@ -970,9 +953,7 @@ internal object MultimoviesSite {
                         for (m in Regex("""(https?://[^"'\s\\]+\.m3u8[^"'\s\\]*)""").findAll(unpacked)) {
                             PlayPacker.emitM3u8(m.groupValues[1], PlayNet.getBaseUrl(res.url), label, callback)
                         }
-                    } catch (e: Exception) {
-                        Log.d(PlayNet.TAG, "embed scan: ${e.message}")
-                    }
+                    } catch (_: Exception) {}
                 }
             }
         }
@@ -986,7 +967,7 @@ internal object MultimoviesSite {
     ) {
         val doc = try {
             app.get(pageUrl, headers = PlayNet.headers(domain), timeout = 20L).document
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             return
         }
         val options = optionsOf(doc)
@@ -1042,8 +1023,7 @@ internal object MultimoviesSite {
                         processPage(domain, direct, subtitleCallback, callback)
                         return
                     }
-                } catch (e: Exception) {
-                }
+                } catch (_: Exception) {}
             }
 
             val searchDoc = app.get(
@@ -1096,12 +1076,9 @@ internal object MultimoviesSite {
                         if (probe.code == 200 && probe.text.contains("dooplay_player_option")) {
                             processPage(domain, direct, subtitleCallback, callback)
                         }
-                    } catch (e: Exception) {
-                    }
+                    } catch (_: Exception) {}
                 }
             }
-        } catch (e: Exception) {
-            Log.d(PlayNet.TAG, "multimovies: ${e.message}")
-        }
+        } catch (_: Exception) {}
     }
 }

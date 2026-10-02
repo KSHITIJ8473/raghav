@@ -2,14 +2,12 @@ package com.csksy.anichan
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.KotlinModule
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.app
 import java.net.URLEncoder
 
 object VidhawkResolver {
 
     private const val MAIN_URL = "https://vidhawk.buzz"
-    private const val TAG = "AniChan"
     private val mapper = ObjectMapper().registerModule(KotlinModule.Builder().build())
 
     suspend fun resolve(anilistId: Int, ep: Int, audio: String, server: String): List<VidhawkTrack>? {
@@ -33,8 +31,7 @@ object VidhawkResolver {
             )
             val play = mapper.readValue(playResp.text, VidhawkPlay::class.java)
             play.tracks
-        } catch (e: Exception) {
-            Log.d(TAG, "vidhawk resolve failed: ${e.message}")
+        } catch (_: Exception) {
             null
         }
     }

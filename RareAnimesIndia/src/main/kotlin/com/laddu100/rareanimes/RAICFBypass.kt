@@ -28,7 +28,6 @@ import android.widget.ProgressBar
 import android.widget.TextView
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.CommonActivity
 import com.lagradost.cloudstream3.CloudStreamApp
 import com.lagradost.cloudstream3.ui.settings.Globals
@@ -37,8 +36,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlin.coroutines.resume
-
-private const val TAG = "RareAnimes_CF"
 
 private val CF_CHALLENGE_TITLES = listOf(
     "just a moment", "just a moment...", "checking your browser",
@@ -89,9 +86,7 @@ internal object RAICFStore {
                     if (parts.size == 2 && t != null) timeMap[parts[0]] = t
                 }
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "init: ${e.message}")
-        }
+        } catch (_: Exception) {}
     }
 
     private fun persist() {
@@ -99,9 +94,7 @@ internal object RAICFStore {
             CloudStreamApp.setKey(KEY_COOKIES, cookiesMap.entries.joinToString("|||") { "${it.key}::=${it.value}" })
             CloudStreamApp.setKey(KEY_UA, uaMap.entries.joinToString("|||") { "${it.key}::=${it.value}" })
             CloudStreamApp.setKey(KEY_TIME, timeMap.entries.joinToString("|||") { "${it.key}::=${it.value}" })
-        } catch (e: Exception) {
-            Log.e(TAG, "persist: ${e.message}")
-        }
+        } catch (_: Exception) {}
     }
 
     fun getCookies(host: String): String? {
@@ -145,7 +138,7 @@ internal object RAICFStore {
 internal fun isRAICloudflareBlocked(response: NiceResponse): Boolean {
     val code = response.code
     if (code == 503) return true
-    val body = try { response.text.lowercase() } catch (e: Exception) { "" }
+    val body = try { response.text.lowercase() } catch (_: Exception) { "" }
     if (code == 403) {
         if (body.contains("just a moment") && body.contains("challenge-platform")) return true
         if (body.contains("checking your browser") && body.contains("cloudflare")) return true
@@ -184,7 +177,7 @@ private class RAICFDialog(
         try {
             val uri = Uri.parse(targetUrl)
             "${uri.scheme}://${uri.host}"
-        } catch (e: Exception) { targetUrl }
+        } catch (_: Exception) { targetUrl }
     }
 
     private fun extractAndFinish() {
@@ -195,9 +188,7 @@ private class RAICFDialog(
             if (cookieStr.contains("cf_clearance")) {
                 finishSuccess(cookieStr)
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "extract: ${e.message}")
-        }
+        } catch (_: Exception) {}
     }
 
     private fun finishSuccess(cookieStr: String) {
@@ -205,17 +196,17 @@ private class RAICFDialog(
         handler.removeCallbacksAndMessages(null)
         val ua = webView?.settings?.userAgentString ?: ""
         RAICFStore.save(Uri.parse(targetHost).host ?: "", cookieStr, ua)
-        try { webView?.destroy() } catch (e: Exception) {}
-        try { (webView?.getTag() as? Dialog)?.dismiss() } catch (e: Exception) {}
-        try { onFinished?.invoke(true) } catch (e: Exception) {}
+        try { webView?.destroy() } catch (_: Exception) {}
+        try { (webView?.getTag() as? Dialog)?.dismiss() } catch (_: Exception) {}
+        try { onFinished?.invoke(true) } catch (_: Exception) {}
     }
 
     private fun finishFailure() {
         if (!resolved.compareAndSet(false, true)) return
         handler.removeCallbacksAndMessages(null)
-        try { webView?.destroy() } catch (e: Exception) {}
-        try { dialog?.dismiss() } catch (e: Exception) {}
-        try { onFinished?.invoke(false) } catch (e: Exception) {}
+        try { webView?.destroy() } catch (_: Exception) {}
+        try { dialog?.dismiss() } catch (_: Exception) {}
+        try { onFinished?.invoke(false) } catch (_: Exception) {}
     }
 
     private val cookiePollRunnable = object : Runnable {
@@ -262,7 +253,7 @@ private class RAICFDialog(
         statusText = statusView
         container.addView(statusView)
 
-        val isTv = try { Globals.isLayout(Globals.TV) } catch (e: Throwable) { false }
+        val isTv = try { Globals.isLayout(Globals.TV) } catch (_: Throwable) { false }
         container.addView(TextView(activity).apply {
             text = if (isTv) "Use D-pad to move cursor, OK to click."
             else "Solve the CAPTCHA below, then tap Done."
@@ -332,13 +323,13 @@ private class RAICFDialog(
         btnContainer.addView(Button(activity).apply {
             text = "Back"
             setOnClickListener {
-                try { webView?.goBack() } catch (e: Exception) {}
+                try { webView?.goBack() } catch (_: Exception) {}
             }
         })
         btnContainer.addView(Button(activity).apply {
             text = "Reload"
             setOnClickListener {
-                try { webView?.reload() } catch (e: Exception) {}
+                try { webView?.reload() } catch (_: Exception) {}
             }
         })
         btnContainer.addView(Button(activity).apply {
@@ -359,7 +350,7 @@ private class RAICFDialog(
         webView?.setTag(dialog)
         dialog?.setOnKeyListener { _, keyCode, _ ->
             if (keyCode == KeyEvent.KEYCODE_BACK) {
-                try { webView?.goBack() } catch (e: Exception) {}
+                try { webView?.goBack() } catch (_: Exception) {}
                 true
             } else {
                 false
@@ -369,8 +360,8 @@ private class RAICFDialog(
             handler.removeCallbacksAndMessages(null)
             if (!resolved.get()) {
                 resolved.set(true)
-                try { webView?.destroy() } catch (e: Exception) {}
-                try { onFinished?.invoke(false) } catch (e: Exception) {}
+                try { webView?.destroy() } catch (_: Exception) {}
+                try { onFinished?.invoke(false) } catch (_: Exception) {}
             }
         }
         dialog?.show()
@@ -404,7 +395,7 @@ private class RAICFDialog(
         val t = SystemClock.uptimeMillis()
         val down = MotionEvent.obtain(t, t, MotionEvent.ACTION_DOWN, pos.x, pos.y, 0)
         val up = MotionEvent.obtain(t, t + 120, MotionEvent.ACTION_UP, pos.x, pos.y, 0)
-        try { wv.dispatchTouchEvent(down); wv.dispatchTouchEvent(up) } catch (e: Exception) {}
+        try { wv.dispatchTouchEvent(down); wv.dispatchTouchEvent(up) } catch (_: Exception) {}
         finally { down.recycle(); up.recycle() }
     }
 
@@ -443,9 +434,9 @@ private class RAICFDialog(
 
     fun dismiss() {
         handler.removeCallbacksAndMessages(null)
-        try { webView?.apply { stopLoading(); destroy() } } catch (e: Exception) {}
+        try { webView?.apply { stopLoading(); destroy() } } catch (_: Exception) {}
         webView = null
-        try { dialog?.dismiss() } catch (e: Exception) {}
+        try { dialog?.dismiss() } catch (_: Exception) {}
         dialog = null
     }
 }
@@ -459,8 +450,7 @@ internal suspend fun showRAICFBypassDialogAndWait(url: String): Boolean = withCo
         val cfDialog = RAICFDialog(url) { success ->
             if (cont.isActive) cont.resume(success)
         }
-        try { cfDialog.show(activity) } catch (e: Exception) {
-            Log.e(TAG, "show dialog: ${e.message}")
+        try { cfDialog.show(activity) } catch (_: Exception) {
             if (cont.isActive) cont.resume(false)
         }
         cont.invokeOnCancellation { cfDialog.dismiss() }

@@ -11,11 +11,9 @@ import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
-import com.lagradost.api.Log
 import com.raghav.donation.DonationManager
 
 class NineAnime : MainAPI() {
-    private val TAG = "NineAnime"
 
     override var mainUrl = "https://9anime.org.lv"
     override var name = "9anime"
@@ -170,8 +168,7 @@ class NineAnime : MainAPI() {
     ): Boolean = coroutineScope {
         val res = try {
             app.get(data)
-        } catch (e: Exception) {
-            Log.w(TAG, "watch page load failed: ${e.message}")
+        } catch (_: Exception) {
             return@coroutineScope false
         }
         val doc = res.document
@@ -182,8 +179,7 @@ class NineAnime : MainAPI() {
             if (b64Value.isBlank() || b64Value == "...") return@mapNotNull null
             val decodedIframe = try {
                 String(Base64.decode(b64Value, Base64.DEFAULT), Charsets.UTF_8)
-            } catch (e: Exception) {
-                Log.w(TAG, "mirror decode failed: ${e.message}")
+            } catch (_: Exception) {
                 null
             } ?: return@mapNotNull null
             Jsoup.parse(decodedIframe).selectFirst("iframe")?.attr("src")
@@ -191,8 +187,7 @@ class NineAnime : MainAPI() {
             if (iframeUrl.contains("gogoanime.me.uk/newplayer.php")) {
                 val playerHtml = try {
                     app.get(iframeUrl, headers = mapOf("Referer" to data)).text
-                } catch (e: Exception) {
-                    Log.w(TAG, "gogo player fetch failed: ${e.message}")
+                } catch (_: Exception) {
                     ""
                 }
                 val innerSrcs = Jsoup.parse(playerHtml).select("iframe")
@@ -207,8 +202,7 @@ class NineAnime : MainAPI() {
             async {
                 try {
                     resolveAndExtract(embedUrl, data, subtitleCallback, callback)
-                } catch (e: Exception) {
-                    Log.w(TAG, "extract failed for $embedUrl: ${e.message}")
+                } catch (_: Exception) {
                     false
                 }
             }
@@ -226,8 +220,7 @@ class NineAnime : MainAPI() {
         if (iframeUrl.contains("gogoanime.me.uk/newplayer.php")) {
             val playerPage = try {
                 app.get(iframeUrl, headers = mapOf("Referer" to refererUrl)).text
-            } catch (e: Exception) {
-                Log.w(TAG, "gogo player page failed: ${e.message}")
+            } catch (_: Exception) {
                 return false
             }
             embedUrl = Jsoup.parse(playerPage).selectFirst("iframe")?.attr("src") ?: return false
@@ -270,8 +263,7 @@ class NineAnime : MainAPI() {
                     loadExtractor(embedUrl, refererUrl, subtitleCallback, callback)
                 }
             }
-        } catch (e: Exception) {
-            Log.w(TAG, "extraction failed: ${e.message}")
+        } catch (_: Exception) {
             false
         }
     }

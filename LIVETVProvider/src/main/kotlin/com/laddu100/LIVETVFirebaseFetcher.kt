@@ -1,6 +1,5 @@
 package com.laddu100
 
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -72,8 +71,7 @@ object LIVETVFirebaseFetcher {
                 }
             }
             null
-        } catch (e: Exception) {
-            Log.e("LIVETV", "Firebase fetch failed: ${e.message}")
+        } catch (_: Exception) {
             null
         }
     }

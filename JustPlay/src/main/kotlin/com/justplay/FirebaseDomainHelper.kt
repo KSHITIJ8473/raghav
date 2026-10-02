@@ -1,11 +1,9 @@
 package com.justplay
 
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 
 object FirebaseDomainHelper {
-    private const val TAG = "FirebaseDomainHelper"
     private const val URL = "https://cloudstreampluginhelper-default-rtdb.firebaseio.com/.json"
     private const val CACHE_TTL_MS = 5 * 60 * 1000L
 
@@ -28,8 +26,7 @@ object FirebaseDomainHelper {
                 .mapValues { it.value.trim().trimEnd('/') }
             lastLoadTime = now
             everLoadedSuccessfully = true
-        } catch (e: Exception) {
-            Log.d(TAG, "load: ${e.message}")
+        } catch (_: Exception) {
             lastLoadTime = now
         }
     }

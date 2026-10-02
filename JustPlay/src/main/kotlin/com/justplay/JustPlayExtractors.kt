@@ -2,7 +2,6 @@ package com.justplay
 
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.fasterxml.jackson.databind.ObjectMapper
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.base64Decode
@@ -58,7 +57,7 @@ internal object PlayPacker {
                 }
             )
             true
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             false
         }
     }
@@ -79,7 +78,7 @@ internal object PlayPacker {
                 ?: Regex("""(https?://[^"'\s\\]+\.m3u8[^"'\s\\]*)""").find(unpacked)?.groupValues?.get(1)
                 ?: return false
             emitM3u8(m3u8, PlayNet.getBaseUrl(res.url), label, callback)
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             false
         }
     }
@@ -96,7 +95,7 @@ internal object PlayModiplay {
         if (base.isBlank()) return
         val html = try {
             app.get(embedUrl, headers = PlayNet.headers("https://multimovies.casa/"), timeout = 20L).text
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             return
         }
         val servers = Regex("""switchServer\('([^']+)','([^']+)','([^']+)','([^']+)','([^']*)'""")
@@ -119,8 +118,7 @@ internal object PlayModiplay {
             if (!handled) {
                 try {
                     resolveProxyFile(base, platform, code, linkLabel, callback)
-                } catch (e: Exception) {
-                }
+                } catch (_: Exception) {}
             }
         }
     }
@@ -135,7 +133,7 @@ internal object PlayModiplay {
         val proxyUrl = "$base/proxy.php?p=$platform&c=$fileCode&title=&site_ref=&noredirect=1"
         val page = try {
             app.get(proxyUrl, headers = PlayNet.headers(base), timeout = 20L).text
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             return false
         }
         val src = Regex("""var\s+src\s*=\s*"([^"]+)"""").find(page)?.groupValues?.get(1)?.let { PlayNet.deEsc(it) }
@@ -164,7 +162,7 @@ internal object PlayModiplay {
                         headers = PlayNet.headers(base),
                         timeout = 15L
                     ).text
-                } catch (e: Exception) {
+                } catch (_: Exception) {
                     continue
                 }
                 val url = Regex(""""url"\s*:\s*"([^"]+)"""").find(resp)?.groupValues?.get(1)?.let { PlayNet.deEsc(it) }
@@ -176,8 +174,7 @@ internal object PlayModiplay {
                     subtitleCallback(newSubtitleFile(langName, url) {})
                 }
             }
-        } catch (e: Exception) {
-        }
+        } catch (_: Exception) {}
     }
 }
 
@@ -219,8 +216,7 @@ internal object PlayGdmirror {
                 try {
                     val apiRes = app.get(apiQuery, headers = PlayNet.headers(apiUrl), timeout = 20L).text
                     collectSlugs(apiRes, sids)
-                } catch (e: Exception) {
-                }
+                } catch (_: Exception) {}
             }
 
             if (sids.isEmpty()) return
@@ -256,13 +252,9 @@ internal object PlayGdmirror {
                         val embed = "$siteUrl$code$suffix"
                         PlayPacker.resolvePackedEmbed(embed, "$label $friendly", playerBase, callback)
                     }
-                } catch (e: Exception) {
-                    Log.d(PlayNet.TAG, "embedhelper $s: ${e.message}")
-                }
+                } catch (_: Exception) {}
             }
-        } catch (e: Exception) {
-            Log.d(PlayNet.TAG, "gdmirror: ${e.message}")
-        }
+        } catch (_: Exception) {}
     }
 
     private fun collectSlugs(body: String, out: MutableSet<String>) {
@@ -283,9 +275,7 @@ internal object PlayGdmirror {
                 }
             }
             walk(obj)
-        } catch (e: Exception) {
-            Log.d(PlayNet.TAG, "slugs: ${e.message}")
-        }
+        } catch (_: Exception) {}
     }
 }
 
@@ -302,7 +292,7 @@ class PlayHubCloud : ExtractorApi() {
     ) {
         val res = try {
             app.get(url, headers = PlayNet.headers(referer), timeout = 20L)
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             return
         }
         emitHubServers(res.document, PlayNet.getBaseUrl(res.url), res.url, subtitleCallback, callback)
@@ -359,9 +349,7 @@ class PlayHubCloud : ExtractorApi() {
                         timeout = 20L
                     ).document
                     if (emitGeneratedServers(genDoc, labelExtras, quality, subtitleCallback, callback)) return true
-                } catch (e: Exception) {
-                    Log.d(PlayNet.TAG, "generate: ${e.message}")
-                }
+                } catch (_: Exception) {}
             }
 
             val inner = when {
@@ -376,8 +364,7 @@ class PlayHubCloud : ExtractorApi() {
                         timeout = 20L
                     ).document
                     if (emitHubServers(innerDoc, base, inner, subtitleCallback, callback)) return true
-                } catch (e: Exception) {
-                }
+                } catch (_: Exception) {}
             }
 
             for (btn in doc.select("a.btn, a[download]")) {
@@ -408,9 +395,7 @@ class PlayHubCloud : ExtractorApi() {
                                 callback(newExtractorLink("Hub-Cloud", "BuzzServer [$labelExtras]", PlayNet.absolute(dlink, PlayNet.getBaseUrl(abs)), ExtractorLinkType.VIDEO) { this.quality = quality })
                                 emitted = true
                             }
-                        } catch (e: Exception) {
-                            Log.d(PlayNet.TAG, "buzzserver: ${e.message}")
-                        }
+                        } catch (_: Exception) {}
                     }
                     label.contains("10gbps") -> {
                         try {
@@ -422,9 +407,7 @@ class PlayHubCloud : ExtractorApi() {
                                     emitted = true
                                 }
                             }
-                        } catch (e: Exception) {
-                            Log.d(PlayNet.TAG, "10gbps: ${e.message}")
-                        }
+                        } catch (_: Exception) {}
                     }
                     label.contains("instant download") || label.contains("instant dl") -> {
                         try {
@@ -440,9 +423,7 @@ class PlayHubCloud : ExtractorApi() {
                                 callback(newExtractorLink("Hub-Cloud", "Instant Download [$labelExtras]", direct, ExtractorLinkType.VIDEO) { this.quality = quality })
                                 emitted = true
                             }
-                        } catch (e: Exception) {
-                            Log.d(PlayNet.TAG, "instant: ${e.message}")
-                        }
+                        } catch (_: Exception) {}
                     }
                     label.contains("pixeldra") || label.contains("pixelserver") || label.contains("pixel server") || link.contains("pixeldra") -> {
                         val final = pixelFileUrl(doc.toString(), link) ?: continue
@@ -464,9 +445,7 @@ class PlayHubCloud : ExtractorApi() {
                     abs.startsWith("http") -> {
                         try {
                             emitted = loadExtractor(abs, base, subtitleCallback, callback) || emitted
-                        } catch (e: Exception) {
-                            Log.d(PlayNet.TAG, "hub button: ${e.message}")
-                        }
+                        } catch (_: Exception) {}
                     }
                 }
             }
@@ -508,9 +487,7 @@ class PlayHubCloud : ExtractorApi() {
                                     emitted = true
                                 }
                             }
-                        } catch (e: Exception) {
-                            Log.d(PlayNet.TAG, "10gbps gen: ${e.message}")
-                        }
+                        } catch (_: Exception) {}
                     }
                     text.contains("instant download") || text.contains("instant dl") -> {
                         try {
@@ -526,9 +503,7 @@ class PlayHubCloud : ExtractorApi() {
                                 callback(newExtractorLink("Hub-Cloud", "Instant Download [$labelExtras]", direct, ExtractorLinkType.VIDEO) { this.quality = quality })
                                 emitted = true
                             }
-                        } catch (e: Exception) {
-                            Log.d(PlayNet.TAG, "instant gen: ${e.message}")
-                        }
+                        } catch (_: Exception) {}
                     }
                     text.contains("download file") || text.contains("download now") || text.contains("download] ") -> {
                         callback(newExtractorLink("Hub-Cloud", "Download File [$labelExtras]", href, ExtractorLinkType.VIDEO) { this.quality = quality })
@@ -538,9 +513,7 @@ class PlayHubCloud : ExtractorApi() {
                         try {
                             PlayGofile().getUrl(href, "", subtitleCallback, callback)
                             emitted = true
-                        } catch (e: Exception) {
-                            Log.d(PlayNet.TAG, "gofile gen: ${e.message}")
-                        }
+                        } catch (_: Exception) {}
                     }
                 }
             }
@@ -575,7 +548,7 @@ class PlayVCloud : ExtractorApi() {
                 val hopUrl = PlayNet.absolute(hop, base)
                 val hopRes = try {
                     PlayNet.fetchWithCf(hopUrl, base, timeout = 30L)
-                } catch (e: Exception) {
+                } catch (_: Exception) {
                     null
                 }
                 hopRes?.let {
@@ -595,7 +568,7 @@ class PlayVCloud : ExtractorApi() {
 
             val targetRes = try {
                 PlayNet.fetchWithCf(abs, base, timeout = 25L)
-            } catch (e: Exception) {
+            } catch (_: Exception) {
                 null
             } ?: return
             val emitted = PlayHubCloud.emitHubServers(
@@ -610,9 +583,7 @@ class PlayVCloud : ExtractorApi() {
                     }
                 )
             }
-        } catch (e: Exception) {
-            Log.d(PlayNet.TAG, "vcloud: ${e.message}")
-        }
+        } catch (_: Exception) {}
     }
 
     private fun extractVCloudLink(doc: Document): String? {
@@ -683,9 +654,7 @@ class PlayVegaDrive : ExtractorApi() {
             if (telegram != null && telegram.contains("tgfiles")) {
                 callback(newExtractorLink(name, "V-Drive Telegram", telegram, ExtractorLinkType.VIDEO))
             }
-        } catch (e: Exception) {
-            Log.d(PlayNet.TAG, "vegadrive: ${e.message}")
-        }
+        } catch (_: Exception) {}
     }
 
     // the provider pages only answer when the share page is sent as referer,
@@ -698,7 +667,7 @@ class PlayVegaDrive : ExtractorApi() {
         }
         return try {
             PlayNet.resolveRedirectTarget(start, "$base/")
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             null
         }
     }
@@ -732,7 +701,7 @@ class PlayFilePress : ExtractorApi() {
             if (!infoRes.isSuccessful) return
             val info = try {
                 JSONObject(infoRes.text).optJSONObject("data") ?: return
-            } catch (e: Exception) {
+            } catch (_: Exception) {
                 return
             }
             if (isArchiveName(info.optString("name"))) return
@@ -763,9 +732,7 @@ class PlayFilePress : ExtractorApi() {
                     }
                 }
             }
-        } catch (e: Exception) {
-            Log.d(PlayNet.TAG, "filepress: ${e.message}")
-        }
+        } catch (_: Exception) {}
     }
 
     private fun isArchiveName(name: String): Boolean =
@@ -790,7 +757,7 @@ class PlayFilePress : ExtractorApi() {
             if (!res.isSuccessful) return null
             val parsed = try {
                 JSONObject(res.text)
-            } catch (e: Exception) {
+            } catch (_: Exception) {
                 return null
             }
             if (!parsed.optBoolean("status")) return null
@@ -798,8 +765,7 @@ class PlayFilePress : ExtractorApi() {
                 is String -> data.takeIf { it.isNotBlank() }
                 else -> null
             }
-        } catch (e: Exception) {
-            Log.d(PlayNet.TAG, "filepress download: ${e.message}")
+        } catch (_: Exception) {
             null
         }
     }
@@ -823,7 +789,7 @@ class PlayFilePress : ExtractorApi() {
             if (!res.isSuccessful) return null
             val parsed = try {
                 JSONObject(res.text)
-            } catch (e: Exception) {
+            } catch (_: Exception) {
                 return null
             }
             if (!parsed.optBoolean("status")) return null
@@ -835,8 +801,7 @@ class PlayFilePress : ExtractorApi() {
                     }
                 else -> null
             }
-        } catch (e: Exception) {
-            Log.d(PlayNet.TAG, "filepress final: ${e.message}")
+        } catch (_: Exception) {
             null
         }
     }
@@ -879,13 +844,12 @@ class PlayFilePress : ExtractorApi() {
             if (!res.isSuccessful) return null
             val parsed = try {
                 JSONObject(res.text)
-            } catch (e: Exception) {
+            } catch (_: Exception) {
                 return null
             }
             if (!parsed.optBoolean("success")) return null
             parsed.optString("downloadUrl").takeIf { it.startsWith("http") }
-        } catch (e: Exception) {
-            Log.d(PlayNet.TAG, "dotflix: ${e.message}")
+        } catch (_: Exception) {
             null
         }
     }
@@ -920,8 +884,7 @@ internal object PlayDirectStub {
             val encoded = Regex("""link=(https?://[^&"']+)""").find(carrier)?.groupValues?.get(1) ?: return null
             val direct = URLDecoder.decode(encoded, "UTF-8")
             return direct.takeIf { it.startsWith("http") }
-        } catch (e: Exception) {
-            Log.d(PlayNet.TAG, "direct stub: ${e.message}")
+        } catch (_: Exception) {
             return null
         }
     }
@@ -1001,9 +964,7 @@ class PlayHblinks : ExtractorApi() {
                 if (!href.startsWith("http") || !seen.add(href)) continue
                 loadExtractor(href, url, subtitleCallback, callback)
             }
-        } catch (e: Exception) {
-            Log.d(PlayNet.TAG, "hblinks: ${e.message}")
-        }
+        } catch (_: Exception) {}
     }
 }
 
@@ -1033,9 +994,7 @@ class PlayHubdrive : ExtractorApi() {
                     loadExtractor(href, url, subtitleCallback, callback)
                 }
             }
-        } catch (e: Exception) {
-            Log.d(PlayNet.TAG, "hubdrive: ${e.message}")
-        }
+        } catch (_: Exception) {}
     }
 }
 
@@ -1063,15 +1022,14 @@ class PlayGofile : ExtractorApi() {
                 JSONObject(
                     app.post("$api/accounts", timeout = 15L).text
                 ).getJSONObject("data").getString("token")
-            } catch (e: Exception) {
-                Log.d(PlayNet.TAG, "gofile token: ${e.message}")
+            } catch (_: Exception) {
                 return
             }
             val wt = try {
                 Regex("""appdata\.wt\s*=\s*["']([^"']+)["']""").find(
                     app.get("$api/dist/js/global.js", timeout = 15L).text
                 )?.groupValues?.get(1)
-            } catch (e: Exception) {
+            } catch (_: Exception) {
                 null
             }
             val contentUrl = if (wt.isNullOrBlank()) "$api/contents/$code?wt=$token"
@@ -1103,9 +1061,7 @@ class PlayGofile : ExtractorApi() {
                     }
                 )
             }
-        } catch (e: Exception) {
-            Log.d(PlayNet.TAG, "gofile: ${e.message}")
-        }
+        } catch (_: Exception) {}
     }
 }
 
@@ -1144,7 +1100,7 @@ internal object PlayCrypto {
             .replace("+", "-")
             .replace("/", "_")
             .replace("=", "")
-    } catch (e: Exception) {
+    } catch (_: Exception) {
         null
     }
 
@@ -1160,7 +1116,7 @@ internal object PlayCrypto {
         val cipher = javax.crypto.Cipher.getInstance("AES/CBC/PKCS5Padding")
         cipher.init(javax.crypto.Cipher.DECRYPT_MODE, javax.crypto.spec.SecretKeySpec(key, "AES"), javax.crypto.spec.IvParameterSpec(iv))
         String(cipher.doFinal(raw.copyOfRange(16, raw.size)), Charsets.UTF_8)
-    } catch (e: Exception) {
+    } catch (_: Exception) {
         null
     }
 }
@@ -1221,9 +1177,7 @@ open class PlayGDFlix : ExtractorApi() {
                                 else -> loc
                             }?.takeIf { it.startsWith("http") }
                             if (direct != null) emit(direct, "Instant Download")
-                        } catch (e: Exception) {
-                            Log.d(PlayNet.TAG, "instant dl: ${e.message}")
-                        }
+                        } catch (_: Exception) {}
                     }
                     text.contains("10GBPS", true) -> {
                         try {
@@ -1232,9 +1186,7 @@ open class PlayGDFlix : ExtractorApi() {
                                 val direct = if (target.contains("link=")) target.substringAfter("link=") else target
                                 emit(direct, "10Gbps")
                             }
-                        } catch (e: Exception) {
-                            Log.d(PlayNet.TAG, "10gbps: ${e.message}")
-                        }
+                        } catch (_: Exception) {}
                     }
                     text.contains("DRIVEBOT", true) || link.contains("drivebot") -> {
                         driveBot(abs, fileName, sizeText, quality, callback)
@@ -1249,8 +1201,7 @@ open class PlayGDFlix : ExtractorApi() {
                             ).document
                             cloudDoc.selectFirst("div.card-body a")?.attr("href")?.trim()
                                 ?.takeIf { it.startsWith("http") }?.let { emit(it, "Cloud") }
-                        } catch (e: Exception) {
-                        }
+                        } catch (_: Exception) {}
                     }
                     text.contains("DIRECT DL", true) || text.contains("DIRECT SERVER", true) ->
                         emit(abs, "Direct")
@@ -1265,9 +1216,7 @@ open class PlayGDFlix : ExtractorApi() {
                         PlayGofile().getUrl(abs, res.url, subtitleCallback, callback)
                 }
             }
-        } catch (e: Exception) {
-            Log.d(PlayNet.TAG, "gdflix: ${e.message}")
-        }
+        } catch (_: Exception) {}
     }
 
     private suspend fun driveBot(
@@ -1308,9 +1257,7 @@ open class PlayGDFlix : ExtractorApi() {
                     ) { this.quality = quality }
                 )
             }
-        } catch (e: Exception) {
-            Log.d(PlayNet.TAG, "drivebot: ${e.message}")
-        }
+        } catch (_: Exception) {}
     }
 }
 
@@ -1335,7 +1282,7 @@ internal object PlayNxsha {
                 headers = PlayNet.headers(referer),
                 timeout = 20L
             ).text
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             null
         }
     }
@@ -1346,7 +1293,7 @@ internal object PlayNxsha {
         val plain = PlayCrypto.aesDecrypt(hash, PASSPHRASE) ?: return null
         return try {
             ObjectMapper().readValue(plain, clazz)
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             null
         }
     }
@@ -1377,7 +1324,7 @@ internal object PlayNxsha {
     private suspend fun imdbToTmdb(imdbId: String): String? {
         val body = try {
             app.get("$TMDB_PROXY/find/$imdbId?external_source=imdb_id", timeout = 15L).text
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             return null
         }
         return Regex(""""movie_results"\s*:\s*\[\s*\{[^}]*?"id"\s*:\s*(\d+)""")
@@ -1431,7 +1378,7 @@ internal object PlayNxsha {
                                 base + mapOf("ex_lang" to "false", "provider" to scraper),
                                 embedUrl
                             )
-                        } catch (e: Exception) {
+                        } catch (_: Exception) {
                             null
                         } ?: return@async
                         val sources = decodeHash(sourcesBody, NxSources::class.java)?.sources ?: return@async
@@ -1468,12 +1415,9 @@ internal object PlayNxsha {
                         ?: sub.language?.takeIf { it.isNotBlank() } ?: "English"
                     subtitleCallback(newSubtitleFile(name, uri) {})
                 }
-            } catch (e: Exception) {
-                Log.d(PlayNet.TAG, "nxsha subs: ${e.message}")
-            }
+            } catch (_: Exception) {}
             any
-        } catch (e: Exception) {
-            Log.d(PlayNet.TAG, "nxsha: ${e.message}")
+        } catch (_: Exception) {
             false
         }
     }
@@ -1493,7 +1437,7 @@ internal object PlayVidout {
     private suspend fun getText(url: String): String? = try {
         val res = app.get(url, headers = PlayNet.headers(), timeout = 15L)
         if (res.isSuccessful) res.text else null
-    } catch (e: Exception) {
+    } catch (_: Exception) {
         null
     }
 
@@ -1527,7 +1471,7 @@ internal object PlayVidout {
                             "https://db.speedracelight.com/3/find/$id?external_source=imdb_id",
                             timeout = 15L
                         ).text
-                    } catch (e: Exception) {
+                    } catch (_: Exception) {
                         return false
                     }
                     Regex("\"movie_results\"\\s*:\\s*\\[\\s*\\{[^}]*?\"id\"\\s*:\\s*(\\d+)")
@@ -1558,8 +1502,7 @@ internal object PlayVidout {
             loadCdnSubtitles(url, subtitleCallback)
             loadGithubSubtitles(tmdbId, season, episode, subtitleCallback)
             true
-        } catch (e: Exception) {
-            Log.d(PlayNet.TAG, "vidout: ${e.message}")
+        } catch (_: Exception) {
             false
         }
     }
@@ -1574,8 +1517,7 @@ internal object PlayVidout {
                     this.headers = mapOf("Referer" to REFERER)
                 })
             }
-        } catch (e: Exception) {
-        }
+        } catch (_: Exception) {}
     }
 
     private suspend fun loadGithubSubtitles(
@@ -1595,8 +1537,6 @@ internal object PlayVidout {
             for (m in Regex(""""([a-z]{2})"\s*:\s*"(https?[^"]+)"""").findAll(body)) {
                 subtitleCallback(newSubtitleFile(m.groupValues[1].uppercase(), PlayNet.deEsc(m.groupValues[2])) {})
             }
-        } catch (e: Exception) {
-            Log.d(PlayNet.TAG, "vidout subs: ${e.message}")
-        }
+        } catch (_: Exception) {}
     }
 }

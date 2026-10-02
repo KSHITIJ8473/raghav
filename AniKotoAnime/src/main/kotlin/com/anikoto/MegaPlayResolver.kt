@@ -3,7 +3,6 @@ package com.anikoto
 import android.util.Base64
 import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.newSubtitleFile
@@ -18,7 +17,6 @@ import javax.crypto.spec.SecretKeySpec
 // megaplay clones encrypt the enc field of their sources response; the key
 // material sits in lib/newclient.min.js, with pinned fallbacks
 object MegaPlayCipher {
-    private const val TAG = "MegaPlay"
     private const val FALLBACK_KEY_SEED = "i?LMTAx0Q6,:}50U"
     private const val FALLBACK_IV_SEED = "W0;27ToaUpl_P%'c"
 
@@ -60,8 +58,7 @@ object MegaPlayCipher {
             val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
             cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(keyBytes, "AES"), IvParameterSpec(ivBytes))
             String(cipher.doFinal(cipherBytes), Charsets.UTF_8)
-        } catch (e: Exception) {
-            Log.d(TAG, "token decrypt failed: ${e.message}")
+        } catch (_: Exception) {
             null
         }
     }
@@ -76,7 +73,6 @@ object MegaPlayCipher {
 }
 
 object MegaPlayResolver {
-    private const val TAG = "MegaPlay"
     private val mapper = ObjectMapper()
 
     private const val USER_AGENT =
@@ -98,8 +94,7 @@ object MegaPlayResolver {
 
         val pageHtml = try {
             app.get(embedUrl, headers = pageHeaders).text
-        } catch (e: Exception) {
-            Log.d(TAG, "embed page failed for $host: ${e.message}")
+        } catch (_: Exception) {
             return null
         }
 
@@ -167,8 +162,7 @@ object MegaPlayResolver {
     private suspend fun fetchJson(url: String, headers: Map<String, String>): JsonNode? {
         return try {
             mapper.readTree(app.get(url, headers = headers, timeout = 15_000L).text)
-        } catch (e: Exception) {
-            Log.d(TAG, "sources request failed: ${e.message}")
+        } catch (_: Exception) {
             null
         }
     }
@@ -244,8 +238,7 @@ object MegaPlayResolver {
         val signedMaster = signUrl(m3u8)
         val masterText = try {
             app.get(signedMaster, headers = playHeaders, timeout = 15_000L).text
-        } catch (e: Exception) {
-            Log.d(TAG, "master playlist fetch failed: ${e.message}")
+        } catch (_: Exception) {
             null
         }
 
@@ -288,4 +281,3 @@ object MegaPlayResolver {
         return found
     }
 }
-

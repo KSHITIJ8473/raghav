@@ -151,8 +151,7 @@ object FlixProxy {
                 }
                 else -> send404(conn)
             }
-        } catch (e: Exception) {
-        } finally {
+        } catch (_: Exception) {} finally {
             try { conn.close() } catch (_: Exception) {}
         }
     }
@@ -421,8 +420,7 @@ object FlixProxy {
             try {
                 val raw = fetchBytes(url) ?: return@execute
                 cachePut(url, unwrapBytes(raw))
-            } catch (e: Exception) {
-            } finally {
+            } catch (_: Exception) {} finally {
                 inFlight.remove(url)
             }
         }

@@ -9,7 +9,6 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties
 import com.fasterxml.jackson.annotation.JsonProperty
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.AppUtils.toJson
@@ -122,7 +121,7 @@ fun translateEpisodeId(encodedId: String): String {
         val padded = encodedId + "=".repeat((4 - encodedId.length % 4) % 4)
         val decoded = Base64.decode(padded, Base64.URL_SAFE).toString(Charsets.UTF_8)
         if (decoded.contains(":")) decoded else encodedId
-    } catch (e: Exception) {
+    } catch (_: Exception) {
         encodedId
     }
 }
@@ -133,7 +132,6 @@ const val CF_USER_AGENT =
     "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
 
 object MiruroCloudflare {
-    private const val TAG = "MiruroCF"
     private val workingDomain = AtomicReference<String?>(MIRURO_DEFAULT_DOMAIN)
 
     @Volatile private var sessionWebView: WebView? = null
@@ -194,9 +192,7 @@ object MiruroCloudflare {
                 if (alive != null && alive != "null" && alive.isNotBlank()) {
                     return
                 }
-            } catch (e: Exception) {
-                Log.e(TAG, "liveness check failed: ${e.message}")
-            }
+            } catch (_: Exception) {}
         }
 
         warmupMutex.withLock {
@@ -210,7 +206,6 @@ object MiruroCloudflare {
     }
 
     private suspend fun warmupSession(context: Context, domain: String) {
-        Log.d(TAG, "warming up: $domain")
         val start = System.currentTimeMillis()
         try {
             withContext(Dispatchers.Main) {
@@ -224,9 +219,7 @@ object MiruroCloudflare {
                             sessionReady = success
                             if (success) {
                                 sessionReadyTime = System.currentTimeMillis()
-                                Log.d(TAG, "warmup done in ${System.currentTimeMillis() - start}ms")
                             } else {
-                                Log.e(TAG, "warmup failed after ${System.currentTimeMillis() - start}ms")
                                 try { webView?.destroy() } catch (_: Exception) {}
                                 sessionWebView = null
                             }
@@ -291,14 +284,12 @@ object MiruroCloudflare {
                         Handler(Looper.getMainLooper()).postDelayed({
                             finish(false)
                         }, 25000)
-                    } catch (e: Exception) {
-                        Log.e(TAG, "warmup exception: ${e.message}")
+                    } catch (_: Exception) {
                         finish(false)
                     }
                 }
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "warmup outer exception: ${e.message}")
+        } catch (_: Exception) {
             sessionReady = false
         }
     }
@@ -355,8 +346,7 @@ object MiruroCloudflare {
 
                     try {
                         wv.evaluateJavascript(js) {}
-                    } catch (e: Exception) {
-                        Log.e(TAG, "inject failed: ${e.message}")
+                    } catch (_: Exception) {
                         finish(null)
                         return@suspendCancellableCoroutine
                     }
@@ -391,8 +381,7 @@ object MiruroCloudflare {
                                         pollHandler.postDelayed(this, 300)
                                     }
                                 }
-                            } catch (e: Exception) {
-                                Log.e(TAG, "poll failed: ${e.message}")
+                            } catch (_: Exception) {
                                 finish(null)
                             }
                         }
@@ -411,8 +400,7 @@ object MiruroCloudflare {
         if (context == null) return null
         try {
             ensureSession(context, domain)
-        } catch (e: Exception) {
-            Log.e(TAG, "ensureSession failed: ${e.message}")
+        } catch (_: Exception) {
             return null
         }
         if (!sessionReady) return null
@@ -428,9 +416,7 @@ object MiruroCloudflare {
             if (sessionReady) {
                 return fetchViaSession(pipeUrl, domain)
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "retry failed: ${e.message}")
-        }
+        } catch (_: Exception) {}
         return null
     }
 

@@ -2,7 +2,6 @@ package com.laddu100
 
 import android.util.Base64
 import com.fasterxml.jackson.annotation.JsonProperty
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
@@ -295,18 +294,14 @@ class AniSugeProvider : MainAPI() {
             if (loadLegacyServers(baseUrl, dataIds, selectedType, subtitleCallback, callback)) {
                 anyLoaded = true
             }
-        } catch (e: Exception) {
-            Log.d("AniSuge", "legacy server path failed: ${e.message}")
-        }
+        } catch (_: Exception) {}
 
         if (!malId.isNullOrBlank() && !timestamp.isNullOrBlank()) {
             try {
                 if (loadMapperSources(baseUrl, malId, slug, timestamp, selectedType, subtitleCallback, callback)) {
                     anyLoaded = true
                 }
-            } catch (e: Exception) {
-                Log.d("AniSuge", "mapper path failed: ${e.message}")
-            }
+            } catch (_: Exception) {}
         }
 
         anyLoaded
@@ -380,9 +375,7 @@ class AniSugeProvider : MainAPI() {
                     if (resolveEmbed(playerUrl, baseUrl, serverName, subtitleCallback, wrappedCallback)) {
                         loadedSingle = true
                     }
-                } catch (e: Exception) {
-                    Log.e("AniSuge", "server $serverName failed: ${e.message}")
-                }
+                } catch (_: Exception) {}
                 loadedSingle
             }
         }.awaitAll()
@@ -430,9 +423,7 @@ class AniSugeProvider : MainAPI() {
                     if (resolveEmbed(embedUrl, baseUrl, displayName, subtitleCallback, callback)) {
                         anyLoaded = true
                     }
-                } catch (e: Exception) {
-                    Log.d("AniSuge", "embed $displayName failed: ${e.message}")
-                }
+                } catch (_: Exception) {}
             }
 
             for ((qualityLabel, paheUrl) in entry.downloads) {
@@ -454,9 +445,7 @@ class AniSugeProvider : MainAPI() {
                         }
                     )
                     anyLoaded = true
-                } catch (e: Exception) {
-                    Log.d("AniSuge", "download $displayName $qualityLabel failed: ${e.message}")
-                }
+                } catch (_: Exception) {}
             }
         }
         return anyLoaded
@@ -473,7 +462,7 @@ class AniSugeProvider : MainAPI() {
             val b64 = playerUrl.substringAfter("#").substringBefore("#")
             val decodedUrl = try {
                 String(Base64.decode(b64, Base64.DEFAULT), Charsets.UTF_8)
-            } catch (e: Exception) {
+            } catch (_: Exception) {
                 ""
             }
             if (decodedUrl.isNotBlank()) {
@@ -506,13 +495,12 @@ class AniSugeProvider : MainAPI() {
                     stream.subtitles, subtitleCallback, callback
                 )
             }
-            Log.e("AniSuge", "megaplay resolution failed for $serverName")
             return false
         }
 
         val loaded = try {
             loadExtractor(playerUrl, "$baseUrl/", subtitleCallback, callback)
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             false
         }
         if (!loaded) {
@@ -553,9 +541,7 @@ class AniSugeProvider : MainAPI() {
                         return true
                     }
                 }
-            } catch (e: Exception) {
-                Log.e("AniSuge", "webview fallback failed for $serverName: ${e.message}")
-            }
+            } catch (_: Exception) {}
         }
         return loaded
     }

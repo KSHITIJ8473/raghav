@@ -1,7 +1,6 @@
 package com.laddu100
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.AppUtils.toJson
@@ -24,7 +23,6 @@ class ReplayZoneProvider : MainAPI() {
 
     private val dataUrl = "https://replay.adityapangshe.workers.dev/replays.txt"
     private val workerUrl = "https://replay.adityapangshe.workers.dev"
-    private val TAG = "ReplayZone"
 
     // Parsed replay data
     data class ReplayEmbed(
@@ -102,11 +100,9 @@ class ReplayZoneProvider : MainAPI() {
                 replays.add(current)
             }
 
-            Log.d(TAG, "fetchReplays: parsed ${replays.size} replays")
             cachedReplays = replays
             replays
-        } catch (e: Exception) {
-            Log.e(TAG, "fetchReplays FAILED: ${e.message}")
+        } catch (_: Exception) {
             emptyList()
         }
     }
@@ -119,7 +115,6 @@ class ReplayZoneProvider : MainAPI() {
         try {
             val replays = fetchReplays()
             if (replays.isEmpty()) {
-                Log.e(TAG, "getMainPage: no replays found")
                 return newHomePageResponse(lists, hasNext = false)
             }
 
@@ -146,11 +141,8 @@ class ReplayZoneProvider : MainAPI() {
                     }
                 }
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "main page failed: ${e.message}")
-        }
+        } catch (_: Exception) {}
 
-        Log.d(TAG, "main page: ${lists.size} sections, ${lists.sumOf { it.list.size }} items")
         return newHomePageResponse(lists, hasNext = false)
     }
 
@@ -174,10 +166,8 @@ class ReplayZoneProvider : MainAPI() {
             val results = replays
                 .filter { it.title.contains(query, ignoreCase = true) }
                 .mapNotNull { it.toSearchResponse() }
-            Log.d(TAG, "search '$query' -> ${results.size} results")
             results
-        } catch (e: Exception) {
-            Log.e(TAG, "search FAILED: ${e.message}")
+        } catch (_: Exception) {
             emptyList()
         }
     }
@@ -192,8 +182,7 @@ class ReplayZoneProvider : MainAPI() {
                 this.plot = "${loadData.embeds.size} sources available"
                 this.dataUrl = loadData.toJson()
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "load FAILED: ${e.message}")
+        } catch (_: Exception) {
             null
         }
     }
@@ -207,13 +196,11 @@ class ReplayZoneProvider : MainAPI() {
 
         val loadData = try {
             parseJson<LoadData>(data)
-        } catch (e: Exception) {
-            Log.e(TAG, "loadLinks: parse error: ${e.message}")
+        } catch (_: Exception) {
             return false
         }
 
         if (loadData.embeds.isEmpty()) {
-            Log.e(TAG, "loadLinks: no embeds")
             return false
         }
 
@@ -270,11 +257,8 @@ class ReplayZoneProvider : MainAPI() {
                                 )
                                 found = true
                             } else {
-                                Log.e(TAG, "loadLinks: '${embed.label}' no m3u8 found in play page")
                             }
-                        } catch (e: Exception) {
-                            Log.e(TAG, "loadLinks: '${embed.label}' soccerfull scrape failed: ${e.message}")
-                        }
+                        } catch (_: Exception) {}
                     }
 
                     // ok.ru — built-in extractor
@@ -286,7 +270,6 @@ class ReplayZoneProvider : MainAPI() {
                         if (loaded) {
                             found = true
                         } else {
-                            Log.e(TAG, "loadLinks: '${embed.label}' ok.ru loadExtractor failed")
                         }
                     }
 
@@ -299,10 +282,8 @@ class ReplayZoneProvider : MainAPI() {
                             if (loaded) {
                                 found = true
                             } else {
-                                Log.e(TAG, "loadLinks: '${embed.label}' dailymotion loadExtractor failed")
                             }
                         } else {
-                            Log.e(TAG, "loadLinks: '${embed.label}' no dailymotion video ID found")
                         }
                     }
 
@@ -312,7 +293,6 @@ class ReplayZoneProvider : MainAPI() {
                         if (loaded) {
                             found = true
                         } else {
-                            Log.e(TAG, "loadLinks: '${embed.label}' bysesukior loadExtractor failed")
                         }
                     }
 
@@ -347,18 +327,13 @@ class ReplayZoneProvider : MainAPI() {
                         val loaded = loadExtractor(embed.url, "$mainUrl/", subtitleCallback, callback)
                         if (loaded) {
                             found = true
-                            Log.d(TAG, "loadLinks: '${embed.label}' resolved via fallback")
                         } else {
-                            Log.e(TAG, "loadLinks: '${embed.label}' fallback failed")
                         }
                     }
                 }
-            } catch (e: Exception) {
-                Log.e(TAG, "loadLinks: '${embed.label}' FAILED: ${e.message}")
-            }
+            } catch (_: Exception) {}
         }
 
-        Log.d(TAG, "loadLinks found=$found")
         return found
     }
 }

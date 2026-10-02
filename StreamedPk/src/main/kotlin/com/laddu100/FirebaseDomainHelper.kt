@@ -1,7 +1,6 @@
 package com.laddu100
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 
@@ -9,7 +8,6 @@ import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 // without shipping a plugin update; lookups try "key" and "key_url"
 @JsonIgnoreProperties(ignoreUnknown = true)
 object FirebaseDomainHelper {
-    private const val TAG = "FirebaseDomainHelper"
     private const val URL = "https://cloudstreampluginhelper-default-rtdb.firebaseio.com/.json"
     private const val CACHE_TTL_MS = 5 * 60 * 1000L
 
@@ -41,9 +39,8 @@ object FirebaseDomainHelper {
             }.toMap()
             lastLoadTime = now
             everLoadedSuccessfully = true
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             // keep a stale cache serving and retry after the ttl
-            Log.e(TAG, "domain load failed - ${e.message}")
             lastLoadTime = now
         }
     }

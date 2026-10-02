@@ -2,14 +2,12 @@ package com.csksy.anichan
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.KotlinModule
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.app
 import kotlinx.coroutines.delay
 
 object AniChanApi {
 
     const val MAIN_URL = "https://anichan.to"
-    private const val TAG = "AniChan"
     private const val SESSION_ATTEMPTS = 4
 
     private val mapper = ObjectMapper().registerModule(KotlinModule.Builder().build())
@@ -25,16 +23,14 @@ object AniChanApi {
     private inline fun <reified T> parse(text: String): T? =
         try {
             mapper.readValue(text, T::class.java)
-        } catch (e: Exception) {
-            Log.e(TAG, "parse failed: ${e.message}")
+        } catch (_: Exception) {
             null
         }
 
     private suspend fun getJson(url: String): String? = try {
         val resp = app.get(url, headers = BASE_HEADERS)
         if (resp.isSuccessful) resp.text else null
-    } catch (e: Exception) {
-        Log.e(TAG, "GET $url failed: ${e.message}")
+    } catch (_: Exception) {
         null
     }
 
@@ -78,8 +74,7 @@ object AniChanApi {
                 }
             }
             null
-        } catch (e: Exception) {
-            Log.e(TAG, "watch session failed: ${e.message}")
+        } catch (_: Exception) {
             null
         }
     }
@@ -97,9 +92,7 @@ object AniChanApi {
                     if (resp.isSuccessful) {
                         return parse<ServersEnvelope>(resp.text)?.servers ?: emptyList()
                     }
-                } catch (e: Exception) {
-                    Log.e(TAG, "watch servers failed: ${e.message}")
-                }
+                } catch (_: Exception) {}
             }
             delay(400)
         }

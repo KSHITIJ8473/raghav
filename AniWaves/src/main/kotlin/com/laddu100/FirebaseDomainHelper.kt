@@ -31,8 +31,7 @@ object FirebaseDomainHelper {
                 }
                 strVal?.takeIf { it.isNotBlank() }?.let { k to it.removeSuffix("/") }
             }.toMap()
-        } catch (_: Exception) {
-        }
+        } catch (_: Exception) {}
         lastLoadTime = now
     }
 

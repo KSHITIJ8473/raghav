@@ -16,7 +16,6 @@ import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.TvType
 import com.lagradost.cloudstream3.addDubStatus
 import com.lagradost.cloudstream3.addEpisodes
-import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.mainPageOf
 import com.lagradost.cloudstream3.newAnimeLoadResponse
 import com.lagradost.cloudstream3.newAnimeSearchResponse
@@ -29,11 +28,11 @@ import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.getQualityFromName
 import com.lagradost.cloudstream3.utils.newExtractorLink
+import com.raghav.donation.DonationManager
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
-import com.raghav.donation.DonationManager
 
 class SenshiProvider : MainAPI() {
     override var mainUrl = "https://senshi.to"
@@ -44,8 +43,6 @@ class SenshiProvider : MainAPI() {
     override val supportedTypes = setOf(TvType.Anime, TvType.AnimeMovie, TvType.OVA)
 
     private val TAG = "Senshi"
-
-    private val vidcloudApi = "https://s.vidcloud.se/_v1/sources?id="
 
     private val ua =
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
@@ -64,9 +61,7 @@ class SenshiProvider : MainAPI() {
         "Referer" to "$mainUrl/browse"
     )
 
-    // mirrors the header set the site player sends on cross-origin XHRs to the
-    // stream api and cdn, the waf there rejects plain requests without them
-    // (the sources endpoint started requiring Origin, same pattern as the cdn)
+    // the waf rejects cross-origin player requests without the full browser header set
     private val cdnHeaders = mapOf(
         "User-Agent" to ua,
         "Accept" to "*/*",
@@ -208,8 +203,7 @@ class SenshiProvider : MainAPI() {
         var hasSub = (anime.sub_count ?: 0) > 0
         var hasDub = (anime.dub_count ?: 0) > 0
         if (!hasSub && !hasDub && sorted.isNotEmpty()) {
-            // counts can be stale on freshly uploaded entries, fall back to the
-            // first episode's embed list
+            // counts can be stale on fresh uploads, probe the first episode
             hasSub = true
             probeEmbeds(malId, sorted.first().ep_id!!)?.let { statuses ->
                 hasSub = statuses.any { it.isSub() }
@@ -238,9 +232,7 @@ class SenshiProvider : MainAPI() {
         }
     }
 
-    // dub episodes normally run from episode 1 up to dub_count, but on ongoing
-    // shows the count can lag behind the episode list, so the last few trailing
-    // episodes are checked for dub embeds before cutting the list short
+    // dub_count can lag behind the episode list on ongoing shows, trailing episodes get probed
     private suspend fun buildDubEpisodes(
         malId: Int,
         episodes: List<SenshiEpisode>,
@@ -296,8 +288,7 @@ class SenshiProvider : MainAPI() {
         val matching = embeds.filter { if (wantDub) it.isDub() else it.isSub() }
             .ifEmpty { embeds }
 
-        // sub and dub entries usually point at the same multi-audio stream, so
-        // the source api is only hit once per unique id
+        // sub and dub entries usually share one multi-audio stream, hit each id once
         val sourceIds = matching.mapNotNull { it.remote_source_id }.distinct()
         if (sourceIds.isEmpty()) {
             Log.e(TAG, "loadLinks: embeds carry no source ids")
@@ -328,9 +319,7 @@ class SenshiProvider : MainAPI() {
         return found
     }
 
-    // the cdn hands out aes-gcm encrypted playlists prefixed with EM3U8v1:, they
-    // are decrypted locally and served through a rewriting proxy so every link
-    // can pin one resolution and one audio track
+    // masters arrive as plain hls or EM3U8v1 payloads, the proxy pins one resolution and audio track per link
     private suspend fun emitStreamLinks(
         master: String,
         modeLabel: String,
@@ -338,12 +327,20 @@ class SenshiProvider : MainAPI() {
         apiQuality: String?,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val masterText: String? = try {
-            val res = cfGet(master, headers = cdnHeaders, timeout = 20_000L)
-            if (res.code == 200) res.text else null
-        } catch (e: Exception) {
-            Log.e(TAG, "master fetch failed: ${e.message}")
-            null
+        // cdn edges answer 403 on burst fetches, retry quietly a couple of times
+        var masterText: String? = null
+        for (attempt in 0..2) {
+            if (attempt > 0) {
+                delay(1200L)
+            }
+            masterText = try {
+                val res = cfGet(master, headers = cdnHeaders, timeout = 20_000L)
+                if (res.code == 200) res.text else null
+            } catch (e: Exception) {
+                Log.d(TAG, "master fetch failed: ${e.message}")
+                null
+            }
+            if (masterText != null) break
         }
 
         var playlist = masterText
@@ -420,21 +417,19 @@ class SenshiProvider : MainAPI() {
                 delay(2500L * attempt)
             }
             text = try {
-                val res = app.get("$vidcloudApi$sourceId", headers = cdnHeaders, timeout = 20_000L)
-                if (res.code == 200) res.text else null
+                SenshiVhost.fetchSources(sourceId)
             } catch (e: Exception) {
                 Log.d(TAG, "vidcloud $sourceId request failed: ${e.message}")
                 null
             }
-            if (text != null && !text.contains("too_many_requests")) break
-            text = null
+            if (text != null) break
         }
         if (text == null) {
             Log.e(TAG, "vidcloud source $sourceId unavailable after retries")
             return null
         }
         return try {
-            parseJson<List<VidcloudSource>>(text).firstOrNull()
+            parseJson<VidcloudEnvelope>(text).p.firstOrNull()
         } catch (e: Exception) {
             Log.e(TAG, "vidcloud source $sourceId parse failed: ${e.message}")
             null
@@ -470,8 +465,7 @@ class SenshiProvider : MainAPI() {
         }
     }
 
-    // movie types hide the sub/dub switcher in the app, so dual-audio movies are
-    // typed as regular anime to keep both tracks reachable
+    // dual-audio movies are typed as anime so the sub/dub switcher stays reachable
     private fun SenshiAnime.tvType(dualAudio: Boolean = false): TvType = when (type?.uppercase()) {
         "MOVIE" -> if (dualAudio) TvType.Anime else TvType.AnimeMovie
         "OVA", "ONA", "SPECIAL", "MUSIC" -> TvType.OVA
@@ -514,9 +508,7 @@ class SenshiProvider : MainAPI() {
         return null
     }
 
-    // dub mode keeps the dub captions (they match the english audio), sub mode
-    // keeps the regular translation tracks; each falls back to the other set
-    // when the stream only carries one kind
+    // dub mode keeps dub captions, sub mode the translation tracks, with fallback to the other set
     private fun VidcloudSource.subtitlesFor(wantDub: Boolean): List<VidcloudTrack> {
         val usable = tracks.filter { it.trackLabel() != null }
         val dub = usable.filter { it.isDubTrack() }

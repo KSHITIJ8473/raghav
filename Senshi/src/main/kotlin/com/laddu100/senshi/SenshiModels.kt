@@ -89,3 +89,8 @@ data class VidcloudSource(
     val source: VidcloudFile? = null,
     val tracks: List<VidcloudTrack> = emptyList()
 )
+
+@JsonIgnoreProperties(ignoreUnknown = true)
+data class VidcloudEnvelope(
+    val p: List<VidcloudSource> = emptyList()
+)

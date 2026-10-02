@@ -430,14 +430,20 @@ object SenshiProxy {
     }
 
     private fun fetchText(url: String, entry: StreamEntry): String? {
-        return try {
-            client.newCall(buildUpstream(url, entry).build()).execute().use { resp ->
-                if (resp.isSuccessful) resp.body?.string() else null
+        // cdn edges occasionally 403 on burst rendition fetches, one short retry helps
+        for (attempt in 0..1) {
+            try {
+                val text = client.newCall(buildUpstream(url, entry).build()).execute().use { resp ->
+                    if (resp.isSuccessful) resp.body?.string() else null
+                }
+                if (text != null) return text
+            } catch (e: Exception) {
+                Log.d(TAG, "upstream fetch failed: ${e.message}")
+                return null
             }
-        } catch (e: Exception) {
-            Log.d(TAG, "upstream fetch failed: ${e.message}")
-            null
+            if (attempt == 0) Thread.sleep(700)
         }
+        return null
     }
 
     private fun fetchBytes(url: String, entry: StreamEntry): ByteArray? {

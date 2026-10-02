@@ -159,10 +159,8 @@ internal object PlayNet {
         ""
     }
 
-    // okhttp gives up after 20 redirects and some drive pages bounce between
-    // ad mirrors forever, walking the location headers by hand survives that,
-    // the jar matters because cloudflare hands out the clearance cookie on
-    // one hop and expects it back on the next one
+    // okhttp gives up after 20 redirects and some drive pages bounce between ad mirrors forever,
+    // walk the headers by hand with the cookie jar so the cloudflare clearance survives each hop
     suspend fun followManually(url: String, referer: String?): NiceResponse? {
         var current = url
         val jar = mutableMapOf<String, String>()
@@ -194,9 +192,7 @@ internal object PlayNet {
         else -> url
     }
 
-    // a real cloudflare challenge answers with the cf-mitigated header or the
-    // interstitial body, a rate limit or an outage answers with neither and
-    // only the real challenge is worth a webview solve
+    // only a real cloudflare challenge (cf-mitigated header or interstitial body) is worth a webview solve
     private fun isCfChallenge(res: NiceResponse): Boolean {
         if (res.headers["cf-mitigated"] == "challenge") return true
         val body = try { res.text.lowercase() } catch (_: Exception) { "" }

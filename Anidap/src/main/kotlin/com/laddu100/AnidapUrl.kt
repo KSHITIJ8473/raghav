@@ -79,9 +79,7 @@ internal object AnidapUrl {
             "beep" -> r = beepRewrite(r)
         }
 
-        // the site falls back to the proxy keyed by the response referer for
-        // anything its handlers did not rewrite - that path is what makes
-        // zuna, loli and adp dub urls playable
+        // the site falls back to the proxy keyed by the response referer for anything it did not rewrite
         if (r == url && !referer.isNullOrBlank() && p !in FALLBACK_EXCLUDE) {
             return uwuProxy(url, referer)
         }

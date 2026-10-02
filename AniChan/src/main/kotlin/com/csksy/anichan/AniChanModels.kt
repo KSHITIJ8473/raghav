@@ -50,7 +50,16 @@ data class EpMeta(
 @JsonIgnoreProperties(ignoreUnknown = true)
 data class WatchInfo(
     @JsonProperty("episodes") val episodes: Int? = null,
-    @JsonProperty("dubAvailable") val dubAvailable: Boolean? = null
+    @JsonProperty("dubAvailable") val dubAvailable: Boolean? = null,
+    @JsonProperty("sources") val sources: List<WatchSource>? = null
+)
+
+@JsonIgnoreProperties(ignoreUnknown = true)
+data class WatchSource(
+    @JsonProperty("name") val name: String? = null,
+    @JsonProperty("host") val host: String? = null,
+    @JsonProperty("sub") val sub: Boolean? = null,
+    @JsonProperty("dub") val dub: Boolean? = null
 )
 
 @JsonIgnoreProperties(ignoreUnknown = true)
@@ -62,7 +71,9 @@ data class ServersEnvelope(
 data class Server(
     @JsonProperty("name") val name: String? = null,
     @JsonProperty("label") val label: String? = null,
+    @JsonProperty("host") val host: String? = null,
     @JsonProperty("type") val type: String? = null,
+    @JsonProperty("rank") val rank: Int? = null,
     @JsonProperty("stream") val stream: String? = null,
     @JsonProperty("embed") val embed: String? = null,
     @JsonProperty("subType") val subType: String? = null,
@@ -84,6 +95,7 @@ data class VidhawkRace(
 @JsonIgnoreProperties(ignoreUnknown = true)
 data class VidhawkServer(
     @JsonProperty("id") val id: String? = null,
+    @JsonProperty("label") val label: String? = null,
     @JsonProperty("ticket") val ticket: String? = null
 )
 

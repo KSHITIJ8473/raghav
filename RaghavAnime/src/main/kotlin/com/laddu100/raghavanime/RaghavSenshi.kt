@@ -92,12 +92,14 @@ class RaghavSenshi : MainAPI() {
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
+        mainUrl = FirebaseDomainHelper.getDomain("senshi") ?: mainUrl
         if (query.isBlank()) return emptyList()
         val resp = postFilter(SenshiFilterBody(searchTerm = query, page = 1, limit = 30)) ?: return emptyList()
         return resp.data.mapNotNull { it.toSearchResponse() }
     }
 
     override suspend fun load(url: String): LoadResponse? {
+        mainUrl = FirebaseDomainHelper.getDomain("senshi") ?: mainUrl
         val publicId = url.substringBefore("?").substringAfterLast("/")
         if (publicId.isBlank()) {
             return null

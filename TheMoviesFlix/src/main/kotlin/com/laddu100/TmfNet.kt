@@ -43,9 +43,7 @@ object TmfNet {
     @Volatile
     private var activeDomain: String? = null
 
-    // the firebase entry regularly points at a mirror that is dead or
-    // cloudflare walled, whichever candidate answers first is used for the
-    // rest of the session
+    // the firebase entry regularly points at a dead or cloudflare walled mirror, first answer wins
     suspend fun domain(): String {
         activeDomain?.let { return it }
         return domainMutex.withLock {
@@ -202,9 +200,8 @@ object TmfNet {
         else -> url
     }
 
-    // nexdrive and mobilejsr serve the same drive app, when one host has a
-    // bad day the other usually still answers, zip pack pages are skipped
-    // because no player can open an archive
+    // nexdrive and mobilejsr serve the same drive app, when one has a bad day the other answers,
+    // zip pack pages are skipped because no player can open an archive
     suspend fun fetchDrivePage(url: String): DrivePage? {
         val key = url.replace("mobilejsr.rest", "nexdrive.fit")
         driveCache[key]?.let { cached ->

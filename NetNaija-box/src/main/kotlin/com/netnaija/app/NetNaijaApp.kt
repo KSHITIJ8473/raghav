@@ -1333,9 +1333,7 @@ class NetNaijaApp(private val sharedPref: SharedPreferences?) : MainAPI() {
 
         activeDubs.amap { (subjectId, language, initialDubDetailUrl) ->
             try {
-                // a dub without a detail url needs a subject record lookup,
-                // otherwise the dubs entry already knows the authoritative
-                // page for the play request
+                // a dub without a detail url needs a subject record lookup, the dubs entry already knows the page
                 var currentDetailUrl: String? = initialDubDetailUrl
                 var dubPath: String? = mainDetailPath
                 if (subjectId != originalSubjectId && currentDetailUrl.isNullOrBlank()) {

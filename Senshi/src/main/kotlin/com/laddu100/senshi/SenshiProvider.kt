@@ -108,6 +108,8 @@ class SenshiProvider : MainAPI() {
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse? {
         DonationManager.checkAndShow()
+        mainUrl = FirebaseDomainHelper.getDomain("senshi") ?: mainUrl
+        SenshiVhost.refreshDomain()
         return try {
             when (request.data) {
                 "latest" -> {
@@ -159,11 +161,13 @@ class SenshiProvider : MainAPI() {
 
     override suspend fun search(query: String): List<SearchResponse> {
         if (query.isBlank()) return emptyList()
+        mainUrl = FirebaseDomainHelper.getDomain("senshi") ?: mainUrl
         val resp = postFilter(SenshiFilterBody(searchTerm = query, page = 1, limit = 30)) ?: return emptyList()
         return resp.data.mapNotNull { it.toSearchResponse() }
     }
 
     override suspend fun load(url: String): LoadResponse? {
+        mainUrl = FirebaseDomainHelper.getDomain("senshi") ?: mainUrl
         val publicId = url.substringBefore("?").substringAfterLast("/")
         if (publicId.isBlank()) {
             return null
@@ -260,6 +264,8 @@ class SenshiProvider : MainAPI() {
         } catch (_: Exception) {
             return false
         }
+        mainUrl = FirebaseDomainHelper.getDomain("senshi") ?: mainUrl
+        SenshiVhost.refreshDomain()
         val wantDub = epData.type == "dub"
         val modeLabel = if (wantDub) "Dub" else "Sub"
 

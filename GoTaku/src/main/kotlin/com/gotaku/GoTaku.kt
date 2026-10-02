@@ -34,6 +34,8 @@ class GoTaku : MainAPI() {
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         DonationManager.checkAndShow()
+        GoTakuApi.refreshDomain()
+        mainUrl = GoTakuApi.site()
         val params = mutableMapOf(
             "sort" to "latest",
             "limit" to "28",
@@ -51,11 +53,15 @@ class GoTaku : MainAPI() {
 
     override suspend fun search(query: String): List<SearchResponse> {
         if (query.isBlank()) return emptyList()
+        GoTakuApi.refreshDomain()
+        mainUrl = GoTakuApi.site()
         val (titles, _) = GoTakuApi.fetchTitles(mapOf("q" to query, "limit" to "28"))
         return titles.mapNotNull { it.toSearchResponse() }
     }
 
     override suspend fun load(url: String): LoadResponse? {
+        GoTakuApi.refreshDomain()
+        mainUrl = GoTakuApi.site()
         val titleId = url.substringAfter("title/").substringBefore("?").takeIf { it.isNotBlank() } ?: return null
         val detail = GoTakuApi.fetchTitleDetail(titleId) ?: return null
         val title = detail.name ?: return null
@@ -175,8 +181,8 @@ class GoTaku : MainAPI() {
     private suspend fun resolveStream(embedUrl: String): ResolvedStream? {
         return try {
             val html = com.lagradost.cloudstream3.app.get(
-                GoTakuApi.SITE + embedUrl,
-                headers = GoTakuApi.browserHeaders + mapOf("Referer" to "${GoTakuApi.SITE}/")
+                GoTakuApi.site() + embedUrl,
+                headers = GoTakuApi.browserHeaders + mapOf("Referer" to "${GoTakuApi.site()}/")
             ).text
 
             val base = Regex("""data-manifest-base="([^"]+)"""").find(html)?.groupValues?.get(1) ?: return null
@@ -192,8 +198,8 @@ class GoTaku : MainAPI() {
                     val response = com.lagradost.cloudstream3.app.get(
                         manifest.source,
                         headers = GoTakuApi.browserHeaders + mapOf(
-                            "Referer" to "${GoTakuApi.SITE}/",
-                            "Origin" to GoTakuApi.SITE
+                            "Referer" to "${GoTakuApi.site()}/",
+                            "Origin" to GoTakuApi.site()
                         )
                     )
                     if (response.isSuccessful) response.body.bytes() else null

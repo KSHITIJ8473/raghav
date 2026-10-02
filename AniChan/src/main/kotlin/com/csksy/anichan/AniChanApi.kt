@@ -2,13 +2,22 @@ package com.csksy.anichan
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.KotlinModule
+import com.lagradost.api.Log
 import com.lagradost.cloudstream3.app
-import kotlinx.coroutines.delay
 
 object AniChanApi {
 
-    const val MAIN_URL = "https://anichan.to"
-    private const val SESSION_ATTEMPTS = 4
+    private const val TAG = "AniChan"
+    private const val DEFAULT_URL = "https://anichan.to"
+
+    @Volatile
+    private var host = DEFAULT_URL
+
+    suspend fun refreshDomain() {
+        FirebaseDomainHelper.getDomain("anichan")?.let { host = it }
+    }
+
+    fun url(): String = host
 
     private val mapper = ObjectMapper().registerModule(KotlinModule.Builder().build())
 
@@ -23,80 +32,42 @@ object AniChanApi {
     private inline fun <reified T> parse(text: String): T? =
         try {
             mapper.readValue(text, T::class.java)
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            Log.e(TAG, "parse failed: ${e.message}")
             null
         }
 
     private suspend fun getJson(url: String): String? = try {
         val resp = app.get(url, headers = BASE_HEADERS)
         if (resp.isSuccessful) resp.text else null
-    } catch (_: Exception) {
+    } catch (e: Exception) {
+        Log.e(TAG, "GET failed: ${e.message}")
         null
     }
 
     suspend fun suggest(query: String): List<CatalogItem> {
-        val body = getJson("$MAIN_URL/api/suggest?q=${urlEncode(query)}") ?: return emptyList()
+        val body = getJson("$host/api/suggest?q=${urlEncode(query)}") ?: return emptyList()
         return parse<CatalogEnvelope>(body)?.results ?: emptyList()
     }
 
     suspend fun trending(page: Int): List<CatalogItem> {
-        val body = getJson("$MAIN_URL/api/catalog/trending?page=$page") ?: return emptyList()
+        val body = getJson("$host/api/catalog/trending?page=$page") ?: return emptyList()
         return parse<CatalogEnvelope>(body)?.results ?: emptyList()
     }
 
     suspend fun airing(page: Int): List<CatalogItem> {
-        val body = getJson("$MAIN_URL/api/catalog/airing?page=$page") ?: return emptyList()
+        val body = getJson("$host/api/catalog/airing?page=$page") ?: return emptyList()
         return parse<CatalogEnvelope>(body)?.results ?: emptyList()
     }
 
     suspend fun animeDetail(id: Int): CatalogItem? {
-        val body = getJson("$MAIN_URL/api/catalog/anime/$id") ?: return null
+        val body = getJson("$host/api/catalog/anime/$id") ?: return null
         return parse<CatalogItem>(body)
     }
 
     suspend fun watchInfo(id: Int): WatchInfo? {
-        val body = getJson("$MAIN_URL/api/watch/episodes?anilistId=$id") ?: return null
+        val body = getJson("$host/api/watch/episodes?anilistId=$id") ?: return null
         return parse<WatchInfo>(body)
-    }
-
-    // the session cookie is single use, every servers call needs a fresh one
-    private suspend fun newWatchSession(): String? {
-        return try {
-            val resp = app.post(
-                "$MAIN_URL/api/watch/session",
-                headers = BASE_HEADERS + mapOf("Origin" to MAIN_URL),
-                json = mapOf("token" to "")
-            )
-            if (!resp.isSuccessful) return null
-            for (cookie in resp.headers.values("set-cookie")) {
-                if (cookie.startsWith("anichan_ws=")) {
-                    return cookie.substringBefore(";").substringAfter("anichan_ws=")
-                }
-            }
-            null
-        } catch (_: Exception) {
-            null
-        }
-    }
-
-    suspend fun watchServers(anilistId: Int, ep: Int, category: String): List<Server> {
-        val url = "$MAIN_URL/api/watch/servers?anilistId=$anilistId&ep=$ep&category=$category"
-        repeat(SESSION_ATTEMPTS) {
-            val cookie = newWatchSession()
-            if (cookie != null) {
-                try {
-                    val resp = app.get(
-                        url,
-                        headers = BASE_HEADERS + mapOf("Cookie" to "anichan_ws=$cookie")
-                    )
-                    if (resp.isSuccessful) {
-                        return parse<ServersEnvelope>(resp.text)?.servers ?: emptyList()
-                    }
-                } catch (_: Exception) {}
-            }
-            delay(400)
-        }
-        return emptyList()
     }
 
     fun urlEncode(s: String): String = java.net.URLEncoder.encode(s, "UTF-8")

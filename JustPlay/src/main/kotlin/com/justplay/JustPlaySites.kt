@@ -16,9 +16,8 @@ import org.json.JSONObject
 import java.net.URI
 
 internal object DrivePages {
-    // hosts that never carry a playable file: cloudflare walled mirrors, site
-    // plumbing and ad jumps, gdtot filebee and filepress stay out of this list
-    // because loadExtractor may still resolve them through another extension
+    // hosts that never carry a playable file: cloudflare walled mirrors, site plumbing and ad jumps,
+    // gdtot, filebee and filepress stay out because loadExtractor may still resolve them
     private val junk = Regex(
         "gmpg\\.org|googleapis|googletagmanager|fonts\\.|schema\\.org|w3\\.org|" +
             "twitter\\.com|facebook\\.com|pinterest|whatsapp|telegram|t\\.me/|/tg/|catimages|tinyurl|bonuscaf|" +
@@ -210,9 +209,8 @@ internal object VegaMoviesSite {
             ?: matched.firstOrNull()
     }
 
-    // every quality row sits between two headings, the download anchors below a
-    // heading belong to the label of that heading, a button counts when it is a
-    // dwd button or points straight at a known drive host
+    // the download anchors below a heading belong to that heading's label,
+    // a button counts when it is a dwd button or points at a known drive host
     private fun collectRows(doc: Document, season: Int?): List<Pair<String, String>> {
         val seasonRegex = season?.let { Regex("(?i)Season\\s*$it(?!\\d)|\\bS${it.toString().padStart(2, '0')}\\b") }
         val heads = doc.select("h3, h4, h5").filter { el ->

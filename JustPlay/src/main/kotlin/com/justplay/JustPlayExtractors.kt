@@ -308,9 +308,7 @@ class PlayHubCloud : ExtractorApi() {
 
         private val pxlRegex = Regex("""var\s+pxl\s*=\s*[\"']([^\"']+)[\"']""")
 
-        // the pixel button href is a dead placeholder that stays the same for
-        // every file, the real pixeldrain link sits in the pxl variable of the
-        // same page
+        // the pixel button href is a dead placeholder, the real pixeldrain link sits in the pxl variable
         private fun pixelFileUrl(pageHtml: String, buttonHref: String): String? {
             val pxl = pxlRegex.find(pageHtml)?.groupValues?.get(1)
             val link = pxl?.takeIf { it.startsWith("http") } ?: buttonHref
@@ -604,10 +602,8 @@ class PlayVCloud : ExtractorApi() {
     }
 }
 
-// the vegadrive share page lists one bridge provider per host, vegadrop
-// (skydrop) streams the drive file itself and the others land on their own
-// partner pages, providers come and go so each result is checked against
-// the host it is supposed to be on
+// the vegadrive share page lists one bridge provider per host and providers come and go,
+// so each result is checked against the host it is supposed to be on
 class PlayVegaDrive : ExtractorApi() {
     override val name = "V-Drive"
     override val mainUrl = "https://one.vegadrive.app"

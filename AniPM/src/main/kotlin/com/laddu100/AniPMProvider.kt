@@ -31,7 +31,7 @@ import java.util.concurrent.ConcurrentHashMap
 import com.raghav.donation.DonationManager
 
 class AniPMProvider : MainAPI() {
-    override var mainUrl = AniPMApi.MAIN_URL
+    override var mainUrl = AniPMApi.url()
     override var name = "AniPM"
     override var lang = "en"
     override val hasMainPage = true
@@ -55,6 +55,8 @@ class AniPMProvider : MainAPI() {
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         DonationManager.checkAndShow()
+        AniPMApi.refreshDomain()
+        mainUrl = AniPMApi.url()
         return when (request.data) {
             "latest" -> latestPage(page, request.name)
             "movies" -> browsePage("popular", page, "Movie", request.name)
@@ -101,6 +103,8 @@ class AniPMProvider : MainAPI() {
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
+        AniPMApi.refreshDomain()
+        mainUrl = AniPMApi.url()
         return AniPMApi.search(query).mapNotNull { titleResponse(it) }
     }
 
@@ -125,6 +129,8 @@ class AniPMProvider : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse? {
+        AniPMApi.refreshDomain()
+        mainUrl = AniPMApi.url()
         val id = url.substringAfterLast("|").trim().toIntOrNull() ?: return null
         val series = AniPMApi.series(id) ?: return null
         val title = series.title?.takeIf { it.isNotBlank() } ?: return null

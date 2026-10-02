@@ -214,9 +214,7 @@ class DamiTVProvider : MainAPI() {
         @JsonProperty("isDaddyLive") val isDaddyLive: Boolean?,
         @JsonProperty("tvChannels") val tvChannels: List<DamiTvChannel>?,
         @JsonProperty("isStreamed") val isStreamed: Boolean? = null,
-        // The site renamed `streamedSources` -> `sources` in the matches API.
-        // Read the new field first and keep the legacy one as a fallback for
-        // older cached EventLoadData payloads.
+        // the site renamed streamedSources to sources, keep the legacy field for older cached payloads
         @JsonProperty("sources") val sources: List<DamiStreamedSource>? = null,
         @JsonProperty("streamedSources") val streamedSources: List<DamiStreamedSource>? = null
     )
@@ -250,9 +248,8 @@ class DamiTVProvider : MainAPI() {
         }
     }
 
-    // Fetch a fresh signed HLS URL from /papi/extract-url right before playback.
-    // Retries once to absorb transient Cloudflare/network hiccups, which are a
-    // common cause of intermittent playback failures on damitv.st.
+    // a fresh signed HLS url from /papi/extract-url right before playback,
+    // one retry absorbs the transient cloudflare hiccups damitv.st is known for
     private suspend fun fetchExtractUrl(id: String): ExtractUrlResponse? {
         repeat(2) { attempt ->
             try {

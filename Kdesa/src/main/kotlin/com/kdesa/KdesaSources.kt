@@ -70,10 +70,8 @@ class KdesaSources {
     private fun JsonNode.int(field: String): Int? =
         this.get(field)?.takeIf { !it.isNull }?.asInt()
 
-    // Masters with separate EXT-X-MEDIA audio renditions (Nova Titan/Orion,
-    // vidsrc multi-audio) must reach the player unsplit: generateM3u8() only
-    // returns the video variants and drops the audio group, so those streams
-    // would play completely silent.
+    // masters with separate EXT-X-MEDIA audio renditions must reach the player unsplit,
+    // generateM3u8() drops the audio group and those streams would play silent
     private data class HlsProbe(
         val audioLangs: List<String>, // EXT-X-MEDIA:TYPE=AUDIO tags
         val maxHeight: Int,           // best RESOLUTION height (0 = unknown)

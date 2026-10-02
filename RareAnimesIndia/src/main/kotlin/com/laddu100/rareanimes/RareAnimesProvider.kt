@@ -152,6 +152,7 @@ class RareAnimesProvider : MainAPI() {
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         DonationManager.checkAndShow()
+        mainUrl = FirebaseDomainHelper.getDomain("rareanimes") ?: mainUrl
         return try {
             val url = if (page <= 1) "$mainUrl/hindi/category/${request.data}/"
             else "$mainUrl/hindi/category/${request.data}/page/$page/"
@@ -170,6 +171,7 @@ class RareAnimesProvider : MainAPI() {
 
     override suspend fun search(query: String): List<SearchResponse> {
         if (query.isBlank()) return emptyList()
+        mainUrl = FirebaseDomainHelper.getDomain("rareanimes") ?: mainUrl
         return try {
             val encoded = URLEncoder.encode(query, "UTF-8")
             val results = mutableListOf<PageEntry>()
@@ -1068,6 +1070,7 @@ class RareAnimesProvider : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse? {
+        mainUrl = FirebaseDomainHelper.getDomain("rareanimes") ?: mainUrl
         return try {
             val response = raiGet(url)
             val doc = Jsoup.parse(response.text)

@@ -386,9 +386,7 @@ class AnidapProvider : MainAPI() {
                         }
                     }
                 }
-                // chad never lists the site's own adp server, the web client
-                // puts it first in every list - do the same or those streams
-                // never get requested
+                // chad never lists the site's own adp server, the web client puts it first so mirror that
                 fun withAdp(list: List<ServerProvider>): List<ServerProvider> =
                     if (list.any { it.id == "adp" }) list
                     else listOf(ServerProvider("adp", null)) + list

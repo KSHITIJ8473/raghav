@@ -7,6 +7,7 @@ import com.lagradost.cloudstream3.plugins.Plugin
 @CloudstreamPlugin
 class AniChanPlugin : Plugin() {
     override fun load(context: Context) {
+        AniChanWebView.init(context)
         registerMainAPI(AniChanProvider())
     }
 }

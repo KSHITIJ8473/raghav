@@ -132,6 +132,7 @@ class RaghavAniPM : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
+        mainUrl = FirebaseDomainHelper.getDomain("anipm") ?: mainUrl
         val channel = if (isDub) "dub" else "sub"
 
         var entry: AniPMEntry? = if (anilistId > 0) AniPMEntry(anilistId = anilistId) else null

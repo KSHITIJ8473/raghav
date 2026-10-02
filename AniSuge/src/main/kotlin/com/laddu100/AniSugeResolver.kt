@@ -193,9 +193,7 @@ object MegaPlayResolver {
 
     private data class VariantEntry(val url: String, val quality: Int?)
 
-    // i-frame entries only ever appear as attributes of
-    // #EXT-X-I-FRAME-STREAM-INF so they never match the line after
-    // #EXT-X-STREAM-INF and are skipped here
+    // i-frame entries only appear as attributes of #EXT-X-I-FRAME-STREAM-INF, never on their own line
     private fun parseVariants(masterUrl: String, masterText: String): List<VariantEntry> {
         val base = masterUrl.substringBefore('?').let { it.substringBeforeLast('/') + "/" }
         val out = mutableListOf<VariantEntry>()
@@ -285,10 +283,8 @@ object MegaPlayResolver {
     }
 }
 
-// AniSuge serves per-episode sources through the mapper api its watch page
-// loads via assets/js/mapper.js:
+// per-episode sources come from the mapper api the watch page loads via assets/js/mapper.js
 //   https://mapper.nekostream.site/api/mal/{data-mal}/{data-slug}/{data-timestamp}
-// each provider node holds sub/dub entries with a stream url and a download map
 object AniSugeMapper {
     private val json = ObjectMapper()
     private const val MAPPER_API = "https://mapper.nekostream.site/api/mal/"

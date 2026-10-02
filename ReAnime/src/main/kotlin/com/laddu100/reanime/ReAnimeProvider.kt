@@ -38,7 +38,7 @@ import com.raghav.donation.DonationManager
 
 class ReAnimeProvider : MainAPI() {
 
-    override var mainUrl = ReAnimeApi.MAIN_URL
+    override var mainUrl = ReAnimeApi.url()
     override var name = "Re:ANIME"
     override val supportedTypes = setOf(TvType.Anime, TvType.AnimeMovie, TvType.OVA)
     override var lang = "en"
@@ -65,6 +65,8 @@ class ReAnimeProvider : MainAPI() {
         request: MainPageRequest
     ): HomePageResponse? {
         DonationManager.checkAndShow()
+        ReAnimeApi.refreshDomain()
+        mainUrl = ReAnimeApi.url()
         when (request.data) {
             "popular" -> {
                 val items = ReAnimeApi.searchSorted("popularity_desc", page)
@@ -87,6 +89,9 @@ class ReAnimeProvider : MainAPI() {
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
+        ReAnimeApi.refreshDomain()
+        mainUrl = ReAnimeApi.url()
+
         if (query.isBlank()) return emptyList()
         return ReAnimeApi.search(query, 1).mapNotNull { it.toSearchResponse() }
     }
@@ -110,6 +115,9 @@ class ReAnimeProvider : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse? {
+        ReAnimeApi.refreshDomain()
+        mainUrl = ReAnimeApi.url()
+
         val slug = url.removePrefix("$mainUrl/").removePrefix("/").removePrefix("anime/")
         val anime = ReAnimeApi.animeDetail(slug) ?: return null
         val eps = ReAnimeApi.episodes(slug)

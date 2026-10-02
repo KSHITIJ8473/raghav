@@ -190,9 +190,7 @@ object MegaPlayResolver {
 
     private data class VariantEntry(val url: String, val quality: Int?)
 
-    // i-frame entries only ever appear as attributes of
-    // #EXT-X-I-FRAME-STREAM-INF so they never match the line after
-    // #EXT-X-STREAM-INF and are skipped here
+    // i-frame entries only appear as attributes of #EXT-X-I-FRAME-STREAM-INF, never on their own line
     private fun parseVariants(masterUrl: String, masterText: String): List<VariantEntry> {
         val base = masterUrl.substringBefore('?').let { it.substringBeforeLast('/') + "/" }
         val out = mutableListOf<VariantEntry>()

@@ -50,12 +50,16 @@ class RaghavGoTaku : MainAPI() {
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
+        GoTakuApi.refreshDomain()
+        mainUrl = GoTakuApi.site()
         if (query.isBlank()) return emptyList()
         val (titles, _) = GoTakuApi.fetchTitles(mapOf("q" to query, "limit" to "28"))
         return titles.mapNotNull { it.toSearchResponse() }
     }
 
     override suspend fun load(url: String): LoadResponse? {
+        GoTakuApi.refreshDomain()
+        mainUrl = GoTakuApi.site()
         val titleId = url.substringAfter("title/").substringBefore("?").takeIf { it.isNotBlank() } ?: return null
         val detail = GoTakuApi.fetchTitleDetail(titleId) ?: return null
         val title = detail.name ?: return null
@@ -173,8 +177,8 @@ class RaghavGoTaku : MainAPI() {
     private suspend fun resolveStream(embedUrl: String): ResolvedStream? {
         return try {
             val html = app.get(
-                GoTakuApi.SITE + embedUrl,
-                headers = GoTakuApi.browserHeaders + mapOf("Referer" to "${GoTakuApi.SITE}/")
+                GoTakuApi.site() + embedUrl,
+                headers = GoTakuApi.browserHeaders + mapOf("Referer" to "${GoTakuApi.site()}/")
             ).text
 
             val base = Regex("""data-manifest-base="([^"]+)"""").find(html)?.groupValues?.get(1) ?: return null
@@ -190,8 +194,8 @@ class RaghavGoTaku : MainAPI() {
                     val response = app.get(
                         manifest.source,
                         headers = GoTakuApi.browserHeaders + mapOf(
-                            "Referer" to "${GoTakuApi.SITE}/",
-                            "Origin" to GoTakuApi.SITE
+                            "Referer" to "${GoTakuApi.site()}/",
+                            "Origin" to GoTakuApi.site()
                         )
                     )
                     if (response.isSuccessful) response.body.bytes() else null

@@ -25,16 +25,26 @@ object RaghavSenshiVhost {
     private const val SOURCES_PATH = "/q7m4x9"
     private const val RUNTIME_INFO = "vhost/runtime/355afc0cfa"
     private const val CHUNK_NAME = "pOXA"
-    private const val ORIGIN = "https://senshi.to"
+    private const val DEFAULT_ORIGIN = "https://senshi.to"
+
+    @Volatile
+    private var origin = DEFAULT_ORIGIN
 
     private val ua =
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 
-    private val headers = mapOf(
+    suspend fun refreshDomain() {
+        FirebaseDomainHelper.getDomain("senshi")?.let {
+            val clean = it.removeSuffix("/")
+            if (clean.isNotBlank()) origin = clean
+        }
+    }
+
+    private fun headers(): Map<String, String> = mapOf(
         "User-Agent" to ua,
         "Accept" to "*/*",
-        "Origin" to ORIGIN,
-        "Referer" to "$ORIGIN/"
+        "Origin" to origin,
+        "Referer" to "$origin/"
     )
 
     // x509 subjectpublickeyinfo header for a raw uncompressed p-256 point
@@ -71,7 +81,7 @@ object RaghavSenshiVhost {
             app.post(
                 "$GATEWAY$SOURCES_PATH",
                 requestBody = body.toRequestBody("image/png".toMediaType()),
-                headers = headers,
+                headers = headers(),
                 timeout = 20_000L
             )
         } catch (_: Exception) {
@@ -110,7 +120,7 @@ object RaghavSenshiVhost {
 
     private suspend fun fetchBootstrap(): Bootstrap? {
         val res = try {
-            cfGet("$GATEWAY$BOOTSTRAP_PATH", headers = headers, timeout = 20_000L)
+            cfGet("$GATEWAY$BOOTSTRAP_PATH", headers = headers(), timeout = 20_000L)
         } catch (_: Exception) {
             return null
         }
@@ -177,14 +187,14 @@ object RaghavSenshiVhost {
 
     // [1] [sourceId u64] [now u64] [nonce 16] [originLen u16] [origin] [challenge 16]
     private fun buildPayload(sourceId: Int, challenge: ByteArray): ByteArray {
-        val origin = ORIGIN.toByteArray(Charsets.US_ASCII)
+        val originBytes = origin.toByteArray(Charsets.US_ASCII)
         val out = ByteArrayOutputStream()
         out.write(1)
         out.write(packU64(sourceId.toLong()))
         out.write(packU64(System.currentTimeMillis() / 1000))
         out.write(ByteArray(16).also { random.nextBytes(it) })
-        out.write(packU16(origin.size))
-        out.write(origin)
+        out.write(packU16(originBytes.size))
+        out.write(originBytes)
         out.write(challenge)
         return out.toByteArray()
     }

@@ -173,8 +173,8 @@ class RaghavGoTaku : MainAPI() {
     private suspend fun resolveStream(embedUrl: String): ResolvedStream? {
         return try {
             val html = app.get(
-                GoTakuApi.SITE + embedUrl,
-                headers = GoTakuApi.browserHeaders + mapOf("Referer" to "${GoTakuApi.SITE}/")
+                GoTakuApi.site() + embedUrl,
+                headers = GoTakuApi.browserHeaders + mapOf("Referer" to "${GoTakuApi.site()}/")
             ).text
 
             val base = Regex("""data-manifest-base="([^"]+)"""").find(html)?.groupValues?.get(1) ?: return null
@@ -190,8 +190,8 @@ class RaghavGoTaku : MainAPI() {
                     val response = app.get(
                         manifest.source,
                         headers = GoTakuApi.browserHeaders + mapOf(
-                            "Referer" to "${GoTakuApi.SITE}/",
-                            "Origin" to GoTakuApi.SITE
+                            "Referer" to "${GoTakuApi.site()}/",
+                            "Origin" to GoTakuApi.site()
                         )
                     )
                     if (response.isSuccessful) response.body.bytes() else null

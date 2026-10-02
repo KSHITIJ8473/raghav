@@ -14,9 +14,7 @@ import org.json.JSONObject
 import java.net.URI
 import java.net.URLDecoder
 
-// every host the drive pages link to is resolved here instead of through
-// loadExtractor, whose result depends on which other extension registered
-// last for the same host
+// hosts are resolved here instead of through loadExtractor, whose result depends on extension order
 object TmfSources {
 
     class Stream(
@@ -57,9 +55,8 @@ object TmfSources {
         return current
     }
 
-    // fastdl serves a redirect stub with the google drive link in the reurl
-    // variable, the hubcdn wiki host serves the same stub with one extra
-    // base64 hop inside the r parameter
+    // fastdl serves a redirect stub with the drive link in the reurl variable,
+    // the hubcdn wiki host serves the same stub with one extra base64 hop in r
     suspend fun resolveFastDl(url: String): List<Stream> {
         return try {
             val res = app.get(

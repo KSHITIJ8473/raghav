@@ -482,6 +482,14 @@ class RaghavAnime : MainAPI() {
                 val anichan = RaghavAniChan()
                 anichan.loadLinksByAnilistId(aniId, episode, isDub, subtitleCallback, callback)
             },
+            "Xanime" to {
+                val epData = SourceCache.episodeData("Xanime", animeKey, isDub, episode) {
+                    resolveXanime(searchTitles, targetTitles, episode, isDub, linkData.year)
+                }
+                if (epData != null) {
+                    RaghavXanime().loadLinks(epData, false, subtitleCallback, callback)
+                }
+            },
             "Kyren" to {
                 val kyren = RaghavKyren()
                 kyren.loadLinksByAnilistId(aniId, title, episode, isDub, subtitleCallback, callback)
@@ -605,7 +613,9 @@ class RaghavAnime : MainAPI() {
                     { warmSource("AniKoto", animeKey, isDub) { resolveAniKoto(titles, targets, null, isDub, year)?.episodes } },
                     { warmSource("GoTaku", animeKey, isDub) { resolveGoTaku(titles, targets, null, isDub, year)?.episodes } },
                     { warmSource("Animo", animeKey, isDub) { resolveAnimo(titles, targets, null, isDub, year)?.episodes } },
-                    { warmSource("AniNami", animeKey, isDub) { resolveAniNami(anilistId, null, isDub)?.episodes } }
+                    { warmSource("AniNami", animeKey, isDub) { resolveAniNami(anilistId, null, isDub)?.episodes } },
+                    { warmSource("Xanime", animeKey, isDub) { resolveXanime(titles, targets, null, isDub, year)?.episodes } },
+                    { RaghavAniChan().warm() }
                 ))
             }
         }
@@ -681,6 +691,14 @@ class RaghavAnime : MainAPI() {
             doSearch = { senshi.search(it) },
             doLoad = { senshi.load(it) as? com.lagradost.cloudstream3.AnimeLoadResponse },
             sourceTag = "Senshi")
+    }
+
+    private suspend fun resolveXanime(titles: List<String>, targets: List<String>, episode: Int?, isDub: Boolean, year: Int?): SourceCache.Match? {
+        val xanime = RaghavXanime()
+        return findEpisodeMap(titles, targets, episode, isDub, year,
+            doSearch = { xanime.search(it) },
+            doLoad = { xanime.load(it) as? com.lagradost.cloudstream3.AnimeLoadResponse },
+            sourceTag = "Xanime")
     }
 
     private suspend fun resolveAniWaves(titles: List<String>, targets: List<String>, episode: Int?, isDub: Boolean): SourceCache.Match? {

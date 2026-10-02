@@ -49,9 +49,7 @@ class StreamedPkProvider : MainAPI() {
         return headers
     }
 
-    // ddos-guard fronts the site and is far friendlier to clients that bring
-    // their __ddg cookies back, the shared app client has no cookie jar so
-    // without this every request looks brand new and gets reset at times
+    // ddos-guard is friendlier to clients that bring their __ddg cookies back, the shared client has no jar
     private fun cookieStore() =
         context?.getSharedPreferences("streamedpk_net", Context.MODE_PRIVATE)
 
@@ -100,9 +98,7 @@ class StreamedPkProvider : MainAPI() {
                 throw e
             } catch (e: Exception) {
                 lastError = e
-                // the edge refuses a request now and then, reloading used to
-                // be a manual job for the user, one short pause and another
-                // try settles it on the same load
+                // the edge refuses a request now and then, one short pause and retry settles it
                 if (attempt < 2) delay(1500L)
             }
         }

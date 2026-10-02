@@ -16,6 +16,8 @@ class RaghavAnimePlugin : Plugin() {
 
         initSenshiCFBypass(context)
 
+        RaghavAniChanWeb.init(context)
+
         registerMainAPI(RaghavAnime())
 
         registerExtractorAPI(MiruroMegaPlay())

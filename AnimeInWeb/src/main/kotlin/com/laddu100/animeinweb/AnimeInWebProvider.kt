@@ -56,9 +56,7 @@ class AnimeInWebProvider : MainAPI() {
         "Accept" to "application/json",
         "User-Agent" to USER_AGENT
     )
-    // the image host whitelists app-style user agents while browser agents
-    // need a referer that some app builds never forward for images; sending
-    // both covers every header-forwarding behaviour
+    // the image host whitelists app-style agents while browser agents need a referer, send both
     private val posterHeaders get() = mapOf(
         "User-Agent" to IMG_USER_AGENT,
         "Referer" to "$mainUrl/"
@@ -67,10 +65,8 @@ class AnimeInWebProvider : MainAPI() {
     private val posterCache = ConcurrentHashMap<String, String>()
     private val posterSemaphore = Semaphore(POSTER_CONCURRENCY)
 
-    // most app builds load images through their own image loader without the
-    // plugin's poster headers and the site's image hosts reject those
-    // requests outright, so posters are sourced from kitsu whose cdn serves
-    // every client regardless of headers; the site's own url stays as the
+    // app image loaders skip the plugin's poster headers and the site's hosts reject those,
+    // so posters come from kitsu whose cdn serves every client; the site url stays the
     // fallback for titles kitsu does not know
     private suspend fun posterFor(title: String?, siteUrl: String?): String? {
         val fallback = fixPosterUrl(siteUrl) ?: return null
@@ -225,6 +221,7 @@ class AnimeInWebProvider : MainAPI() {
 
     override suspend fun getMainPage(page: Int, request: com.lagradost.cloudstream3.MainPageRequest): com.lagradost.cloudstream3.HomePageResponse {
         DonationManager.checkAndShow()
+        mainUrl = FirebaseDomainHelper.getDomain("animeinweb") ?: mainUrl
         return when {
             request.data == "views" -> explorePage(page, request)
             request.data == "schedule" -> {
@@ -265,6 +262,7 @@ class AnimeInWebProvider : MainAPI() {
 
     override suspend fun search(query: String, page: Int): com.lagradost.cloudstream3.SearchResponseList? {
         if (query.isBlank()) return newSearchResponseList(emptyList(), false)
+        mainUrl = FirebaseDomainHelper.getDomain("animeinweb") ?: mainUrl
         val encoded = URLEncoder.encode(query, "UTF-8")
         // cloudstream search pages start at 1, the API at 0
         val res = fetchJson<ExploreEnvelope>("${apiUrl("/explore/movie")}?page=${page - 1}&sort=&keyword=$encoded")
@@ -273,6 +271,7 @@ class AnimeInWebProvider : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse? {
+        mainUrl = FirebaseDomainHelper.getDomain("animeinweb") ?: mainUrl
         val id = url.substringAfterLast("/").takeIf { it.isNotBlank() } ?: return null
         val detail = fetchJson<DetailEnvelope>("${apiUrl("/movie/detail")}/$id").data
         val movie = detail.movie

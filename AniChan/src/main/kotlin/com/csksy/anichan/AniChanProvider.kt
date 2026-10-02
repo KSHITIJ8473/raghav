@@ -1,5 +1,6 @@
 package com.csksy.anichan
 
+import com.lagradost.api.Log
 import com.lagradost.cloudstream3.DubStatus
 import com.lagradost.cloudstream3.Episode
 import com.lagradost.cloudstream3.HomePageResponse
@@ -22,16 +23,20 @@ import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.AppUtils.toJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
+import com.lagradost.cloudstream3.utils.loadExtractor
 import com.lagradost.cloudstream3.utils.newExtractorLink
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.TimeZone
+import java.util.concurrent.atomic.AtomicBoolean
 import com.raghav.donation.DonationManager
 
 class AniChanProvider : MainAPI() {
 
-    override var mainUrl = AniChanApi.MAIN_URL
+    override var mainUrl = AniChanApi.url()
     override var name = "AniChan"
     override val hasMainPage = true
     override var lang = "en"
@@ -54,6 +59,8 @@ class AniChanProvider : MainAPI() {
         request: MainPageRequest
     ): HomePageResponse? {
         DonationManager.checkAndShow()
+        AniChanApi.refreshDomain()
+        mainUrl = AniChanApi.url()
         val items = when (request.data) {
             "trending" -> AniChanApi.trending(page)
             "airing" -> AniChanApi.airing(page)
@@ -68,6 +75,8 @@ class AniChanProvider : MainAPI() {
 
     override suspend fun search(query: String): List<SearchResponse> {
         if (query.isBlank()) return emptyList()
+        AniChanApi.refreshDomain()
+        mainUrl = AniChanApi.url()
         return AniChanApi.suggest(query).mapNotNull { it.toSearchResponse() }
     }
 
@@ -84,6 +93,8 @@ class AniChanProvider : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse? {
+        AniChanApi.refreshDomain()
+        mainUrl = AniChanApi.url()
         val anilistId = url.substringAfterLast("/").toIntOrNull() ?: return null
         val anime = AniChanApi.animeDetail(anilistId) ?: return null
         val title = anime.title ?: anime.titleRomaji ?: return null
@@ -93,16 +104,14 @@ class AniChanProvider : MainAPI() {
         val epNumbers = collectEpisodeNumbers(anime, info)
         if (epNumbers.isEmpty()) return null
 
-        // the watch endpoint is the dub source of truth, but it can fail on a
-        // cold cache, the selfhost dub list from the detail response covers that
+        // the watch endpoint is the dub source of truth but can lie on a cold cache
         val dubAvailable = info?.dubAvailable == true ||
             anime.selfhost?.cachedDub?.isNotEmpty() == true
 
         val subEps = epNumbers.map { it.toEpisode(anilistId, false, epMeta) }
         val dubEps = if (dubAvailable) epNumbers.map { it.toEpisode(anilistId, true, epMeta) } else emptyList()
 
-        // the app hides the sub/dub switcher on movie types, so dual audio movies
-        // are typed as regular anime to keep both reachable
+        // dual audio movies are typed as anime so the sub/dub switcher stays reachable
         val tvType = when {
             anime.format == "MOVIE" && dubEps.isNotEmpty() -> TvType.Anime
             anime.format == "MOVIE" -> TvType.AnimeMovie
@@ -128,7 +137,7 @@ class AniChanProvider : MainAPI() {
         }
     }
 
-    // only list episodes that already aired, the player cannot load unaired ones
+    // the player cannot load unaired episodes, only list the ones already aired
     private fun collectEpisodeNumbers(anime: CatalogItem, info: WatchInfo?): List<Int> {
         val today = todayUtc()
         val eps = sortedSetOf<Int>()
@@ -169,7 +178,7 @@ class AniChanProvider : MainAPI() {
             val sdf = SimpleDateFormat("yyyy-MM-dd", Locale.US)
             sdf.timeZone = TimeZone.getTimeZone("UTC")
             sdf.parse(raw.substringBefore("T").take(10))
-        } catch (_: Exception) {
+        } catch (e: Exception) {
             null
         }
     }
@@ -182,12 +191,19 @@ class AniChanProvider : MainAPI() {
     ): Boolean {
         val ref = try {
             parseJson<EpisodeRef>(data)
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            Log.e("AniChan", "bad episode data: ${e.message}")
             null
         } ?: return false
         val category = if (ref.isDub) "dub" else "sub"
 
-        val servers = AniChanApi.watchServers(ref.anilistId, ref.ep, category)
+        val raw = AniChanWebView.fetchServers(ref.anilistId, ref.ep, category) ?: return false
+        val servers = try {
+            parseJson<ServersEnvelope>(raw).servers ?: emptyList()
+        } catch (e: Exception) {
+            Log.e("AniChan", "bad servers payload: ${e.message}")
+            emptyList()
+        }
         if (servers.isEmpty()) return false
 
         val linkHeaders = mapOf(
@@ -195,36 +211,24 @@ class AniChanProvider : MainAPI() {
             "Referer" to "$mainUrl/"
         )
         val seenSubs = HashSet<String>()
-        var found = false
+        val found = AtomicBoolean(false)
 
+        // direct streams go out first, embeds in parallel so a dead host cannot stall the list
+        val embeds = ArrayList<Server>()
         for (server in servers) {
-            val label = serverLabel(server)
-            if (server.type == "embed") {
-                val embed = server.embed ?: continue
-                val vidServer = Regex("[?&]server=([^&]+)").find(embed)?.groupValues?.get(1)
-                    ?: "kari"
-                val tracks = VidhawkResolver.resolve(ref.anilistId, ref.ep, category, vidServer)
-                    ?: continue
-                val track = tracks.firstOrNull { it.id.equals(category, true) && !it.src.isNullOrBlank() }
-                    ?: continue
-                val src = track.src?.takeIf { it.startsWith("http") } ?: continue
-                callback.invoke(
-                    newExtractorLink(name, label, src, type = ExtractorLinkType.M3U8) {
-                        this.headers = linkHeaders
-                    }
-                )
-                found = true
-            } else {
-                val stream = server.stream?.takeIf { it.startsWith("http") }
-                    ?: server.stream?.takeIf { it.startsWith("/") }?.let { "$mainUrl$it" }
-                    ?: continue
-                callback.invoke(
-                    newExtractorLink(name, label, stream, type = ExtractorLinkType.M3U8) {
-                        this.headers = linkHeaders
-                    }
-                )
-                found = true
+            if (server.type.equals("embed", true) && !server.embed.isNullOrBlank()) {
+                embeds.add(server)
+                continue
             }
+            val stream = server.stream?.takeIf { it.startsWith("http") }
+                ?: server.stream?.takeIf { it.startsWith("/") }?.let { "$mainUrl$it" }
+                ?: continue
+            callback.invoke(
+                newExtractorLink(name, serverLabel(server), stream, type = ExtractorLinkType.M3U8) {
+                    this.headers = linkHeaders
+                }
+            )
+            found.set(true)
 
             for (sub in server.subtitles.orEmpty()) {
                 val url = sub.url?.takeIf { it.startsWith("http") } ?: continue
@@ -234,7 +238,96 @@ class AniChanProvider : MainAPI() {
                 }
             }
         }
-        return found
+
+        if (embeds.isNotEmpty()) {
+            coroutineScope {
+                for (server in embeds) {
+                    launch {
+                        if (resolveEmbed(server, ref, category, subtitleCallback, callback)) {
+                            found.set(true)
+                        }
+                    }
+                }
+            }
+        }
+        return found.get()
+    }
+
+    private suspend fun resolveEmbed(
+        server: Server,
+        ref: EpisodeRef,
+        category: String,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
+        val embed = server.embed ?: return false
+        val label = serverLabel(server)
+
+        if (embed.contains("vidhawk")) {
+            val vidServer = Regex("[?&]server=([^&]+)").find(embed)?.groupValues?.get(1)
+                ?: "kari"
+            val embedAudio = Regex("/embed/ani/\\d+/\\d+/([a-z]+)/").find(embed)?.groupValues?.get(1)
+                ?: category
+            var any = false
+            for (link in VidhawkResolver.resolveAll(ref.anilistId, ref.ep, embedAudio, vidServer)) {
+                callback.invoke(
+                    newExtractorLink(name, link.label, link.src, type = ExtractorLinkType.M3U8) {
+                        this.headers = mapOf(
+                            "User-Agent" to AniChanApi.USER_AGENT,
+                            "Referer" to "$mainUrl/"
+                        )
+                    }
+                )
+                any = true
+            }
+            return any
+        }
+
+        if (server.name == "anihq" || embed.substringAfter("//").substringBefore("/").startsWith("voe.")) {
+            return emitVoeMaster(embed, label, subtitleCallback, callback)
+        }
+
+        if (server.name == "kiwi") {
+            val (file, kwikPage) = KiwiDownloadResolver.resolve(embed) ?: return false
+            callback.invoke(
+                newExtractorLink(
+                    name, label, file,
+                    if (file.contains(".m3u8", true)) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                ) {
+                    this.headers = mapOf(
+                        "User-Agent" to AniChanApi.USER_AGENT,
+                        "Referer" to kwikPage
+                    )
+                }
+            )
+            return true
+        }
+
+        return loadExtractor(embed, "$mainUrl/", subtitleCallback, callback)
+    }
+
+    // voe hands out one master plus per quality variants, the master alone is enough
+    private suspend fun emitVoeMaster(
+        embed: String,
+        label: String,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
+        val captured = ArrayList<ExtractorLink>()
+        loadExtractor(embed, "$mainUrl/", subtitleCallback) { captured.add(it) }
+        val master = captured.firstOrNull { it.url.substringBefore('?').endsWith("master.m3u8") }
+            ?: captured.firstOrNull { it.url.contains(".m3u8") }
+            ?: return false
+        callback.invoke(
+            newExtractorLink(
+                name, label, master.url,
+                if (master.url.contains(".m3u8", true)) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+            ) {
+                this.referer = master.referer
+                this.headers = master.headers
+            }
+        )
+        return true
     }
 
     private fun serverLabel(server: Server): String {

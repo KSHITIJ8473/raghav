@@ -7,8 +7,18 @@ import kotlinx.coroutines.delay
 
 object GoTakuApi {
 
-    const val SITE = "https://gotaku.to"
-    private const val API = "$SITE/api/v1"
+    private const val DEFAULT_SITE = "https://gotaku.to"
+
+    @Volatile
+    private var site = DEFAULT_SITE
+
+    suspend fun refreshDomain() {
+        FirebaseDomainHelper.getDomain("gotaku")?.let { site = it }
+    }
+
+    fun site(): String = site
+
+    private fun api(): String = "${site()}/api/v1"
 
     // the video cdn rejects anything that does not look like a real browser
     val browserHeaders = mapOf(
@@ -25,7 +35,7 @@ object GoTakuApi {
 
     private fun siteHeaders(extra: Map<String, String> = emptyMap()): Map<String, String> {
         val headers = browserHeaders.toMutableMap()
-        headers["Referer"] = "$SITE/"
+        headers["Referer"] = "${site()}/"
         headers["Sec-Fetch-Site"] = "same-origin"
         headers["Accept"] = "application/json"
         headers.putAll(extra)
@@ -181,7 +191,7 @@ object GoTakuApi {
     }
 
     suspend fun fetchEmbed(episodeId: String, type: String): String? {
-        val text = fetchText("$API/episodes/$episodeId/embed?type=$type", k = true) ?: return null
+        val text = fetchText("${api()}/episodes/$episodeId/embed?type=$type", k = true) ?: return null
         val parsed = try {
             parseJson<EmbedResponse>(text)
         } catch (_: Exception) {
@@ -191,7 +201,7 @@ object GoTakuApi {
     }
 
     suspend fun fetchEpisodes(titleId: String): List<EpisodeEntry> {
-        val text = fetchText("$API/titles/$titleId/episodes", k = true) ?: return emptyList()
+        val text = fetchText("${api()}/titles/$titleId/episodes", k = true) ?: return emptyList()
         val parsed = try {
             parseJson<EpisodesResponse>(text)
         } catch (_: Exception) {
@@ -201,7 +211,7 @@ object GoTakuApi {
     }
 
     suspend fun fetchTitleDetail(titleId: String): TitleEntry? {
-        val text = fetchText("$API/titles/$titleId") ?: return null
+        val text = fetchText("${api()}/titles/$titleId") ?: return null
         val parsed = try {
             parseJson<TitleDetailResponse>(text)
         } catch (_: Exception) {
@@ -212,7 +222,7 @@ object GoTakuApi {
 
     suspend fun fetchTitles(params: Map<String, String>): Pair<List<TitleEntry>, Boolean> {
         val query = params.entries.joinToString("&") { "${it.key}=${java.net.URLEncoder.encode(it.value, "UTF-8")}" }
-        val text = fetchText("$API/titles?$query") ?: return Pair(emptyList(), false)
+        val text = fetchText("${api()}/titles?$query") ?: return Pair(emptyList(), false)
         val parsed = try {
             parseJson<TitlesResponse>(text)
         } catch (_: Exception) {

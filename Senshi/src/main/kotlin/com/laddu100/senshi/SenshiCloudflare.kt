@@ -26,7 +26,6 @@ import androidx.appcompat.app.AppCompatActivity
 import com.google.android.material.bottomsheet.BottomSheetBehavior
 import com.google.android.material.bottomsheet.BottomSheetDialog
 import com.google.android.material.bottomsheet.BottomSheetDialogFragment
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.CommonActivity
 import com.lagradost.cloudstream3.app
 import com.lagradost.nicehttp.NiceResponse
@@ -47,8 +46,6 @@ private val cfBlockerPhrases = listOf(
 
 private const val COOKIE_TTL_MS = 45 * 60 * 1000L
 
-// cookies are stored per host, senshi.to, the vidcloud api and the stream cdn
-// each run their own challenge
 private object SenshiCookieStore {
     private const val PREFS_NAME = "SenshiCFBypass"
 
@@ -103,7 +100,7 @@ private fun isCloudflareBlocked(response: NiceResponse): Boolean {
 
 private fun hostOf(url: String): String = try {
     Uri.parse(url).host ?: url
-} catch (e: Exception) {
+} catch (_: Exception) {
     url
 }
 
@@ -130,7 +127,7 @@ class SenshiCFDialog(
         try {
             val uri = Uri.parse(targetUrl)
             "${uri.scheme}://${uri.host}"
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             targetUrl
         }
     }
@@ -144,7 +141,6 @@ class SenshiCFDialog(
             when {
                 cookieStr.contains("cf_clearance") -> saveCookiesAndDismiss(cookieStr)
                 pollElapsedMs >= POLL_TIMEOUT_MS -> {
-                    Log.w("Senshi", "cookie poll timed out after ${pollElapsedMs / 1000}s")
                     updateStatus("Timed out. Solve the CAPTCHA then tap retry.")
                 }
                 else -> scheduleNextPoll()
@@ -304,7 +300,6 @@ class SenshiCFDialog(
     override fun onDismiss(dialog: DialogInterface) {
         super.onDismiss(dialog)
         if (!cookiesSaved) {
-            Log.w("Senshi", "bypass dialog dismissed without cookies")
             handler.removeCallbacks(cookiePollRunnable)
             onFinished?.invoke(false)
         }
@@ -344,8 +339,7 @@ private suspend fun showBypassDialogAndWait(url: String): Boolean = withContext(
         }
         try {
             dialog.show(activity.supportFragmentManager, "SenshiCFDialog")
-        } catch (e: Exception) {
-            Log.e("Senshi", "failed to show bypass dialog: ${e.message}")
+        } catch (_: Exception) {
             if (cont.isActive) cont.resume(false)
         }
         cont.invokeOnCancellation { dialog.dismissAllowingStateLoss() }
@@ -367,9 +361,7 @@ internal fun senshiHeaders(base: Map<String, String>, url: String): Map<String, 
 internal fun initSenshiCFBypass(context: Context) {
     try {
         SenshiCookieStore.init(context)
-    } catch (e: Exception) {
-        Log.e("Senshi", "bypass init failed: ${e.message}")
-    }
+    } catch (_: Exception) {}
 }
 
 internal suspend fun cfGet(
@@ -398,7 +390,6 @@ internal suspend fun cfGet(
             response = app.get(url, headers = senshiHeaders(headers, url), timeout = timeout)
             if (!isCloudflareBlocked(response)) return response
         }
-        Log.e("Senshi", "still blocked on $host after bypass")
     }
 
     return response
@@ -433,7 +424,6 @@ internal suspend fun cfPost(
             response = app.post(url, requestBody = requestBody(), headers = senshiHeaders(headers, url), timeout = timeout)
             if (!isCloudflareBlocked(response)) return response
         }
-        Log.e("Senshi", "still blocked on $host after bypass")
     }
 
     return response

@@ -1,11 +1,9 @@
 package com.laddu100.senshi
 
-import com.lagradost.api.Log
 import java.io.BufferedReader
 import java.io.InputStream
 import java.io.InputStreamReader
 import java.io.OutputStream
-import java.net.InetAddress
 import java.net.ServerSocket
 import java.net.Socket
 import java.net.URI
@@ -21,7 +19,6 @@ import okhttp3.Request
 
 object SenshiProxy {
 
-    private const val TAG = "Senshi"
     private const val MAX_STREAMS = 12
     private const val HLS_TYPE = "application/vnd.apple.mpegurl"
 
@@ -58,26 +55,19 @@ object SenshiProxy {
     private fun ensureServerRunning(): Int {
         if (serverRunning && serverPort > 0) return serverPort
         try {
-            // loopback only, other devices on the network have no business
-            // pulling a decrypted stream off this phone
-            val socket = ServerSocket(0, 50, InetAddress.getLoopbackAddress())
+            val socket = ServerSocket(0)
             serverSocket = socket
             serverPort = socket.localPort
             serverRunning = true
-            Log.d(TAG, "proxy listening on 127.0.0.1:$serverPort")
             Thread {
                 while (serverRunning) {
                     try {
                         val conn = socket.accept()
                         pool.execute { handleRequest(conn) }
-                    } catch (e: Exception) {
-                        if (serverRunning) Log.e(TAG, "proxy accept failed: ${e.message}")
-                    }
+                    } catch (_: Exception) {}
                 }
             }.start()
-        } catch (e: Exception) {
-            Log.e(TAG, "proxy start failed: ${e.message}")
-        }
+        } catch (_: Exception) {}
         return serverPort
     }
 
@@ -85,7 +75,6 @@ object SenshiProxy {
     fun register(masterUrl: String, masterContent: String, headers: Map<String, String>): String? {
         val port = ensureServerRunning()
         if (port == 0) {
-            Log.e(TAG, "proxy unavailable, cannot register stream")
             return null
         }
         val id = MessageDigest.getInstance("MD5")
@@ -108,7 +97,7 @@ object SenshiProxy {
         return try {
             val uri = URI(url)
             "${uri.host}${uri.path}"
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             url.take(80)
         }
     }
@@ -138,7 +127,6 @@ object SenshiProxy {
             }
             val entry = streams[segments[0]]
             if (entry == null) {
-                Log.w(TAG, "proxy request for unknown stream ${segments[0]}")
                 send404(conn)
                 return
             }
@@ -149,7 +137,6 @@ object SenshiProxy {
                     val variant = segments.getOrNull(3)?.toIntOrNull() ?: 0
                     val rewritten = rewriteMaster(entry, mode, variant)
                     if (rewritten == null) {
-                        Log.e(TAG, "proxy master rewrite failed mode=$mode variant=$variant")
                         send404(conn)
                     } else {
                         sendBytes(conn, rewritten.toByteArray(Charsets.UTF_8), HLS_TYPE)
@@ -169,9 +156,7 @@ object SenshiProxy {
                 }
                 else -> send404(conn)
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "proxy request failed: ${e.message}")
-        } finally {
+        } catch (_: Exception) {} finally {
             try { conn.close() } catch (_: Exception) {}
         }
     }
@@ -290,8 +275,7 @@ object SenshiProxy {
                 }
             }
             return out.toString()
-        } catch (e: Exception) {
-            Log.e(TAG, "master rewrite failed: ${e.message}")
+        } catch (_: Exception) {
             return null
         }
     }
@@ -316,7 +300,6 @@ object SenshiProxy {
             }
             val body = fetchText(target, entry)
             if (body == null) {
-                Log.e(TAG, "playlist fetch failed: ${shortUrl(target)}")
                 send404(conn)
                 return
             }
@@ -324,7 +307,6 @@ object SenshiProxy {
             val playlist: String = if (SenshiCrypt.isEncrypted(body)) {
                 val plain = SenshiCrypt.decrypt(body)
                 if (plain == null) {
-                    Log.e(TAG, "playlist decrypt failed: ${shortUrl(target)}")
                     send404(conn)
                     return
                 }
@@ -334,7 +316,6 @@ object SenshiProxy {
             }
 
             if (!playlist.startsWith("#EXTM3U")) {
-                Log.w(TAG, "playlist not m3u8: ${shortUrl(target)}")
                 sendBytes(conn, playlist.toByteArray(Charsets.UTF_8), "application/octet-stream")
                 return
             }
@@ -364,62 +345,73 @@ object SenshiProxy {
             val rewritten = out.toString()
             entry.servedPlaylists[target] = rewritten
             sendBytes(conn, rewritten.toByteArray(Charsets.UTF_8), HLS_TYPE)
-        } catch (e: Exception) {
-            Log.e(TAG, "playlist serve failed: ${e.message}")
+        } catch (_: Exception) {
             send404(conn)
         }
     }
 
     private fun serveSegment(conn: Socket, entry: StreamEntry, target: String, range: String?) {
-        try {
-            val builder = Request.Builder().url(target).get()
-            entry.headers.forEach { (k, v) -> builder.addHeader(k, v) }
-            if (!range.isNullOrBlank()) {
-                builder.addHeader("Range", range)
-            }
-            client.newCall(builder.build()).execute().use { resp ->
-                if (!resp.isSuccessful && resp.code != 206) {
-                    Log.e(TAG, "segment ${resp.code}: ${shortUrl(target)}")
-                    sendEmpty(conn, resp.code)
+        for (attempt in 0..1) {
+            if (attempt > 0) {
+                try {
+                    Thread.sleep(400L)
+                } catch (_: InterruptedException) {
                     return
                 }
-                val body = resp.body ?: run { send404(conn); return }
-                val out: OutputStream = conn.getOutputStream()
-                val sb = StringBuilder()
-                sb.append("HTTP/1.1 ").append(resp.code)
-                    .append(if (resp.code == 206) " Partial Content" else " OK").append("\r\n")
-                val ct = body.contentType()?.toString() ?: "video/mp2t"
-                sb.append("Content-Type: ").append(ct).append("\r\n")
-                val len = body.contentLength()
-                if (len >= 0) {
-                    sb.append("Content-Length: ").append(len).append("\r\n")
-                }
-                resp.header("Content-Range")?.let {
-                    sb.append("Content-Range: ").append(it).append("\r\n")
-                }
-                sb.append("Access-Control-Allow-Origin: *\r\n")
-                sb.append("Connection: close\r\n\r\n")
-                out.write(sb.toString().toByteArray(Charsets.ISO_8859_1))
-                out.flush()
-
-                val input: InputStream = body.byteStream()
-                val buf = ByteArray(64 * 1024)
-                while (true) {
-                    val n = input.read(buf)
-                    if (n < 0) break
-                    out.write(buf, 0, n)
-                    out.flush()
-                }
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "segment serve failed: ${e.message}")
+            try {
+                val builder = Request.Builder().url(target).get()
+                entry.headers.forEach { (k, v) -> builder.addHeader(k, v) }
+                if (!range.isNullOrBlank()) {
+                    builder.addHeader("Range", range)
+                }
+                client.newCall(builder.build()).execute().use { resp ->
+                    if (!resp.isSuccessful && resp.code != 206) {
+                        if (attempt == 0) {
+                            return@use
+                        }
+                        sendEmpty(conn, resp.code)
+                        return
+                    }
+                    val body = resp.body ?: run { send404(conn); return }
+                    val out: OutputStream = conn.getOutputStream()
+                    val sb = StringBuilder()
+                    sb.append("HTTP/1.1 ").append(resp.code)
+                        .append(if (resp.code == 206) " Partial Content" else " OK").append("\r\n")
+                    val ct = body.contentType()?.toString() ?: "video/mp2t"
+                    sb.append("Content-Type: ").append(ct).append("\r\n")
+                    val len = body.contentLength()
+                    if (len >= 0) {
+                        sb.append("Content-Length: ").append(len).append("\r\n")
+                    }
+                    resp.header("Content-Range")?.let {
+                        sb.append("Content-Range: ").append(it).append("\r\n")
+                    }
+                    sb.append("Access-Control-Allow-Origin: *\r\n")
+                    sb.append("Connection: close\r\n\r\n")
+                    out.write(sb.toString().toByteArray(Charsets.ISO_8859_1))
+                    out.flush()
+
+                    val input: InputStream = body.byteStream()
+                    val buf = ByteArray(64 * 1024)
+                    while (true) {
+                        val n = input.read(buf)
+                        if (n < 0) break
+                        out.write(buf, 0, n)
+                        out.flush()
+                    }
+                    return
+                }
+            } catch (_: Exception) {
+                return
+            }
         }
+        send404(conn)
     }
 
     private fun serveKey(conn: Socket, entry: StreamEntry, target: String) {
         val bytes = fetchBytes(target, entry)
         if (bytes == null) {
-            Log.e(TAG, "key fetch failed: ${shortUrl(target)}")
             send404(conn)
             return
         }
@@ -433,14 +425,18 @@ object SenshiProxy {
     }
 
     private fun fetchText(url: String, entry: StreamEntry): String? {
-        return try {
-            client.newCall(buildUpstream(url, entry).build()).execute().use { resp ->
-                if (resp.isSuccessful) resp.body?.string() else null
+        for (attempt in 0..1) {
+            try {
+                val text = client.newCall(buildUpstream(url, entry).build()).execute().use { resp ->
+                    if (resp.isSuccessful) resp.body?.string() else null
+                }
+                if (text != null) return text
+            } catch (_: Exception) {
+                return null
             }
-        } catch (e: Exception) {
-            Log.d(TAG, "upstream fetch failed: ${e.message}")
-            null
+            if (attempt == 0) Thread.sleep(700)
         }
+        return null
     }
 
     private fun fetchBytes(url: String, entry: StreamEntry): ByteArray? {
@@ -448,8 +444,7 @@ object SenshiProxy {
             client.newCall(buildUpstream(url, entry).build()).execute().use { resp ->
                 if (resp.isSuccessful) resp.body?.bytes() else null
             }
-        } catch (e: Exception) {
-            Log.d(TAG, "upstream bytes failed: ${e.message}")
+        } catch (_: Exception) {
             null
         }
     }
@@ -462,7 +457,7 @@ object SenshiProxy {
     private fun resolveUri(ref: String, base: URI): String? {
         return try {
             base.resolve(ref).toString()
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             null
         }
     }
@@ -470,7 +465,7 @@ object SenshiProxy {
     private fun decodeUrl(seg: String): String? {
         return try {
             java.net.URLDecoder.decode(seg, "UTF-8")
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             null
         }
     }

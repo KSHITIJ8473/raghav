@@ -15,6 +15,7 @@ class RaghavAnimePlugin : Plugin() {
         initAnidapCFBypass(context)
 
         initSenshiCFBypass(context)
+        RaghavSenshiVhost.init(context)
 
         RaghavAniChanWeb.init(context)
 

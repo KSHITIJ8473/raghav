@@ -351,46 +351,64 @@ object RaghavSenshiProxy {
     }
 
     private fun serveSegment(conn: Socket, entry: StreamEntry, target: String, range: String?) {
-        try {
-            val builder = Request.Builder().url(target).get()
-            entry.headers.forEach { (k, v) -> builder.addHeader(k, v) }
-            if (!range.isNullOrBlank()) {
-                builder.addHeader("Range", range)
-            }
-            client.newCall(builder.build()).execute().use { resp ->
-                if (!resp.isSuccessful && resp.code != 206) {
-                    sendEmpty(conn, resp.code)
+        // cdn edges occasionally 403 a single request, the player is far less
+        // forgiving than a browser so one quick retry keeps playback smooth
+        for (attempt in 0..1) {
+            if (attempt > 0) {
+                try {
+                    Thread.sleep(400L)
+                } catch (_: InterruptedException) {
                     return
                 }
-                val body = resp.body ?: run { send404(conn); return }
-                val out: OutputStream = conn.getOutputStream()
-                val sb = StringBuilder()
-                sb.append("HTTP/1.1 ").append(resp.code)
-                    .append(if (resp.code == 206) " Partial Content" else " OK").append("\r\n")
-                val ct = body.contentType()?.toString() ?: "video/mp2t"
-                sb.append("Content-Type: ").append(ct).append("\r\n")
-                val len = body.contentLength()
-                if (len >= 0) {
-                    sb.append("Content-Length: ").append(len).append("\r\n")
-                }
-                resp.header("Content-Range")?.let {
-                    sb.append("Content-Range: ").append(it).append("\r\n")
-                }
-                sb.append("Access-Control-Allow-Origin: *\r\n")
-                sb.append("Connection: close\r\n\r\n")
-                out.write(sb.toString().toByteArray(Charsets.ISO_8859_1))
-                out.flush()
-
-                val input: InputStream = body.byteStream()
-                val buf = ByteArray(64 * 1024)
-                while (true) {
-                    val n = input.read(buf)
-                    if (n < 0) break
-                    out.write(buf, 0, n)
-                    out.flush()
-                }
             }
-        } catch (_: Exception) {}
+            try {
+                val builder = Request.Builder().url(target).get()
+                entry.headers.forEach { (k, v) -> builder.addHeader(k, v) }
+                if (!range.isNullOrBlank()) {
+                    builder.addHeader("Range", range)
+                }
+                client.newCall(builder.build()).execute().use { resp ->
+                    if (!resp.isSuccessful && resp.code != 206) {
+                        if (attempt == 0) {
+                            return@use
+                        }
+                        sendEmpty(conn, resp.code)
+                        return
+                    }
+                    val body = resp.body ?: run { send404(conn); return }
+                    val out: OutputStream = conn.getOutputStream()
+                    val sb = StringBuilder()
+                    sb.append("HTTP/1.1 ").append(resp.code)
+                        .append(if (resp.code == 206) " Partial Content" else " OK").append("\r\n")
+                    val ct = body.contentType()?.toString() ?: "video/mp2t"
+                    sb.append("Content-Type: ").append(ct).append("\r\n")
+                    val len = body.contentLength()
+                    if (len >= 0) {
+                        sb.append("Content-Length: ").append(len).append("\r\n")
+                    }
+                    resp.header("Content-Range")?.let {
+                        sb.append("Content-Range: ").append(it).append("\r\n")
+                    }
+                    sb.append("Access-Control-Allow-Origin: *\r\n")
+                    sb.append("Connection: close\r\n\r\n")
+                    out.write(sb.toString().toByteArray(Charsets.ISO_8859_1))
+                    out.flush()
+
+                    val input: InputStream = body.byteStream()
+                    val buf = ByteArray(64 * 1024)
+                    while (true) {
+                        val n = input.read(buf)
+                        if (n < 0) break
+                        out.write(buf, 0, n)
+                        out.flush()
+                    }
+                    return
+                }
+            } catch (_: Exception) {
+                return
+            }
+        }
+        send404(conn)
     }
 
     private fun serveKey(conn: Socket, entry: StreamEntry, target: String) {

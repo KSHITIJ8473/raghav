@@ -8,6 +8,7 @@ import com.lagradost.cloudstream3.plugins.Plugin
 class SenshiPlugin : Plugin() {
     override fun load(context: Context) {
         initSenshiCFBypass(context)
+        SenshiVhost.init(context)
         registerMainAPI(SenshiProvider())
     }
 }

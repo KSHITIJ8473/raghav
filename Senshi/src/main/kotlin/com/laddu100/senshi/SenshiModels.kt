@@ -71,7 +71,8 @@ data class SenshiLatestEmbed(
 @JsonIgnoreProperties(ignoreUnknown = true)
 data class VidcloudFile(
     val src: String? = null,
-    val label: String? = null
+    val quality: String? = null,
+    val audio: String? = null
 )
 
 @JsonIgnoreProperties(ignoreUnknown = true)
@@ -85,6 +86,6 @@ data class VidcloudTrack(
 
 @JsonIgnoreProperties(ignoreUnknown = true)
 data class VidcloudSource(
-    val source: List<VidcloudFile> = emptyList(),
+    val source: VidcloudFile? = null,
     val tracks: List<VidcloudTrack> = emptyList()
 )

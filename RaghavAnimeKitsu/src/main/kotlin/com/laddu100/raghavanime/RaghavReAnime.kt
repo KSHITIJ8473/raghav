@@ -45,6 +45,7 @@ class RaghavReAnime : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         if (anilistId <= 0 || episode <= 0) return false
+        mainUrl = FirebaseDomainHelper.getDomain("reanime") ?: mainUrl
 
         val servers = flixServers(anilistId, episode)
         if (servers.isEmpty()) {

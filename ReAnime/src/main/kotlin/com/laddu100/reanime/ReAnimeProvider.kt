@@ -142,8 +142,6 @@ class ReAnimeProvider : MainAPI() {
             }
         }
 
-        // the app hides the sub/dub switcher on movie types, so dual audio movies
-        // are typed as regular anime to keep both reachable
         val type = when {
             anime.format == "MOVIE" && dubEps.isNotEmpty() -> TvType.Anime
             anime.format == "MOVIE" -> TvType.AnimeMovie

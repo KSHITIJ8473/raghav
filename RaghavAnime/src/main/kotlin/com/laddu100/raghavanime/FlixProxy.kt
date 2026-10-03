@@ -5,6 +5,7 @@ import java.io.ByteArrayOutputStream
 import java.io.InputStream
 import java.io.InputStreamReader
 import java.io.OutputStream
+import java.net.InetAddress
 import java.net.ServerSocket
 import java.net.Socket
 import java.net.URI
@@ -71,7 +72,9 @@ object FlixProxy {
     private fun ensureServerRunning(): Int {
         if (serverRunning && serverPort > 0) return serverPort
         try {
-            val socket = ServerSocket(0)
+            // loopback only, other devices on the network have no business
+            // pulling a decrypted stream off this phone
+            val socket = ServerSocket(0, 50, InetAddress.getLoopbackAddress())
             serverSocket = socket
             serverPort = socket.localPort
             serverRunning = true

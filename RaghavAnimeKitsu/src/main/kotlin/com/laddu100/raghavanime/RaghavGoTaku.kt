@@ -50,12 +50,16 @@ class RaghavGoTaku : MainAPI() {
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
+        GoTakuApi.refreshDomain()
+        mainUrl = GoTakuApi.site()
         if (query.isBlank()) return emptyList()
         val (titles, _) = GoTakuApi.fetchTitles(mapOf("q" to query, "limit" to "28"))
         return titles.mapNotNull { it.toSearchResponse() }
     }
 
     override suspend fun load(url: String): LoadResponse? {
+        GoTakuApi.refreshDomain()
+        mainUrl = GoTakuApi.site()
         val titleId = url.substringAfter("title/").substringBefore("?").takeIf { it.isNotBlank() } ?: return null
         val detail = GoTakuApi.fetchTitleDetail(titleId) ?: return null
         val title = detail.name ?: return null

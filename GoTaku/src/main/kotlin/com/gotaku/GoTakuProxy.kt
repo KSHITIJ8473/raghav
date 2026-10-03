@@ -56,9 +56,7 @@ object GoTakuProxy {
     private fun ensureServerRunning(): Int {
         if (serverRunning && serverPort > 0) return serverPort
         try {
-            // loopback only, other devices on the network have no business
-            // pulling a decrypted stream off this phone
-            val socket = ServerSocket(0, 50, InetAddress.getLoopbackAddress())
+            val socket = ServerSocket(0, 50, InetAddress.getByName("127.0.0.1"))
             serverSocket = socket
             serverPort = socket.localPort
             serverRunning = true

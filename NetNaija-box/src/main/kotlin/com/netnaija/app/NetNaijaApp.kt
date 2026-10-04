@@ -785,8 +785,16 @@ class NetNaijaApp(private val sharedPref: SharedPreferences?) : MainAPI() {
             }
         }
 
-        val id = Regex("subjectId=([^&]+)").find(url)?.groupValues?.get(1)
-            ?: url.substringAfterLast('/')
+        // watch history carries the row position and web page glued after
+        // the id behind pipes, the id itself only lives before the first one
+        val urlBase = url.substringBefore("|")
+        val id = when {
+            urlBase.contains("get?subjectId") ->
+                Regex("subjectId=([^&]+)").find(urlBase)?.groupValues?.get(1)
+                    ?: urlBase.substringAfterLast('/')
+            urlBase.contains("/") -> urlBase.substringAfterLast('/')
+            else -> urlBase
+        }
         val finalUrl = "$mainUrl/wefeed-mobile-bff/subject-api/get?subjectId=$id"
 
         var headers = buildAuthHeaders("GET", finalUrl)
@@ -832,6 +840,8 @@ class NetNaijaApp(private val sharedPref: SharedPreferences?) : MainAPI() {
         if (detailPath.isNullOrBlank()) {
             detailPath = data.get("detailPath")?.asText()
         }
+        val pathPart = detailPath ?: ""
+        val domainPart = detailDomain ?: ""
         val subjectType = data.get("subjectType")?.asInt() ?: 1
         val type = when (subjectType) {
             2 -> TvType.TvSeries
@@ -955,7 +965,7 @@ class NetNaijaApp(private val sharedPref: SharedPreferences?) : MainAPI() {
             val apiGetUrl = "$mainUrl/wefeed-mobile-bff/subject-api/get?subjectId=$id"
             for ((seasonNumber, episodeNumbers) in episodeMap) {
                 for (episodeNumber in episodeNumbers.sorted()) {
-                    val epUrl = "$apiGetUrl|$seasonNumber|$episodeNumber|$detailPath|$detailDomain"
+                    val epUrl = "$apiGetUrl|$seasonNumber|$episodeNumber|$pathPart|$domainPart"
                     val info = metaVideos.firstOrNull {
                         it.get("season")?.asInt() == seasonNumber && it.get("episode")?.asInt() == episodeNumber
                     }
@@ -977,7 +987,7 @@ class NetNaijaApp(private val sharedPref: SharedPreferences?) : MainAPI() {
                 }
             }
             if (episodes.isEmpty()) {
-                val fallbackUrl = "$apiGetUrl|1|1|$detailPath|$detailDomain"
+                val fallbackUrl = "$apiGetUrl|1|1|$pathPart|$domainPart"
                 episodes.add(
                     newEpisode(fallbackUrl) {
                         this.name = "Episode 1"
@@ -989,7 +999,7 @@ class NetNaijaApp(private val sharedPref: SharedPreferences?) : MainAPI() {
             }
 
             val recommendations = fetchRecommendations(id)
-            return newTvSeriesLoadResponse(title, normalizedUrl, type, episodes) {
+            return newTvSeriesLoadResponse(title, finalUrl, type, episodes) {
                 this.posterUrl = coverUrl ?: Poster
                 this.backgroundPosterUrl = Background ?: backgroundUrl ?: Poster
                 try {
@@ -1009,8 +1019,10 @@ class NetNaijaApp(private val sharedPref: SharedPreferences?) : MainAPI() {
         }
 
         val recommendations = fetchRecommendations(id)
-        val movieUrl = "$mainUrl/wefeed-mobile-bff/subject-api/get?subjectId=$id|0|0|$detailPath|$detailDomain"
-        return newMovieLoadResponse(title, movieUrl, type, movieUrl) {
+        val movieUrl = "$mainUrl/wefeed-mobile-bff/subject-api/get?subjectId=$id|0|0|$pathPart|$domainPart"
+        // the page url stays clean so history and continue watching reopen
+        // the title, only playback needs the pipe payload
+        return newMovieLoadResponse(title, finalUrl, type, movieUrl) {
             this.posterUrl = coverUrl ?: Poster
             this.backgroundPosterUrl = Background ?: backgroundUrl
             try {
@@ -1130,9 +1142,11 @@ class NetNaijaApp(private val sharedPref: SharedPreferences?) : MainAPI() {
                             finalStreamUrl.contains(".mp4") || finalStreamUrl.contains(".mkv") -> ExtractorLinkType.VIDEO
                             else -> INFER_TYPE
                         }
-                        val audioTag = language.replace("dub", "Audio")
-                        val sourceName = if (isDash) "$name DASH" else "$name HLS"
-                        val displayName = if (isDash) "$name DASH ($audioTag)" else "$name HLS ($audioTag)"
+                        val cleanLang = language.replace("dub", "").replace("Audio", "").trim()
+                        val linkName = "$cleanLang Audio"
+                        val formatName = if (isDash) "DASH" else "HLS"
+                        val sourceName = "$name $formatName"
+                        val displayName = "$name $formatName ($linkName)"
                         val baseHeaders = mutableMapOf(
                             "Referer" to "$mainUrl/",
                             "User-Agent" to modernUserAgent
@@ -1470,9 +1484,11 @@ class NetNaijaApp(private val sharedPref: SharedPreferences?) : MainAPI() {
                                 streamHeaders[signHeaderKey] = signCookie
                                 streamHeaders["Cookie"] = signCookie
                             }
-                            val audioTag = language.replace("dub", "Audio")
-                            val sourceName = if (isDash) "$name DASH" else "$name HLS"
-                            val displayName = if (isDash) "$name DASH ($audioTag)" else "$name HLS ($audioTag)"
+                            val cleanLang = language.replace("dub", "").replace("Audio", "").trim()
+                            val linkName = "$cleanLang Audio"
+                            val formatName = if (isDash) "DASH" else "HLS"
+                            val sourceName = "$name $formatName"
+                            val displayName = "$name $formatName ($linkName)"
                             callback(
                                 com.lagradost.cloudstream3.utils.newExtractorLink(sourceName, displayName, finalStreamUrl, type) {
                                     this.referer = referer

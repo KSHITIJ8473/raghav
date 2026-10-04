@@ -56,8 +56,6 @@ object RaghavSenshiProxy {
     private fun ensureServerRunning(): Int {
         if (serverRunning && serverPort > 0) return serverPort
         try {
-            // loopback only, other devices on the network have no business
-            // pulling a decrypted stream off this phone
             val socket = ServerSocket(0, 50, InetAddress.getLoopbackAddress())
             serverSocket = socket
             serverPort = socket.localPort
@@ -345,8 +343,6 @@ object RaghavSenshiProxy {
     }
 
     private fun serveSegment(conn: Socket, entry: StreamEntry, target: String, range: String?) {
-        // cdn edges occasionally 403 a single request, the player is far less
-        // forgiving than a browser so one quick retry keeps playback smooth
         for (attempt in 0..1) {
             if (attempt > 0) {
                 try {
@@ -421,7 +417,6 @@ object RaghavSenshiProxy {
     }
 
     private fun fetchText(url: String, entry: StreamEntry): String? {
-        // cdn edges occasionally 403 on burst rendition fetches, one short retry helps
         for (attempt in 0..1) {
             try {
                 val text = client.newCall(buildUpstream(url, entry).build()).execute().use { resp ->

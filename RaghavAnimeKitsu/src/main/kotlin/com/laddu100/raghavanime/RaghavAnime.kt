@@ -623,6 +623,9 @@ class RaghavAnime : MainAPI() {
         prefetchJob?.cancel()
         prefetchJob = prefetchScope.launch {
             delay(750)
+            launch {
+                try { RaghavSenshiVhost.warmup() } catch (e: CancellationException) { throw e } catch (_: Exception) {}
+            }
             for (isDub in listOf(false, true)) {
                 if (!isActive) return@launch
                 RaghavPerf.runLimitedAsync(RaghavPerf.prefetchConcurrency(), listOf(
@@ -633,6 +636,7 @@ class RaghavAnime : MainAPI() {
                     { warmSource("Animo", animeKey, isDub) { resolveAnimo(titles, targets, null, isDub, year)?.episodes } },
                     { if (aniId > 0) warmSource("AniNami", animeKey, isDub) { resolveAniNami(aniId, null, isDub)?.episodes } },
                     { warmSource("Xanime", animeKey, isDub) { resolveXanime(titles, targets, null, isDub, year)?.episodes } },
+                    { warmSource("Senshi", animeKey, isDub) { resolveSenshi(titles, targets, null, isDub, year)?.episodes } },
                     { if (aniId > 0) RaghavAniChan().warm() }
                 ))
             }

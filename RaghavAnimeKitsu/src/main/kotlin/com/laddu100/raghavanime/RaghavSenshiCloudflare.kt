@@ -46,7 +46,6 @@ private val cfBlockerPhrases = listOf(
 
 private const val COOKIE_TTL_MS = 45 * 60 * 1000L
 
-// each host runs its own challenge, cookies are stored per host
 private object SenshiCookieStore {
     private const val PREFS_NAME = "SenshiCFBypass"
 

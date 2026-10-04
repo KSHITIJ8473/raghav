@@ -9,7 +9,6 @@ object RaghavSenshiCrypt {
 
     private const val MARKER = "EM3U8v1:"
 
-    // hidden in the site player bundle as two arrays that xor into this key
     private val KEY = intArrayOf(
         110, 226, 114, 19, 39, 237, 70, 155, 182, 217, 58, 185, 183, 168, 56, 4,
         81, 144, 181, 186, 133, 217, 206, 163, 177, 225, 120, 5, 247, 180, 174, 246

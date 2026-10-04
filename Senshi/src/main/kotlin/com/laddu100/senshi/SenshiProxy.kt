@@ -93,15 +93,6 @@ object SenshiProxy {
         return "http://127.0.0.1:$port/$id"
     }
 
-    private fun shortUrl(url: String): String {
-        return try {
-            val uri = URI(url)
-            "${uri.host}${uri.path}"
-        } catch (_: Exception) {
-            url.take(80)
-        }
-    }
-
     private fun handleRequest(conn: Socket) {
         try {
             conn.soTimeout = 20000

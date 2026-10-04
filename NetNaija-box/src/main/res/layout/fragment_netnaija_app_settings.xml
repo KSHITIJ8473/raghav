@@ -150,6 +150,63 @@
             android:contentDescription="Select sources" />
     </LinearLayout>
 
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="16dp"
+        android:layout_marginBottom="8dp"
+        android:paddingStart="6dp"
+        android:text="HOME PAGE"
+        android:textSize="10.5sp"
+        android:textStyle="bold"
+        android:textColor="#6E6E78"
+        android:letterSpacing="0.14" />
+
+    <LinearLayout
+        android:id="@+id/sectionsRow"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:paddingStart="16dp"
+        android:paddingEnd="14dp"
+        android:paddingTop="15dp"
+        android:paddingBottom="15dp"
+        android:focusable="true"
+        android:clickable="true">
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="vertical">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Home Sections"
+                android:textSize="15.5sp"
+                android:textStyle="bold"
+                android:textColor="#F4F4F6" />
+
+            <TextView
+                android:id="@+id/sectionsSubtitle"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="2dp"
+                android:textSize="12sp"
+                android:textColor="#8F8F98" />
+        </LinearLayout>
+
+        <ImageView
+            android:id="@+id/chevron_sections"
+            android:layout_width="20dp"
+            android:layout_height="20dp"
+            android:layout_marginStart="8dp"
+            android:alpha="0.6"
+            android:contentDescription="Reorder home sections" />
+    </LinearLayout>
+
     <LinearLayout
         android:id="@+id/saveContainer"
         android:layout_width="match_parent"

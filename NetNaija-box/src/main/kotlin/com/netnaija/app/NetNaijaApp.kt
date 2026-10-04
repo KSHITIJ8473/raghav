@@ -42,6 +42,7 @@ import com.netnaija.app.donation.DonationManager
 import com.lagradost.cloudstream3.amap
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
+import org.json.JSONArray
 import org.json.JSONObject
 import java.net.URI
 import java.security.MessageDigest
@@ -80,6 +81,87 @@ class NetNaijaApp(private val sharedPref: SharedPreferences?) : MainAPI() {
             "https://api4sg.aoneroom.com",
             "https://api3.aoneroom.com"
         )
+
+        const val PREF_SECTION_ORDER = "netnaija_app_section_order"
+        const val PREF_SECTION_HIDDEN = "netnaija_app_section_hidden"
+
+        // "r|" rankings and "1|channel;filters" browse lists, interpreted in
+        // getMainPage
+        val sectionCatalog = listOf(
+            "live|matches" to "\u26bd Live Football & Sports",
+            "r|0|9167640870324258216" to "Trending Movies",
+            "r|0|5692654647815587592" to "In Cinema",
+            "r|0|414907768299210008" to "Bollywood",
+            "r|0|3859721901924910512" to "South Indian",
+            "r|0|8019599703232971616" to "Hollywood",
+            "r|0|1488104699998914056" to "New Release",
+            "r|0|6027735606879570952" to "New Punjabi",
+            "r|0|6144409817256968824" to "New Bengali",
+            "r|5|719331337777440448" to "Top Series",
+            "r|5|4903182713986896328" to "Indian Drama",
+            "r|5|1255898847918934600" to "Reality TV",
+            "r|5|1976033493293449744" to "Asian Drama",
+            "r|5|3910636007619709856" to "Western TV",
+            "r|5|5177200225164885656" to "Turkish Drama",
+            "1|1" to "Movies",
+            "1|2" to "Series",
+            "1|1006" to "Anime",
+            "2|2;country=Japan;genre=Animation" to "Anime (Series)",
+            "1|1;country=India" to "Indian (Movies)",
+            "1|2;country=India" to "Indian (Series)",
+            "1|1;classify=Hindi dub;country=United States" to "USA (Movies)",
+            "1|2;classify=Hindi dub;country=United States" to "USA (Series)",
+            "1|1;country=Japan" to "Japan (Movies)",
+            "1|2;country=Japan" to "Japan (Series)",
+            "1|1;country=China" to "China (Movies)",
+            "1|2;country=China" to "China (Series)",
+            "1|1;country=Philippines" to "Philippines (Movies)",
+            "1|2;country=Philippines" to "Philippines (Series)",
+            "1|1;country=Thailand" to "Thailand (Movies)",
+            "1|2;country=Thailand" to "Thailand (Series)",
+            "1|1;country=Nigeria" to "Nollywood (Movies)",
+            "1|2;country=Nigeria" to "Nollywood (Series)",
+            "1|1;country=Korea" to "South Korean (Movies)",
+            "1|2;country=Korea" to "South Korean (Series)",
+            "1|1;classify=Hindi dub;genre=Action" to "Action (Movies)",
+            "1|1;classify=Hindi dub;genre=Crime" to "Crime (Movies)",
+            "1|1;classify=Hindi dub;genre=Comedy" to "Comedy (Movies)",
+            "1|2;classify=Hindi dub;genre=Crime" to "Crime (Series)",
+            "1|2;classify=Hindi dub;genre=Comedy" to "Comedy (Series)"
+        )
+
+        // saved order wins, sections unknown to it are appended so updates
+        // never drop a new row from the home page
+        fun orderedSections(prefs: SharedPreferences?): List<Pair<String, String>> {
+            val saved = prefs?.getString(PREF_SECTION_ORDER, null) ?: return sectionCatalog
+            return try {
+                val byKey = sectionCatalog.toMap()
+                val ordered = ArrayList<Pair<String, String>>()
+                val savedKeys = JSONArray(saved)
+                for (i in 0 until savedKeys.length()) {
+                    val key = savedKeys.getString(i)
+                    val name = byKey[key] ?: continue
+                    if (ordered.none { it.first == key }) ordered.add(key to name)
+                }
+                sectionCatalog.forEach { section ->
+                    if (ordered.none { it.first == section.first }) ordered.add(section)
+                }
+                ordered
+            } catch (e: Exception) {
+                sectionCatalog
+            }
+        }
+
+        fun hiddenSections(prefs: SharedPreferences?): Set<String> {
+            val saved = prefs?.getString(PREF_SECTION_HIDDEN, "") ?: ""
+            if (saved.isBlank()) return emptySet()
+            return saved.split(",").filter { it.isNotBlank() }.toSet()
+        }
+
+        fun visibleSections(prefs: SharedPreferences?): List<Pair<String, String>> {
+            val hiddenKeys = hiddenSections(prefs)
+            return orderedSections(prefs).filter { it.first !in hiddenKeys }
+        }
 
         private const val TOKEN_BOOTSTRAP_URL =
             "https://apig.inmoviebox.com/wefeed-mobile-bff/tab/ranking-list?tabId=0&categoryType=4516404531735022304&page=1&perPage=1"
@@ -329,52 +411,10 @@ class NetNaijaApp(private val sharedPref: SharedPreferences?) : MainAPI() {
         return null
     }
 
-    // "r|" rankings and "1|channel;filters" browse lists, interpreted in
-    // getMainPage
-    private val allSections = listOf(
-        "live|matches" to "\u26bd Live Football & Sports",
-        "r|0|9167640870324258216" to "Trending Movies",
-        "r|0|5692654647815587592" to "In Cinema",
-        "r|0|414907768299210008" to "Bollywood",
-        "r|0|3859721901924910512" to "South Indian",
-        "r|0|8019599703232971616" to "Hollywood",
-        "r|0|1488104699998914056" to "New Release",
-        "r|0|6027735606879570952" to "New Punjabi",
-        "r|0|6144409817256968824" to "New Bengali",
-        "r|5|719331337777440448" to "Top Series",
-        "r|5|4903182713986896328" to "Indian Drama",
-        "r|5|1255898847918934600" to "Reality TV",
-        "r|5|1976033493293449744" to "Asian Drama",
-        "r|5|3910636007619709856" to "Western TV",
-        "r|5|5177200225164885656" to "Turkish Drama",
-        "1|1" to "Movies",
-        "1|2" to "Series",
-        "1|1006" to "Anime",
-        "2|2;country=Japan;genre=Animation" to "Anime (Series)",
-        "1|1;country=India" to "Indian (Movies)",
-        "1|2;country=India" to "Indian (Series)",
-        "1|1;classify=Hindi dub;country=United States" to "USA (Movies)",
-        "1|2;classify=Hindi dub;country=United States" to "USA (Series)",
-        "1|1;country=Japan" to "Japan (Movies)",
-        "1|2;country=Japan" to "Japan (Series)",
-        "1|1;country=China" to "China (Movies)",
-        "1|2;country=China" to "China (Series)",
-        "1|1;country=Philippines" to "Philippines (Movies)",
-        "1|2;country=Philippines" to "Philippines (Series)",
-        "1|1;country=Thailand" to "Thailand (Movies)",
-        "1|2;country=Thailand" to "Thailand (Series)",
-        "1|1;country=Nigeria" to "Nollywood (Movies)",
-        "1|2;country=Nigeria" to "Nollywood (Series)",
-        "1|1;country=Korea" to "South Korean (Movies)",
-        "1|2;country=Korea" to "South Korean (Series)",
-        "1|1;classify=Hindi dub;genre=Action" to "Action (Movies)",
-        "1|1;classify=Hindi dub;genre=Crime" to "Crime (Movies)",
-        "1|1;classify=Hindi dub;genre=Comedy" to "Comedy (Movies)",
-        "1|2;classify=Hindi dub;genre=Crime" to "Crime (Series)",
-        "1|2;classify=Hindi dub;genre=Comedy" to "Comedy (Series)"
-    )
-
-    override val mainPage = mainPageOf(*allSections.toTypedArray())
+    // re-read on every home reload so section changes apply without a
+    // restart
+    override val mainPage: List<MainPageData>
+        get() = mainPageOf(*visibleSections(sharedPref).toTypedArray())
 
     // hides explicit rows unless adult content is enabled in the app settings
     fun isNsfwItem(item: JsonNode): Boolean {

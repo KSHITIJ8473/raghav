@@ -12,6 +12,7 @@ import android.widget.ImageView
 import android.widget.TextView
 import androidx.appcompat.app.AlertDialog
 import androidx.fragment.app.DialogFragment
+import com.netnaija.app.NetNaijaApp
 import com.netnaija.app.NetNaijaAppPlugin
 import com.netnaija.app.NetNaijaAppSources
 import kotlin.math.max
@@ -71,13 +72,18 @@ class NetNaijaAppSettingsFragment(
         val sourcesRow = findView(view, "sourcesRow")
         val sourcesSubtitle = findView(view, "sourcesSubtitle") as TextView
         val chevronSources = findView(view, "chevron_sources") as ImageView
+        val sectionsRow = findView(view, "sectionsRow")
+        val sectionsSubtitle = findView(view, "sectionsSubtitle") as TextView
+        val chevronSections = findView(view, "chevron_sections") as ImageView
         val saveContainer = findView(view, "saveContainer")
         val saveIcon = findView(view, "saveIcon") as ImageView
 
         hostRow.background = drawable("settings_item_background")
         sourcesRow.background = drawable("settings_item_background")
+        sectionsRow.background = drawable("settings_item_background")
         chevronHost.setImageDrawable(drawable("ic_chevron"))
         chevronSources.setImageDrawable(drawable("ic_chevron"))
+        chevronSections.setImageDrawable(drawable("ic_chevron"))
         saveContainer.background = drawable("save_button_background")
         saveIcon.setImageDrawable(drawable("save_icon"))
 
@@ -88,6 +94,9 @@ class NetNaijaAppSettingsFragment(
         val known = NetNaijaAppSources.knownSources()
         val enabled = known.count { NetNaijaAppSources.isEnabled(it) }
         sourcesSubtitle.text = "$enabled of ${known.size} enabled"
+
+        val shown = NetNaijaApp.visibleSections(sharedPref).size
+        sectionsSubtitle.text = "$shown of ${NetNaijaApp.sectionCatalog.size} shown"
 
         hostRow.setOnClickListener {
             AlertDialog.Builder(requireContext())
@@ -105,6 +114,10 @@ class NetNaijaAppSettingsFragment(
 
         sourcesRow.setOnClickListener {
             NetNaijaAppSourcesFragment().show(parentFragmentManager, "NetNaijaAppSources")
+        }
+
+        sectionsRow.setOnClickListener {
+            NetNaijaAppSectionsFragment(sharedPref).show(parentFragmentManager, "NetNaijaAppSections")
         }
 
         saveContainer.setOnClickListener {

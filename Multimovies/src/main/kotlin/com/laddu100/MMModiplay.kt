@@ -1,234 +1,227 @@
 package com.laddu100
 
-import com.lagradost.cloudstream3.SubtitleFile
-import com.lagradost.cloudstream3.newSubtitleFile
+import com.lagradost.api.Log
+import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.newExtractorLink
+import org.json.JSONObject
+import org.jsoup.Jsoup
 
-object MMModiplay {
+// the rozgarlelo hub fronts several mirror platforms; some it resolves server side
+// into a relay player page, others it redirects to their own player domains
+object MMCineverse {
 
-    data class CineServer(
-        val embed: String,
-        val platform: String,
-        val name: String,
-        val code: String,
+    private const val TAG = "MM_Cineverse"
+    private const val HUB = "https://rozgarlelo.modiplay.xyz"
+
+    // hosts running the shared api v1 player with the static protocol derived cipher
+    private val apiV1Hosts = mapOf(
+        "multimovies.rpmhub.site" to "RPM Share",
+        "multimovies.embedseek.xyz" to "Seek Streaming",
+        "multimovies.p2pplay.pro" to "Stream P2P",
+        "server1.uns.bio" to "Upn Share",
     )
+
+    private val APIV1_KEY = "kiemtienmua911ca".toByteArray(Charsets.UTF_8)
+    private val APIV1_IV = "1234567890oiuytr".toByteArray(Charsets.UTF_8)
+
+    private data class SubServer(val platform: String, val name: String, val code: String)
+
+    private fun decryptApiV1(hex: String): JSONObject? {
+        val data = try {
+            MMCrypto.hexToBytes(hex)
+        } catch (e: Exception) {
+            Log.d(TAG, "api v1 hex: ${e.message}")
+            return null
+        }
+        if (data.isEmpty() || data.size % 16 != 0) return null
+        val plain = MMCrypto.aesCbcDecrypt(data, APIV1_KEY, APIV1_IV) ?: return null
+        return try {
+            JSONObject(String(plain, Charsets.UTF_8))
+        } catch (e: Exception) {
+            Log.d(TAG, "api v1 json: ${e.message}")
+            null
+        }
+    }
+
+    suspend fun resolveApiV1(
+        host: String,
+        code: String,
+        label: String,
+        callback: (ExtractorLink) -> Unit,
+    ): Boolean {
+        val info = MMNet.get(
+            "https://$host/api/v1/info?id=$code",
+            referer = "https://$host/",
+        )?.let { decryptApiV1(it) }
+        val title = info?.optString("title").orEmpty()
+
+        val videoHex = MMNet.get(
+            "https://$host/api/v1/video?id=$code&w=1920&h=1080&r=$HUB",
+            referer = "https://$host/",
+        ) ?: return false
+        val video = decryptApiV1(videoHex) ?: return false
+
+        var added = false
+        val cfNative = video.optString("cfNative")
+        if (cfNative.isNotBlank()) {
+            val quality = Regex("(\\d{3,4})p").find(title)?.groupValues?.get(1)
+            callback(
+                newExtractorLink(label, label + (quality?.let { " ${it}p" } ?: ""), cfNative, type = ExtractorLinkType.M3U8)
+            )
+            added = true
+        }
+        val tiktok = video.optString("hlsVideoTiktok")
+        if (tiktok.isNotBlank()) {
+            val ttDomain = try {
+                JSONObject(video.optString("streamingConfig"))
+                    .getJSONObject("adjust")
+                    .getJSONObject("Tiktok")
+                    .optString("domain")
+            } catch (e: Exception) {
+                ""
+            }
+            val ttVersion = try {
+                JSONObject(video.optString("streamingConfig"))
+                    .getJSONObject("adjust")
+                    .getJSONObject("Tiktok")
+                    .getJSONObject("params")
+                    .optString("v")
+            } catch (e: Exception) {
+                ""
+            }
+            val url = if (ttDomain.isNotBlank()) {
+                "https://$host/hlsmod/$ttDomain$tiktok?v=$ttVersion"
+            } else {
+                "https://$host$tiktok"
+            }
+            callback(newExtractorLink(label, "$label Relay", url, type = ExtractorLinkType.M3U8))
+            added = true
+        }
+        return added
+    }
+
+    private suspend fun resolveProxyPage(
+        platform: String,
+        code: String,
+        displayName: String,
+        labelPrefix: String,
+        callback: (ExtractorLink) -> Unit,
+    ): Boolean {
+        val proxyUrl = "$HUB/proxy.php?p=${MMNet.urlEncode(platform)}&c=${MMNet.urlEncode(code)}" +
+            "&title=&site_ref=https%3A%2F%2Fmultimovies.garden%2F&noredirect=1"
+
+        val resp = try {
+            app.get(
+                proxyUrl,
+                headers = mapOf(
+                    "User-Agent" to MMNet.UA,
+                    "Referer" to "$HUB/",
+                ),
+                timeout = 30_000L,
+                allowRedirects = false,
+            )
+        } catch (e: Exception) {
+            Log.d(TAG, "proxy $platform: ${e.message}")
+            return false
+        }
+
+        if (resp.code in 300..399) {
+            val location = resp.headers["location"] ?: return false
+            val host = MMNet.hostOf(location)
+            val hash = location.substringAfter("#", "")
+            val name = apiV1Hosts[host]
+            if (name != null && hash.isNotBlank()) {
+                return resolveApiV1(host, hash, "$labelPrefix $name", callback)
+            }
+            if (host == "bysetayico.com" && hash.isBlank()) {
+                val fileCode = location.substringAfterLast("/")
+                return MMFilemoonBridge.resolveByse("$labelPrefix Filemoon", fileCode, callback)
+            }
+            return false
+        }
+
+        val html = resp.text
+        val src = Regex("var\\s+src=\"([^\"]+)\"").find(html)?.groupValues?.get(1)
+        if (src.isNullOrBlank()) return false
+        val stream = MMNet.deEsc(src)
+        callback(
+            newExtractorLink(
+                "$labelPrefix $displayName",
+                "$labelPrefix $displayName",
+                stream,
+                type = ExtractorLinkType.M3U8,
+            ) {
+                this.headers = mapOf("Referer" to "$HUB/")
+            }
+        )
+        return true
+    }
 
     suspend fun resolve(
         embedUrl: String,
-        label: String,
-        subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Unit,
-    ): String? {
-        // the returned origin feeds gdmirror's proxy fallback
-        val base = MMNet.originOf(embedUrl)
-        if (base.isBlank()) return null
-        val html = MMNet.getText(embedUrl, referer = "https://multimovies.casa/") ?: return base
-
-        val servers = Regex("switchServer\\('([^']+)','([^']+)','([^']+)','([^']+)','([^']*)'")
-            .findAll(html).map { m ->
-                CineServer(m.groupValues[1], m.groupValues[2], m.groupValues[3], m.groupValues[4])
-            }.distinctBy { it.code }.toList()
-
-        if (servers.isEmpty()) {
-            // no server list - treat it as a bare packer page
-            MMPacker.resolvePackerEmbed(embedUrl, label, subtitleCallback, callback)
-            return base
-        }
-
-        loadSubs(base, embedUrl, subtitleCallback)
-
-        for (server in servers) {
-            val linkLabel = "$label • ${server.name}"
-            var handled = false
-            if (server.embed.startsWith("http")) {
-                try {
-                    handled = MMPacker.resolvePackerEmbed(
-                        server.embed, linkLabel, subtitleCallback, callback,
-                    )
-                } catch (_: Exception) {
-                    handled = false
-                }
-            }
-            if (!handled) {
-                try {
-                    resolveProxyFile(base, server.platform, server.code, linkLabel, callback)
-                } catch (_: Exception) {
-                    continue
-                }
-            }
-        }
-        return base
-    }
-
-    suspend fun resolveProxyFile(
-        base: String,
-        platform: String,
-        fileCode: String,
-        linkLabel: String,
+        labelPrefix: String,
         callback: (ExtractorLink) -> Unit,
     ): Boolean {
-        val proxyUrl = "$base/proxy.php?p=$platform&c=$fileCode&title=&site_ref=&noredirect=1"
-        val page = MMNet.getText(proxyUrl, referer = base) ?: return false
+        val html = MMNet.get(embedUrl, referer = "https://multimovies.garden/") ?: return false
+        val doc = Jsoup.parse(html)
 
-        val src = Regex("var\\s+src\\s*=\\s*\"([^\"]+)\"").find(page)?.groupValues?.get(1)?.let { MMNet.deEsc(it) }
-        val segRef = Regex("var\\s+SEG_REF\\s*=\\s*\"([^\"]+)\"").find(page)?.groupValues?.get(1)?.let { MMNet.deEsc(it) }
-        if (src.isNullOrBlank()) {
-            return false
-        }
-        val masterUrl = MMNet.abs(base, src)
-        val master = MMNet.getText(masterUrl, referer = base) ?: return false
-        if (!master.contains("#EXTM3U")) return false
+        // switchServer(embedUrl, platform, displayName, fileCode, title, element)
+        val servers = doc.select(".srv-item").mapNotNull { el ->
+            val onclick = el.attr("onclick")
+            val m = Regex("switchServer\\('([^']*)','([^']*)','([^']*)','([^']*)'").find(onclick)
+                ?: return@mapNotNull null
+            SubServer(m.groupValues[2], m.groupValues[3], m.groupValues[4])
+        }.distinctBy { it.platform }
 
-        MMPacker.emitMaster(
-            master, masterUrl, base, segRef ?: base, linkLabel, callback,
-        )
-        return true
-    }
+        // the default frame mirrors the first dropdown entry, keep the order stable
+        val defaultFrame = doc.selectFirst("#playerFrame")?.attr("src")
+        val ordered = if (defaultFrame != null) {
+            val defaultPlatform = Regex("[?&]p=([^&]+)").find(defaultFrame)?.groupValues?.get(1)
+            servers.sortedByDescending { it.platform == defaultPlatform }
+        } else servers
 
-    // the subtitle api answers null more often than not - best effort only
-    private suspend fun loadSubs(base: String, embedUrl: String, subtitleCallback: (SubtitleFile) -> Unit) {
-        try {
-            val imdbId = Regex("[?&]id=(tt\\d+)").find(embedUrl)?.groupValues?.get(1) ?: ""
-            val tmdbId = Regex("[?&]id=(\\d+)").find(embedUrl)?.groupValues?.get(1) ?: ""
-            val season = Regex("[?&]s=(\\d+)").find(embedUrl)?.groupValues?.get(1) ?: ""
-            val ep = Regex("[?&]e=(\\d+)").find(embedUrl)?.groupValues?.get(1) ?: ""
-            if (imdbId.isBlank() && tmdbId.isBlank()) return
-            val seen = mutableSetOf<String>()
-            for (lang in listOf("en", "hi", "")) {
-                val resp = MMNet.getText(
-                    "$base/api/subtitle_fetch.php?tmdb_id=$tmdbId&imdb_id=$imdbId&season=$season&ep=$ep&lang=$lang",
-                    referer = base,
-                ) ?: continue
-                val m = Regex("\"url\"\\s*:\\s*\"([^\"]+)\"").find(resp) ?: continue
-                val url = MMNet.deEsc(m.groupValues[1])
-                if (!url.startsWith("http")) continue
-                val langName = Regex("\"lang\"\\s*:\\s*\"([^\"]+)\"").find(resp)
-                    ?.groupValues?.get(1)?.ifBlank { null } ?: "English"
-                if (seen.add(url)) {
-                    subtitleCallback(newSubtitleFile(langName, url) {})
-                }
+        var any = false
+        for (server in ordered) {
+            try {
+                any = resolveProxyPage(
+                    server.platform,
+                    server.code,
+                    server.name,
+                    labelPrefix,
+                    callback,
+                ) || any
+            } catch (e: Exception) {
+                // a dead mirror must not take the rest down
+                Log.e(TAG, "server ${server.platform}: ${e.message}")
             }
-        } catch (_: Exception) {}
+        }
+        return any
     }
 }
 
-object MMPacker {
+// translates bysetayico file links into the shared player domain before the heavy flow
+object MMFilemoonBridge {
 
-    suspend fun resolvePackerEmbed(
-        embedUrl: String,
+    private const val TAG = "MM_Filemoon"
+
+    suspend fun resolveByse(
         label: String,
-        subtitleCallback: (SubtitleFile) -> Unit,
+        code: String,
         callback: (ExtractorLink) -> Unit,
     ): Boolean {
-        val html = MMNet.getText(embedUrl, referer = "https://multimovies.casa/") ?: return false
-        val unpacked = JsPacker.parseAndUnpack(html) ?: return false
-        val base = MMNet.originOf(embedUrl)
-
-        // hls2/hls3 are direct cdn urls; hls4 is site-relative and 403s
-        // outside the site's browser context, so it stays the last resort
-        val hls2 = Regex("\"hls2\"\\s*:\\s*\"([^\"]+)\"").find(unpacked)?.groupValues?.get(1)
-        val hls3 = Regex("\"hls3\"\\s*:\\s*\"([^\"]+)\"").find(unpacked)?.groupValues?.get(1)
-        val hls4 = Regex("\"hls4\"\\s*:\\s*\"([^\"]+)\"").find(unpacked)?.groupValues?.get(1)
-
-        val master = listOfNotNull(hls2, hls3, hls4)
-            .map { MMNet.deEsc(it) }
-            .firstOrNull { it.isNotBlank() }
-            ?.let { if (it.startsWith("http")) it else MMNet.abs(base, it) }
-            ?: return false
-
-        callback(
-            newExtractorLink(label, label, master, type = ExtractorLinkType.M3U8) {
-                this.headers = mapOf("Referer" to base)
-            }
-        )
-
-        val seen = mutableSetOf<String>()
-        for (m in Regex("file\\s*:\\s*\"(https?[^\"]+\\.vtt)\"").findAll(unpacked)) {
-            val url = MMNet.deEsc(m.groupValues[1])
-            if (!seen.add(url)) continue
-            val lang = url.substringAfterLast('_').substringBefore('.')
-            val name = when (lang.lowercase()) {
-                "eng", "en" -> "English"; "hin" -> "Hindi"; "spa" -> "Spanish"
-                "fre" -> "French"; "ger" -> "German"; "ita" -> "Italian"
-                "por" -> "Portuguese"; "rus" -> "Russian"; "ara" -> "Arabic"
-                "pol" -> "Polish"; "zho" -> "Chinese"; "kor" -> "Korean"
-                "jpn" -> "Japanese"; "tam" -> "Tamil"; "tel" -> "Telugu"
-                "kan" -> "Kannada"; "mal" -> "Malayalam"
-                else -> lang.uppercase()
-            }
-            subtitleCallback(newSubtitleFile(name, url) {
-                this.headers = mapOf("Referer" to base)
-            })
+        val details = MMNet.get(
+            "https://bysetayico.com/api/videos/$code/embed/details",
+            referer = "https://bysetayico.com/e/$code",
+        ) ?: return false
+        val frameUrl = try {
+            JSONObject(details).optString("embed_frame_url")
+        } catch (e: Exception) {
+            Log.d(TAG, "byse details: ${e.message}")
+            ""
         }
-        return true
-    }
-
-    suspend fun emitMaster(
-        master: String,
-        masterUrl: String,
-        base: String,
-        referer: String,
-        label: String,
-        callback: (ExtractorLink) -> Unit,
-    ) {
-        val audioTracks = Regex("#EXT-X-MEDIA:TYPE=AUDIO,[^\\n]*?NAME=\"([^\"]+)\"[^\\n]*?URI=\"([^\"]+)\"")
-            .findAll(master).map { m -> m.groupValues[1] to m.groupValues[2] }.toList()
-        val variants = Regex("#EXT-X-STREAM-INF:[^\\n]*?RESOLUTION=(\\d+)x(\\d+)[^\\n]*\\n\\s*([^\\n]+)")
-            .findAll(master).map { m ->
-                Triple(m.groupValues[1].toInt(), m.groupValues[2].toInt(), m.groupValues[3].trim())
-            }.toList()
-
-        if (audioTracks.isNotEmpty()) {
-            // urlset naming: index-f1-v1-a1, index-f2-v1-a1 ... audio N maps to -aN
-            val audioSpecific = variants.isNotEmpty() &&
-                audioTracks.indices.all { idx -> variants.any { it.third.contains("-a${idx + 1}") } }
-            if (audioSpecific) {
-                audioTracks.forEachIndexed { idx, (name, uri) ->
-                    val best = variants.filter { it.third.contains("-a${idx + 1}") }.maxByOrNull { it.first }
-                    if (best != null) {
-                        callback(
-                            newExtractorLink(label, "$label • $name", MMNet.abs(base, best.third), type = ExtractorLinkType.M3U8) {
-                                this.headers = mapOf("Referer" to referer)
-                                this.quality = best.second
-                            }
-                        )
-                    } else {
-                        callback(
-                            newExtractorLink(label, "$label • $name", MMNet.abs(base, uri), type = ExtractorLinkType.M3U8) {
-                                this.headers = mapOf("Referer" to referer)
-                            }
-                        )
-                    }
-                }
-                return
-            }
-            // muxed master with selectable audio
-            callback(
-                newExtractorLink(
-                    label,
-                    if (audioTracks.size > 1) "$label (Multi Audio)" else label,
-                    masterUrl, type = ExtractorLinkType.M3U8,
-                ) { this.headers = mapOf("Referer" to referer) }
-            )
-            return
-        }
-
-        val best = variants.maxByOrNull { it.first }
-        if (best != null) {
-            callback(
-                newExtractorLink(label, label, MMNet.abs(base, best.third), type = ExtractorLinkType.M3U8) {
-                    this.headers = mapOf("Referer" to referer)
-                    this.quality = best.second
-                }
-            )
-        } else {
-            callback(
-                newExtractorLink(label, label, masterUrl, type = ExtractorLinkType.M3U8) {
-                    this.headers = mapOf("Referer" to referer)
-                }
-            )
-        }
+        if (frameUrl.isBlank()) return false
+        return MMFilemoon.resolve(frameUrl, code, label, "bysetayico.com", callback)
     }
 }

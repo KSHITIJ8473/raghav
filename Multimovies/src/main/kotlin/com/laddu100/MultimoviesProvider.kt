@@ -1,5 +1,6 @@
 package com.laddu100
 
+import com.lagradost.api.Log
 import com.lagradost.cloudstream3.Episode
 import com.lagradost.cloudstream3.HomePageResponse
 import com.lagradost.cloudstream3.LoadResponse
@@ -9,7 +10,6 @@ import com.lagradost.cloudstream3.Score
 import com.lagradost.cloudstream3.SearchResponse
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.TvType
-import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.mainPageOf
 import com.lagradost.cloudstream3.newEpisode
 import com.lagradost.cloudstream3.newHomePageResponse
@@ -19,15 +19,19 @@ import com.lagradost.cloudstream3.newTvSeriesLoadResponse
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.newExtractorLink
+import com.raghav.donation.DonationManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import org.json.JSONObject
+import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
-import org.jsoup.nodes.Element
-import com.raghav.donation.DonationManager
+import java.util.concurrent.ConcurrentHashMap
+
+private const val TAG = "Multimovies"
 
 class MultimoviesProvider : MainAPI() {
-    override var mainUrl = "https://multimovies.casa"
+    override var mainUrl = "https://multimovies.garden"
     override var name = "Multimovies"
     override var lang = "en"
     override val hasMainPage = true
@@ -36,12 +40,16 @@ class MultimoviesProvider : MainAPI() {
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries, TvType.Anime)
 
     override val mainPage = mainPageOf(
-        "/trending/" to "Trending",
-        "/movies/" to "Latest Movies",
-        "/tvshows/" to "Latest TV Shows",
-        "/genre/anime-series/" to "Anime Series",
-        "/genre/anime-movies/" to "Anime Movies",
-        "/genre/bollywood-movies/" to "Bollywood",
+        "/catalog?type=movie&sort=latest" to "Latest Movies",
+        "/catalog?type=tv&sort=latest" to "Latest TV Shows",
+        "/catalog?sort=rating" to "Trending",
+        "/catalog?genre=bollywood-movies&sort=latest" to "Bollywood",
+        "/catalog?genre=hollywood&sort=latest" to "Hollywood",
+        "/catalog?genre=south-indian&sort=latest" to "South Indian",
+        "/catalog?genre=netflix&sort=latest" to "Netflix",
+        "/catalog?genre=disney-hotstar&sort=latest" to "Jio Hotstar",
+        "/catalog?genre=anime-series&sort=latest" to "Anime Series",
+        "/catalog?genre=anime-movies&sort=latest" to "Anime Movies",
     )
 
     private val headers = mapOf(
@@ -51,38 +59,76 @@ class MultimoviesProvider : MainAPI() {
 
     private var validatedDomain: String? = null
 
-    // probe remote domains before switching - the firebase list can lag behind rotations
+    // the firebase list can lag behind migrations, only switch when the reply
+    // really looks like the current app shell
     private suspend fun refreshDomain() {
         try {
             val remote = FirebaseDomainHelper.getDomain("multimovies") ?: return
             if (remote == mainUrl || remote == validatedDomain) return
-            validatedDomain = remote
             val ok = try {
-                app.get("$remote/", headers = headers, timeout = 10_000L).isSuccessful
-            } catch (_: Exception) {
+                val resp = mmGet("$remote/", headers = headers)
+                resp.isSuccessful && resp.text.contains("/assets/js/player.js")
+            } catch (e: Exception) {
+                Log.d(TAG, "domain check $remote: ${e.message}")
                 false
             }
+            validatedDomain = remote
             if (ok) mainUrl = remote
-        } catch (_: Exception) {}
+        } catch (e: Exception) {
+            Log.e(TAG, "refreshDomain: ${e.message}")
+            validatedDomain = null
+        }
     }
 
-    private fun firstImg(el: Element): String {
-        val img = el.selectFirst("img") ?: return ""
-        return img.attr("src").ifBlank { img.attr("data-src") }
+    private fun cardJson(el: org.jsoup.nodes.Element): JSONObject? {
+        val raw = el.selectFirst("[data-save-title]")?.attr("data-save-title") ?: return null
+        return try {
+            JSONObject(raw.replace("&quot;", "\""))
+        } catch (e: Exception) {
+            Log.d(TAG, "card json: ${e.message}")
+            null
+        }
+    }
+
+    private fun Document.parseCards(): List<SearchResponse> {
+        val out = mutableListOf<SearchResponse>()
+        val seen = HashSet<String>()
+        for (card in this.select("article.poster-card")) {
+            val data = cardJson(card) ?: continue
+            val url = data.optString("url")
+            val title = data.optString("title")
+            if (url.isBlank() || title.isBlank() || !seen.add(url)) continue
+            val isTv = data.optString("type") == "tv" || url.contains("/series/")
+            val tvType = if (isTv) {
+                if (url.contains("anime")) TvType.Anime else TvType.TvSeries
+            } else {
+                if (url.contains("anime")) TvType.Anime else TvType.Movie
+            }
+            val poster = card.selectFirst("img")?.let {
+                it.attr("src").ifBlank { it.attr("data-src") }
+            } ?: data.optString("poster")
+            out.add(
+                newMovieSearchResponse(title, url, tvType) {
+                    this.posterUrl = poster
+                    this.year = data.optInt("year", 0).takeIf { it > 0 }
+                }
+            )
+        }
+        return out
     }
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         DonationManager.checkAndShow()
         refreshDomain()
-        val base = request.data.trimEnd('/')
-        val url = if (page <= 1) "$mainUrl$base/" else "$mainUrl$base/page/$page/"
+        val base = request.data
+        val url = if (page <= 1) "$mainUrl$base" else "$mainUrl$base&page=$page"
         return try {
             val doc = mmGet(url, headers = headers).document
-            val items = doc.select("article.item, .items article").mapNotNull { it.toSearchResult() }
-                .distinctBy { it.url }
-            val hasNext = doc.selectFirst("a[href*='/page/${page + 1}/'], a.next.page-numbers") != null
+            val items = doc.parseCards()
+            val hasNext = doc.selectFirst("a[rel=next]") != null
             newHomePageResponse(request.name, items, hasNext = hasNext && items.isNotEmpty())
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            Log.e(TAG, "getMainPage: ${e.message}")
             newHomePageResponse(request.name, emptyList(), hasNext = false)
         }
     }
@@ -91,107 +137,219 @@ class MultimoviesProvider : MainAPI() {
         if (query.isBlank()) return emptyList()
         refreshDomain()
         return try {
-            val doc = mmGet("$mainUrl/?s=${query.trim().replace(" ", "+")}", headers = headers).document
-            doc.select(".result-item article").mapNotNull { it.toSearchResult() }
-                .distinctBy { it.url }
-        } catch (_: Exception) {
+            val doc = mmGet(
+                "$mainUrl/search?q=${MMNet.urlEncode(query.trim())}",
+                headers = headers,
+            ).document
+            doc.parseCards()
+        } catch (e: Exception) {
+            Log.e(TAG, "search: ${e.message}")
             emptyList()
         }
     }
 
-    private fun Element.toSearchResult(): SearchResponse? {
-        val titleA = selectFirst(".details .title a, .data h3 a")
-        val a = titleA
-            ?: selectFirst(".thumbnail a, a[href*='/movies/'], a[href*='/tvshows/']")
-            ?: return null
-        val href = a.attr("href").trim()
-        if (href.isBlank()) return null
-        var title = titleA?.text()?.trim() ?: ""
-        if (title.isBlank()) {
-            title = selectFirst("img")?.attr("alt")?.trim() ?: ""
-        }
-        if (title.isBlank()) return null
+    private data class WatchServer(val id: String, val name: String, val url: String)
 
-        val poster = firstImg(this)
-        val isTv = href.contains("/tvshows/") || selectFirst(".tvshows, .item.tvshows, span.tvshows") != null
-        val year = Regex("(19|20)\\d{2}").find(text())?.value?.toIntOrNull()
-
-        return newMovieSearchResponse(title, href, if (isTv) TvType.TvSeries else TvType.Movie) {
-            this.posterUrl = poster
-            this.year = year
+    private fun parseWatchConfig(html: String): List<WatchServer> {
+        val root = try {
+            JSONObject(extractBracedObject(html, "const watchConfig = "))
+        } catch (e: Exception) {
+            Log.e(TAG, "watchConfig: ${e.message}")
+            return emptyList()
         }
+        val servers = root.optJSONArray("initialServers") ?: return emptyList()
+        val out = mutableListOf<WatchServer>()
+        for (i in 0 until servers.length()) {
+            val s = servers.optJSONObject(i) ?: continue
+            val url = s.optString("url")
+            if (url.isBlank()) continue
+            out.add(WatchServer(s.optString("id"), s.optString("name"), url))
+        }
+        return out
+    }
+
+    // line ending agnostic json block reader, the site mixes crlf and lf
+    private fun extractBracedObject(html: String, marker: String): String {
+        val start = html.indexOf(marker)
+        if (start < 0) return ""
+        val braceStart = html.indexOf('{', start)
+        if (braceStart < 0) return ""
+        var depth = 0
+        var inString = false
+        var escaped = false
+        for (i in braceStart until html.length) {
+            val ch = html[i]
+            if (escaped) {
+                escaped = false
+                continue
+            }
+            when {
+                ch == '\\' && inString -> escaped = true
+                ch == '"' -> inString = !inString
+                ch == '{' && !inString -> depth++
+                ch == '}' && !inString -> {
+                    depth--
+                    if (depth == 0) return html.substring(braceStart, i + 1)
+                }
+            }
+        }
+        return ""
+    }
+
+    private fun parseMeta(doc: Document): Triple<String, String, String> {
+        val title = doc.selectFirst("h1")?.text()?.trim() ?: ""
+        val plot = doc.selectFirst("#cinejoyOverview")?.text()?.trim() ?: ""
+        val ldJson = doc.selectFirst("script[type=application/ld+json]")?.data().orEmpty()
+        val ld = try {
+            if (ldJson.isBlank()) null else JSONObject(ldJson)
+        } catch (e: Exception) {
+            null
+        }
+        val resolvedTitle = title.ifBlank { ld?.optString("name").orEmpty() }
+        val resolvedPlot = plot.ifBlank { ld?.optString("description").orEmpty() }
+        val image = ld?.optString("image")?.takeIf { it.isNotBlank() }
+            ?: doc.selectFirst("meta[property=og:image]")?.attr("content")
+            ?: ""
+        return Triple(resolvedTitle, resolvedPlot, image)
+    }
+
+    private fun parseGenres(doc: Document): List<String> {
+        val fromDetail = doc.selectFirst(".cinejoy-detail-genres")?.text()
+            ?.split("•")?.map { it.trim() }?.filter { it.isNotBlank() }
+        if (!fromDetail.isNullOrEmpty()) return fromDetail
+        val ld = doc.selectFirst("script[type=application/ld+json]")?.data().orEmpty()
+        return try {
+            val obj = JSONObject(ld)
+            val genre = obj.optJSONArray("genre") ?: return emptyList()
+            (0 until genre.length()).map { genre.optString(it) }.filter { it.isNotBlank() }
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+
+    private fun parsePills(doc: Document): Triple<Int?, Int?, Double?> {
+        val text = doc.select(".cinejoy-meta-pill").eachText().joinToString(" ")
+        val year = Regex("\\b((?:19|20)\\d{2})\\b").find(text)?.groupValues?.get(1)?.toIntOrNull()
+        val duration = Regex("(\\d+)h\\s*(\\d+)m").find(text)?.let {
+            it.groupValues[1].toIntOrNull()?.times(60)?.plus(it.groupValues[2].toIntOrNull() ?: 0)
+        } ?: Regex("(\\d+)m").find(text)?.groupValues?.get(1)?.toIntOrNull()
+        val score = Regex("★\\s*([\\d.]+)").find(text)?.groupValues?.get(1)?.toDoubleOrNull()
+        return Triple(year, duration, score)
+    }
+
+    private fun parseSeasons(doc: Document): List<Int> {
+        val select = doc.selectFirst("select.cinejoy-season-select") ?: return emptyList()
+        return select.select("option").mapNotNull { it.attr("value").toIntOrNull() }.sorted()
+    }
+
+    private fun parseEpisodes(doc: Document): List<Episode> {
+        val out = mutableListOf<Episode>()
+        for (card in doc.select(".cinejoy-ep-card")) {
+            val idAttr = card.attr("id")
+            val m = Regex("ep-item-(\\d+)-(\\d+)").find(idAttr) ?: continue
+            val season = m.groupValues[1].toIntOrNull() ?: continue
+            val episode = m.groupValues[2].toIntOrNull() ?: continue
+            val href = card.selectFirst("a.cinejoy-ep-thumb-link")?.attr("href") ?: continue
+            val name = card.selectFirst(".cinejoy-ep-name")?.text()?.trim().orEmpty()
+            val still = card.selectFirst("img")?.attr("src").orEmpty()
+            out.add(
+                newEpisode(href) {
+                    this.name = name.ifBlank { "Episode $episode" }
+                    this.season = season
+                    this.episode = episode
+                    this.posterUrl = still
+                }
+            )
+        }
+        return out.sortedWith(compareBy({ it.season }, { it.episode }))
     }
 
     override suspend fun load(url: String): LoadResponse? {
         refreshDomain()
         return try {
             val doc = mmGet(url, headers = headers).document
-            val title = doc.selectFirst("h1")?.text()?.trim() ?: return null
-            val poster = doc.selectFirst(".poster img")?.let {
-                it.attr("src").ifBlank { it.attr("data-src") }
-            } ?: ""
-            val background = doc.selectFirst("meta[property=og:image]")?.attr("content") ?: poster
-            val genres = doc.select("a[href*='/genre/']").map { it.text().trim() }
-                .filter { it.isNotBlank() }.distinct()
-            val plot = doc.selectFirst(".wp-content p, .wp-content, [itemprop=description]")?.text()
-                ?.trim()?.take(1000)
-            val year = Regex("\\b(19|20)\\d{2}\\b").find(doc.selectFirst("span.date")?.text() ?: "")?.value?.toIntOrNull()
-            val rating = doc.selectFirst(".dt_rating_vgs, .rating")?.text()?.trim()?.toDoubleOrNull()
-            val duration = doc.selectFirst(".runtime")?.text()?.trim()?.let {
-                Regex("(\\d+)").find(it)?.groupValues?.get(1)?.toIntOrNull()
-            }
+            val (title, plot, image) = parseMeta(doc)
+            if (title.isBlank()) return null
+            val genres = parseGenres(doc)
+            val (year, duration, score) = parsePills(doc)
 
-            val isTv = url.contains("/tvshows/") || url.contains("/episodes/") || doc.selectFirst("div.se-c") != null
-            val tvType = if (url.contains("anime") || genres.any { it.contains("anime", true) }) TvType.Anime else TvType.TvSeries
+            if (url.contains("/series/")) {
+                val seasons = parseSeasons(doc)
+                val episodes = mutableListOf<Episode>()
+                episodes.addAll(parseEpisodes(doc))
 
-            if (isTv) {
-                val episodes = parseEpisodes(doc)
-                return newTvSeriesLoadResponse(title, url, tvType, episodes) {
-                    this.posterUrl = poster
-                    this.backgroundPosterUrl = background
+                val remaining = seasons.drop(1)
+                if (remaining.isNotEmpty()) {
+                    coroutineScope {
+                        remaining.map { season ->
+                            async(Dispatchers.IO) {
+                                try {
+                                    mmGet(
+                                        "$url?season=$season",
+                                        headers = headers,
+                                    ).document
+                                } catch (e: Exception) {
+                                    Log.e(TAG, "episodes season $season: ${e.message}")
+                                    null
+                                }
+                            }
+                        }.map { deferred ->
+                            deferred.await()?.let { episodes.addAll(parseEpisodes(it)) }
+                        }
+                    }
+                }
+
+                val tvType = if (genres.any { it.contains("anime", true) } || url.contains("anime")) {
+                    TvType.Anime
+                } else {
+                    TvType.TvSeries
+                }
+                if (episodes.isEmpty()) return null
+                newTvSeriesLoadResponse(title, url, tvType, episodes) {
+                    this.posterUrl = image
+                    this.backgroundPosterUrl = image
                     this.plot = plot
                     this.tags = genres
                     this.year = year
-                    this.score = rating?.let { Score.from10(it) }
+                    this.score = score?.let { Score.from10(it) }
                 }
             } else {
-                return newMovieLoadResponse(title, url, if (url.contains("anime")) TvType.Anime else TvType.Movie, url) {
-                    this.posterUrl = poster
-                    this.backgroundPosterUrl = background
+                newMovieLoadResponse(
+                    title,
+                    url,
+                    if (url.contains("anime")) TvType.Anime else TvType.Movie,
+                    url,
+                ) {
+                    this.posterUrl = image
+                    this.backgroundPosterUrl = image
                     this.plot = plot
                     this.tags = genres
                     this.year = year
-                    this.score = rating?.let { Score.from10(it) }
+                    this.score = score?.let { Score.from10(it) }
                     this.duration = duration
                 }
             }
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            Log.e(TAG, "load: ${e.message}")
             null
         }
     }
 
-    private fun parseEpisodes(doc: Document): List<Episode> {
-        val episodes = mutableListOf<Episode>()
-        for (block in doc.select("div.se-c")) {
-            val season = block.selectFirst(".se-t")?.text()?.trim()?.toIntOrNull() ?: continue
-            for (li in block.select("ul.episodios li")) {
-                val a = li.selectFirst(".episodiotitle a") ?: continue
-                val href = a.attr("href").trim()
-                val name = a.text().trim()
-                if (href.isBlank()) continue
-                val numerando = li.selectFirst(".numerando")?.text() ?: ""
-                val epNum = Regex("(\\d+)\\s*-\\s*(\\d+)").find(numerando)?.groupValues?.get(2)?.toIntOrNull()
-                    ?: Regex("(?:\\d+)x(\\d+)").find(href)?.groupValues?.get(1)?.toIntOrNull()
-                    ?: continue
-                episodes.add(newEpisode(href) {
-                    this.name = name
-                    this.season = season
-                    this.episode = epNum
-                    this.posterUrl = firstImg(li)
-                })
+    private data class TitleIds(val tmdbId: String?, val imdbId: String?)
+
+    private fun extractIds(servers: List<WatchServer>): TitleIds {
+        var tmdb: String? = null
+        var imdb: String? = null
+        for (server in servers) {
+            if (tmdb == null) {
+                tmdb = Regex("(?:movie\\?id=|watch/movie/|watch/tv/|embed/tmdb/tv\\?id=|/tv/)(\\d+)")
+                    .find(server.url)?.groupValues?.get(1)
+            }
+            if (imdb == null) {
+                imdb = Regex("(tt\\d{6,})").find(server.url)?.groupValues?.get(1)
             }
         }
-        return episodes.sortedWith(compareBy({ it.season }, { it.episode }))
+        return TitleIds(tmdb, imdb)
     }
 
     override suspend fun loadLinks(
@@ -203,60 +361,20 @@ class MultimoviesProvider : MainAPI() {
         refreshDomain()
         var any = false
         try {
-            val doc = mmGet(data, headers = headers).document
-            val options = doc.select("li.dooplay_player_option")
-                .filter { !it.attr("id").contains("trailer") }
-            if (options.isEmpty()) return false
+            val html = mmGet(data, headers = headers).text
+            val servers = parseWatchConfig(html)
+            if (servers.isEmpty()) return false
 
-            data class Opt(val postId: String, val type: String, val nume: String, val label: String)
+            val ids = extractIds(servers)
+            val isTv = data.contains("/series/")
+            val season = Regex("/season/(\\d+)/episode/").find(data)?.groupValues?.get(1)?.toIntOrNull()
+            val episode = Regex("/season/\\d+/episode/(\\d+)").find(data)?.groupValues?.get(1)?.toIntOrNull()
+            val doc = Jsoup.parse(html)
+            val title = doc.selectFirst("h1")?.text()?.trim().orEmpty()
+            val year = parsePills(doc).first?.toString()
 
-            val opts = options.mapNotNull { opt ->
-                val postId = opt.attr("data-post").trim()
-                val type = opt.attr("data-type").trim().ifBlank { "movie" }
-                val nume = opt.attr("data-nume").trim()
-                val label = opt.selectFirst(".title")?.text()?.trim()
-                    ?.replace(" - Recommended", "", ignoreCase = true)
-                    ?.replace(" Recommended", "", ignoreCase = true)
-                    ?.replace("GDMIRROR", "GD Mirror", ignoreCase = true)
-                    ?.trim() ?: "Source"
-                if (postId.isBlank() || nume.isBlank()) null else Opt(postId, type, nume, label)
-            }
-
-            val embeds = coroutineScope {
-                opts.map { opt ->
-                    async(Dispatchers.IO) {
-                        try {
-                            val body = mmPost(
-                                "$mainUrl/wp-admin/admin-ajax.php",
-                                data = mapOf(
-                                    "action" to "doo_player_ajax",
-                                    "post" to opt.postId,
-                                    "nume" to opt.nume,
-                                    "type" to opt.type,
-                                ),
-                                headers = mapOf("X-Requested-With" to "XMLHttpRequest"),
-                                referer = data,
-                            ).text
-                            val embed = Regex("\"embed_url\"\\s*:\\s*\"([^\"]+)\"").find(body)
-                                ?.groupValues?.get(1)?.let { MMNet.deEsc(it) } ?: ""
-                            embed to opt.label
-                        } catch (_: Exception) {
-                            "" to opt.label
-                        }
-                    }
-                }.map { it.await() }
-            }.filter { it.first.isNotBlank() }
-
-            // modiplay first: its origin is needed by the gdmirror proxy fallback
-            val sorted = embeds.sortedByDescending { MMNet.hostOf(it.first).contains("modiplay") }
-
-            // several sources share the same cdn files - dedupe links and subs by url
-            val seenLinks = java.util.Collections.newSetFromMap(
-                java.util.concurrent.ConcurrentHashMap<String, Boolean>()
-            )
-            val seenSubs = java.util.Collections.newSetFromMap(
-                java.util.concurrent.ConcurrentHashMap<String, Boolean>()
-            )
+            val seenLinks = ConcurrentHashMap.newKeySet<String>()
+            val seenSubs = ConcurrentHashMap.newKeySet<String>()
             val linkCb: (ExtractorLink) -> Unit = { link ->
                 if (seenLinks.add(link.url)) callback(link)
             }
@@ -264,61 +382,88 @@ class MultimoviesProvider : MainAPI() {
                 if (seenSubs.add(sub.url)) subtitleCallback(sub)
             }
 
-            var modiplayBase: String? = null
-            for ((embed, label) in sorted) {
-                try {
-                    val host = MMNet.hostOf(embed)
-                    val handled = when {
-                        host.contains("modiplay") -> {
-                            val base = MMModiplay.resolve(embed, label, subCb, linkCb)
-                            if (base != null) modiplayBase = base
-                            base != null
-                        }
-                        host.contains("iqsmartgames") ->
-                            MMGdmirror.resolve(embed, label, modiplayBase, subCb, linkCb)
-                        host.contains("filesforever") ->
-                            MMGdmirror.resolve(embed, label, modiplayBase, subCb, linkCb)
-                        host.contains("nxsha.") ->
-                            MMNxsha.resolve(embed, label, subCb, linkCb)
-                        host.contains("vidout") ->
-                            MMVidout.resolve(embed, label, subCb, linkCb)
-                        else -> {
-                            // screenscape and any future embed - best-effort m3u8 grep
-                            val html = MMNet.getText(embed, referer = "$mainUrl/")
-                            if (html != null) {
-                                extractM3u8Links(html, MMNet.originOf(embed).ifBlank { embed }, label, linkCb)
-                            } else false
+            // the sources are independent services, fetch them side by side
+            val jobs = coroutineScope {
+                servers.map { server ->
+                    async(Dispatchers.IO) {
+                        try {
+                            resolveServer(server, ids, isTv, season, episode, title, year, subCb, linkCb)
+                        } catch (e: Exception) {
+                            Log.e(TAG, "loadLinks ${server.name}: ${e.message}")
+                            false
                         }
                     }
-                    any = any || handled
-                } catch (_: Exception) {
-                    // one broken source must not kill the rest
                 }
             }
-        } catch (_: Exception) {
+            for (job in jobs) any = job.await() || any
+        } catch (e: Exception) {
+            Log.e(TAG, "loadLinks: ${e.message}")
             return any
         }
         return any
     }
 
-    private suspend fun extractM3u8Links(
-        html: String,
-        base: String,
-        linkLabel: String,
+    private suspend fun resolveServer(
+        server: WatchServer,
+        ids: TitleIds,
+        isTv: Boolean,
+        season: Int?,
+        episode: Int?,
+        title: String,
+        year: String?,
+        subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit,
     ): Boolean {
-        val m3u8 = Regex("https?://[^\"'<>\\s\\\\]+\\.m3u8[^\"'<>\\s\\\\]*")
-            .findAll(html).map { it.value.replace("\\/", "/") }.toList()
-        val relM3u8 = Regex("[\"']([^\"']+\\.m3u8[^\"']*)[\"']").findAll(html)
-            .map { it.groupValues[1].replace("\\/", "/") }.toList()
-        val all = (m3u8 + relM3u8.map { MMNet.abs(base, it) }).distinct()
-        for (u in all) {
-            callback(
-                newExtractorLink(linkLabel, linkLabel, u, type = ExtractorLinkType.M3U8) {
-                    this.headers = mapOf("Referer" to base)
-                }
-            )
+        val host = MMNet.hostOf(server.url)
+        return when {
+            host.contains("modiplay.xyz") ->
+                MMCineverse.resolve(server.url, server.name, callback)
+
+            host.contains("iqsmartgames.com") ->
+                MMIqsmart.resolve(server.url, server.name, callback)
+
+            host.contains("filesforever.link") ->
+                MMIqsmart.resolveFilesforever(server.url, server.name, callback)
+
+            host.contains("vidout.pages.dev") -> {
+                val tmdb = ids.tmdbId ?: return false
+                MMVidout.resolve(tmdb, isTv, season, episode, server.name, subtitleCallback, callback)
+            }
+
+            host.contains("vidsync.pro") -> {
+                val tmdb = ids.tmdbId
+                val url = if (tmdb != null) server.url.replace("{tmdbId}", tmdb) else server.url
+                MMVidsync.resolve(url, server.name, callback)
+            }
+
+            host.contains("bingr.one") -> {
+                val tmdb = ids.tmdbId ?: return false
+                MMBingr.resolve(isTv, tmdb, title, year, season, episode, server.name, subtitleCallback, callback)
+            }
+
+            host.contains("filmu.in") -> {
+                val tmdb = ids.tmdbId ?: return false
+                MMFilmu.resolve(isTv, tmdb, season, episode, server.name, subtitleCallback, callback)
+            }
+
+            host.contains("vidbolt.xyz") -> {
+                val tmdb = ids.tmdbId ?: return false
+                MMVidbolt.resolve(isTv, tmdb, ids.imdbId, title, year, season, episode, server.name, callback)
+            }
+
+            else -> {
+                val html = MMNet.get(server.url, referer = "https://multimovies.garden/")
+                if (html != null) {
+                    val urls = Regex("https?://[^\"'\\s\\\\]+\\.m3u8[^\"'\\s\\\\]*")
+                        .findAll(html)
+                        .map { MMNet.deEsc(it.groupValues.first()) }
+                        .toSet()
+                    for (u in urls) {
+                        callback(newExtractorLink(server.name, server.name, u, type = ExtractorLinkType.M3U8))
+                    }
+                    urls.isNotEmpty()
+                } else false
+            }
         }
-        return all.isNotEmpty()
     }
 }

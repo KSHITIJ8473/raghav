@@ -19,7 +19,9 @@ object JsPacker {
         var payload = p
         for (i in c - 1 downTo 0) {
             if (i < k.size && k[i].isNotEmpty()) {
-                payload = payload.replace(Regex("\\b${Regex.escape(baseN(i, a))}\\b"), k[i])
+                val pattern = Regex("\\b${Regex.escape(baseN(i, a))}\\b")
+                // lambda form keeps $ and backslashes in the key literal
+                payload = pattern.replace(payload) { _ -> k[i] }
             }
         }
         return payload

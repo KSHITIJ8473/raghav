@@ -1,4 +1,4 @@
-version = 7
+version = 8
 
 android {
     buildFeatures {
@@ -12,9 +12,9 @@ dependencies {
 
 cloudstream {
     language = "en"
-    description = "Multimovies - Movies, TV Shows & Anime. All sources: Cineverse, GD Mirror, Vidout, Nxsha (multi-server) and more"
+    description = "Multimovies - Movies, TV Shows & Anime. Sources: Cineverse (multi-server), GD Mirror, Vidout, Vidsync, Bingr, Filmu, VidBolt"
     authors = listOf("raghav,phisher,csksy")
     status = 1
     tvTypes = listOf("Movie", "TvSeries", "Anime")
-    iconUrl = "https://multimovies.casa/wp-content/uploads/2024/01/cropped-CompressJPEG.online_512x512_image.png"
+    iconUrl = "https://multimovies.garden/assets/img/logo.png"
 }

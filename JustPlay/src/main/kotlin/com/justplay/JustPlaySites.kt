@@ -856,14 +856,36 @@ internal object MultimoviesSite {
         val isTv: Boolean
     )
 
+    @Volatile private var checkedRemote: String? = null
+    @Volatile private var resolvedDomain: String? = null
+
+    // the firebase entry can point at a domain that now serves a different site,
+    // so a remote only wins when its homepage still carries the current player
     private suspend fun currentDomain(): String {
         val remote = FirebaseDomainHelper.getDomain("justplay_multimovies")
             ?: FirebaseDomainHelper.getDomain("multimovies")
-            ?: DEFAULT_DOMAIN
-        return remote.trimEnd('/')
+        val target = remote?.trimEnd('/')
+        if (target != null && target != checkedRemote) {
+            checkedRemote = target
+            resolvedDomain = null
+        }
+        resolvedDomain?.let { return it }
+
+        var domain = DEFAULT_DOMAIN
+        if (target != null && target != DEFAULT_DOMAIN) {
+            val ok = try {
+                val res = PlayNet.fetchWithCf(target)
+                res != null && res.isSuccessful && res.text.contains("/assets/js/player.js")
+            } catch (_: Exception) {
+                false
+            }
+            if (ok) domain = target
+        }
+        resolvedDomain = domain
+        return domain
     }
 
-    private fun cardOf(el: Element): MmCard? {
+    private fun cardOf(el: Element, domain: String): MmCard? {
         val raw = el.selectFirst("[data-save-title]")?.attr("data-save-title") ?: return null
         val data = try {
             JSONObject(raw.replace("&quot;", "\""))
@@ -874,13 +896,14 @@ internal object MultimoviesSite {
         val title = data.optString("title")
         if (url.isBlank() || title.isBlank()) return null
         val isTv = data.optString("type") == "tv" || url.contains("/series/")
-        return MmCard(title, PlayNet.absolute(url, DEFAULT_DOMAIN), data.optInt("year", 0).takeIf { it > 0 }, isTv)
+        return MmCard(title, PlayNet.absolute(url, domain), data.optInt("year", 0).takeIf { it > 0 }, isTv)
     }
 
     private suspend fun searchCards(domain: String, query: String): List<MmCard> = try {
         val doc = PlayNet.fetchWithCf("$domain/search?q=${Uri.encode(query)}")?.document
             ?: return emptyList()
-        doc.select("article.poster-card").mapNotNull { cardOf(it) }
+        val seen = HashSet<String>()
+        doc.select("article.poster-card").mapNotNull { cardOf(it, domain) }.filter { seen.add(it.url) }
     } catch (_: Exception) {
         emptyList()
     }

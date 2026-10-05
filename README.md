@@ -20,7 +20,8 @@ For full legal compliance details, please read our DMCA & Disclaimer Notice.
 These extensions are Free: They can be redistributed and/or modified under the terms of the
 [GNU General Public License](https://www.gnu.org/licenses/gpl.html) version 3 or later published by the Free Software Foundation.
 
-<script type="text/javascript" src="https://cdnjs.buymeacoffee.com/1.0.0/button.prod.min.js" data-name="bmc-button" data-slug="raghav766" data-color="#FFDD00" data-emoji=""  data-font="Cookie" data-text="Buy me a coffee" data-outline-color="#000000" data-font-color="#000000" data-coffee-color="#ffffff" ></script>
+<a href="https://buymeacoffee.com" target="_blank"><img src="https://buymeacoffee.com" alt="Buy Me A Coffee" style="height: 60px !important;width: 217px !important;" ></a>
+
 
 ### Links
 [Official CloudStream repo](https://github.com/recloudstream/cloudstream) · [CloudStream Wiki](https://cloudstream.miraheze.org/wiki/Main_Page)

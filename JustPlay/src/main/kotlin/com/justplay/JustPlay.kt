@@ -53,6 +53,9 @@ class JustPlay : MainAPI() {
         private const val TMDB_KEY = "1865f43a0549ca50d341dd9ab8b29f49"
         private const val TMDB_KEY_ALT = "98ae14df2b8d8f8f8136499daf79f0e0"
 
+        private const val KEY_DL_ONLY = "JUSTPLAY_DL_ONLY"
+        private const val KEY_STREAM_ONLY = "JUSTPLAY_STREAM_ONLY"
+
         fun tmdbImageUrl(path: String?): String? {
             if (path.isNullOrBlank()) return null
             return if (path.startsWith("http")) path else "https://image.tmdb.org/t/p/original$path"
@@ -62,6 +65,42 @@ class JustPlay : MainAPI() {
             CloudStreamApp.getKey<Boolean>("JUSTPLAY_SITE_$id") ?: true
         } catch (_: Exception) {
             true
+        }
+
+        data class SiteRow(val id: String, val label: String, val sub: String)
+
+        val sites = listOf(
+            SiteRow("netnaija", "NetNaija", "Direct mp4 streams"),
+            SiteRow("vegamovies", "VegaMovies", "Dual audio movies and series"),
+            SiteRow("hdhub4u", "HDHub4u", "Movies and series"),
+            SiteRow("4khdhub", "4KHDHub", "UHD movies and packs"),
+            SiteRow("themoviesflix", "TheMoviesFlix", "Movies and web series"),
+            SiteRow("multimovies", "Multimovies", "Streaming servers"),
+            SiteRow("movies4u", "Movies4u", "Movies and series")
+        )
+
+        fun downloadOnlyEnabled(): Boolean = try {
+            CloudStreamApp.getKey<Boolean>(KEY_DL_ONLY) ?: false
+        } catch (_: Exception) {
+            false
+        }
+
+        fun streamOnlyEnabled(): Boolean = try {
+            CloudStreamApp.getKey<Boolean>(KEY_STREAM_ONLY) ?: true
+        } catch (_: Exception) {
+            true
+        }
+
+        fun setDownloadOnly(on: Boolean) {
+            try {
+                CloudStreamApp.setKey(KEY_DL_ONLY, on)
+            } catch (_: Exception) {}
+        }
+
+        fun setStreamOnly(on: Boolean) {
+            try {
+                CloudStreamApp.setKey(KEY_STREAM_ONLY, on)
+            } catch (_: Exception) {}
         }
     }
 
@@ -343,11 +382,24 @@ class JustPlay : MainAPI() {
         val active = allSites.filter { siteEnabled(it.id) }
         if (active.isEmpty()) return false
 
+        // both modes may be on at once, but one of them always has to stay
+        // active even if the stored keys ever end up inconsistent
+        val dlOnly = downloadOnlyEnabled()
+        val streamOnly = streamOnlyEnabled() || !dlOnly
+
+        val guardedCallback: (ExtractorLink) -> Unit = { link ->
+            val isDownload = PlaySourceFilter.isDownloadOnlyName(link.name)
+            val allowed = if (isDownload) dlOnly else streamOnly
+            if (allowed) {
+                callback(if (isDownload) PlaySourceFilter.taggedDownloadOnly(link) else link)
+            }
+        }
+
         coroutineScope {
             active.forEach { site ->
                 async(Dispatchers.IO) {
                     try {
-                        site.invoke(res, subtitleCallback, callback)
+                        site.invoke(res, subtitleCallback, guardedCallback)
                     } catch (_: Exception) {}
                 }
             }

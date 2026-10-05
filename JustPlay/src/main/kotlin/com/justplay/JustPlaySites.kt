@@ -764,11 +764,6 @@ internal object Movies4uSite {
 }
 
 internal object TmfSite {
-    private val FALLBACK_DOMAINS = listOf("https://themoviesflixhq.com", "https://moviesflixhq.com")
-
-    // whole season packs arrive as zip archives, they are not playable so
-    // the group is dropped before its drive page is fetched
-    private val packRegex = Regex("""(?i)\b(zip|rar|7z|batch)\b""")
 
     private fun searchAnchors(doc: Document): List<Pair<String, String>> {
         return doc.select("article.latestpost a[id=featured-thumbnail]").mapNotNull { el ->
@@ -778,6 +773,29 @@ internal object TmfSite {
         }
     }
 
+    // whole season packs arrive as zip archives, they are not playable so the
+    // button and its group are dropped before the drive page is fetched
+    private val packRegex = Regex("""(?i)\b(zip|rar|7z|batch)\b""")
+
+    private data class DriveGroup(val label: String, val redirectUrl: String)
+
+    private fun downloadGroups(doc: Document): List<DriveGroup> {
+        return doc.select("div.mfx-download-group").flatMap { div ->
+            val label = div.selectFirst("h3")?.text()?.replace(Regex("\\s+"), " ")?.trim().orEmpty()
+            if (packRegex.containsMatchIn(label)) return@flatMap emptyList()
+            div.select("a[href]").mapNotNull { a ->
+                val text = a.text().trim()
+                val href = a.attr("href").trim()
+                when {
+                    !href.startsWith("http") -> null
+                    text.contains("Batch", true) || text.contains("Zip", true) -> null
+                    packRegex.containsMatchIn(text) -> null
+                    else -> DriveGroup(label, href)
+                }
+            }
+        }.distinctBy { it.redirectUrl }
+    }
+
     suspend fun invoke(
         res: PlayLinkData,
         subtitleCallback: (SubtitleFile) -> Unit,
@@ -785,30 +803,11 @@ internal object TmfSite {
     ) {
         try {
             val title = res.title ?: return
+            val domain = PlayTmfNet.domain()
 
-            // the firebase entry can point at a mirror that is dead or cloudflare
-            // walled, the search itself decides which domain answers
-            val candidates = listOfNotNull(
-                FirebaseDomainHelper.getDomain("justplay_themoviesflix"),
-                FirebaseDomainHelper.getDomain("themoviesflix")
-            ) + FALLBACK_DOMAINS
-
-            var domain: String? = null
-            var anchors: List<Pair<String, String>> = emptyList()
-            for (candidate in candidates.distinct()) {
-                // a dead mirror must not burn a full webview solve, a short
-                // solve budget gives the next domain its turn quickly
-                val searchDoc = PlayNet.fetchWithCf(
-                    "$candidate/?s=${Uri.encode(title)}", timeout = 15L, solveTimeout = 20L
-                )?.document ?: continue
-                val found = searchAnchors(searchDoc)
-                if (found.isEmpty()) continue
-                domain = candidate
-                anchors = found
-                break
-            }
-            if (domain == null || anchors.isEmpty()) return
-            val siteDomain = domain
+            val searchDoc = PlayTmfNet.fetchPage("$domain/?s=${Uri.encode(title)}") ?: return
+            val anchors = searchAnchors(searchDoc)
+            if (anchors.isEmpty()) return
 
             val matched = anchors.filter { (t, _) -> PlayNet.titleMatches(t, title) }
             val target = matched.firstOrNull { (t, _) ->
@@ -816,56 +815,31 @@ internal object TmfSite {
                 else PlayNet.yearMatches(t, res.matchYear)
             } ?: matched.firstOrNull() ?: anchors.firstOrNull() ?: return
 
-            val postUrl = target.second.replaceFirst(Regex("^[^/]*//[^/]+"), siteDomain)
-            val postDoc = PlayNet.fetchWithCf(postUrl, siteDomain, timeout = 20L)?.document ?: return
-            val groups = postDoc.select("div.mfx-download-group")
+            val postDoc = PlayTmfNet.fetchPage(target.second, domain) ?: return
+            val groups = downloadGroups(postDoc)
 
-            if (res.season == null) {
-                val driveLinks = groups.flatMap { group ->
-                    val qualityTitle = group.selectFirst("h3")?.text()
-                        ?.replace(Regex("\\s+"), " ")?.trim().orEmpty()
-                    if (packRegex.containsMatchIn(qualityTitle)) return@flatMap emptyList()
-                    group.select("a.mfx-download-link, a[href]").mapNotNull { el ->
-                        val text = el.text()
-                        val href = el.attr("href").trim()
-                        if (!href.startsWith("http")) null
-                        else if (text.contains("Batch", true) || text.contains("Zip", true)) null
-                        else href to qualityTitle
-                    }
-                }.distinctBy { it.first }
-                coroutineScope {
-                    driveLinks.forEach { (link, qualityTitle) ->
-                        async(Dispatchers.IO) {
-                            DrivePages.emit(
-                                "themoviesflix", link, null, null, qualityTitle, siteDomain, siteDomain,
-                                subtitleCallback, callback
-                            )
-                        }
-                    }
-                }
+            val driveUrls: List<String> = if (res.season == null) {
+                groups.map { it.redirectUrl }
             } else {
                 val seasonRegex = Regex("(?i)Season\\s*${res.season}(?!\\d)")
-                val seasonGroups = groups.filter { group ->
-                    val h3 = group.selectFirst("h3")?.text()?.replace('\u00A0', ' ').orEmpty()
-                    seasonRegex.containsMatchIn(h3) || PlayNet.seasonsOf(h3)?.contains(res.season) == true
-                }
-                val driveLinks = seasonGroups.flatMap { group ->
-                    val qualityTitle = group.selectFirst("h3")?.text()
-                        ?.replace(Regex("\\s+"), " ")?.trim().orEmpty()
-                    if (packRegex.containsMatchIn(qualityTitle)) return@flatMap emptyList()
-                    group.select("a.mfx-download-link, a[href]").mapNotNull { el ->
-                        val text = el.text()
-                        val href = el.attr("href").trim()
-                        if (!href.startsWith("http")) null
-                        else if (text.contains("Batch", true) || text.contains("Zip", true)) null
-                        else href to qualityTitle
+                groups.filter { (label, _) ->
+                    seasonRegex.containsMatchIn(label) || PlayNet.seasonsOf(label)?.contains(res.season) == true
+                }.map { it.redirectUrl }
+            }
+            if (driveUrls.isEmpty()) return
+
+            coroutineScope {
+                driveUrls.forEach { driveUrl ->
+                    async(Dispatchers.IO) {
+                        val page = PlayTmfNet.fetchDrivePage(driveUrl) ?: return@async
+                        val hrefs = if (res.season != null && res.episode != null) {
+                            page.episodes[res.episode] ?: emptyList()
+                        } else {
+                            page.links
+                        }
+                        if (hrefs.isEmpty()) return@async
+                        PlayTmfSources.emitAll(hrefs, page.quality, page.info, subtitleCallback, callback)
                     }
-                }.distinctBy { it.first }
-                driveLinks.forEach { (link, qualityTitle) ->
-                    DrivePages.emit(
-                        "themoviesflix", link, res.episode, res.season, qualityTitle, siteDomain, siteDomain,
-                        subtitleCallback, callback
-                    )
                 }
             }
         } catch (_: Exception) {}
@@ -873,105 +847,142 @@ internal object TmfSite {
 }
 
 internal object MultimoviesSite {
-    private const val DEFAULT_DOMAIN = "https://multimovies.casa"
+    private const val DEFAULT_DOMAIN = "https://multimovies.garden"
 
-    private data class PlayerOption(
-        val post: String,
-        val nume: String,
-        val type: String,
-        val label: String
+    private data class MmCard(
+        val title: String,
+        val url: String,
+        val year: Int?,
+        val isTv: Boolean
     )
 
-    private fun optionsOf(doc: Document): List<PlayerOption> {
-        return doc.select("li.dooplay_player_option").mapNotNull { li ->
-            val post = li.attr("data-post").takeIf { it.isNotBlank() } ?: return@mapNotNull null
-            val nume = li.attr("data-nume").takeIf { it.isNotBlank() } ?: return@mapNotNull null
-            val type = li.attr("data-type").ifBlank { "movie" }
-            val id = li.attr("id").orEmpty()
-            val title = li.selectFirst("span.title")?.text()?.trim().orEmpty()
-            if (id.contains("trailer", true) || title.contains("trailer", true)) return@mapNotNull null
-            val label = title.replace(Regex("(?i)(- )?Recommended"), "").trim()
-                .replace("GDMIRROR", "GD Mirror", true).ifBlank { type }
-            PlayerOption(post, nume, type, label)
-        }
+    private suspend fun currentDomain(): String {
+        val remote = FirebaseDomainHelper.getDomain("justplay_multimovies")
+            ?: FirebaseDomainHelper.getDomain("multimovies")
+            ?: DEFAULT_DOMAIN
+        return remote.trimEnd('/')
     }
 
-    private suspend fun embedOf(domain: String, option: PlayerOption, pageUrl: String): String? {
-        return try {
-            val text = app.post(
-                "$domain/wp-admin/admin-ajax.php",
-                headers = mapOf(
-                    "User-Agent" to PLAY_UA,
-                    "X-Requested-With" to "XMLHttpRequest",
-                    "Referer" to pageUrl
-                ),
-                data = mapOf(
-                    "action" to "doo_player_ajax",
-                    "post" to option.post,
-                    "nume" to option.nume,
-                    "type" to option.type
-                ),
-                timeout = 15L
-            ).text
-            PlayNet.deEsc(org.json.JSONObject(text).optString("embed_url"))
-                .trim()
-                .removeSurrounding("\"")
-                .takeIf { it.startsWith("http") && !it.contains("youtube", true) }
+    private fun cardOf(el: Element): MmCard? {
+        val raw = el.selectFirst("[data-save-title]")?.attr("data-save-title") ?: return null
+        val data = try {
+            JSONObject(raw.replace("&quot;", "\""))
         } catch (_: Exception) {
-            null
+            return null
         }
+        val url = data.optString("url")
+        val title = data.optString("title")
+        if (url.isBlank() || title.isBlank()) return null
+        val isTv = data.optString("type") == "tv" || url.contains("/series/")
+        return MmCard(title, PlayNet.absolute(url, DEFAULT_DOMAIN), data.optInt("year", 0).takeIf { it > 0 }, isTv)
     }
 
-    private suspend fun resolveEmbed(
-        embedUrl: String,
-        label: String,
-        subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Unit
-    ) {
-        val host = try {
-            Uri.parse(embedUrl).host ?: ""
-        } catch (_: Exception) {
-            ""
+    private suspend fun searchCards(domain: String, query: String): List<MmCard> = try {
+        val doc = PlayNet.fetchWithCf("$domain/search?q=${Uri.encode(query)}")?.document
+            ?: return emptyList()
+        doc.select("article.poster-card").mapNotNull { cardOf(it) }
+    } catch (_: Exception) {
+        emptyList()
+    }
+
+    // the series page renders one season at a time, later seasons come through
+    // the query param, the episode card carries its own page url
+    private suspend fun episodeHref(
+        domain: String,
+        seriesUrl: String,
+        season: Int?,
+        episode: Int?
+    ): String? {
+        val pages = mutableListOf(seriesUrl)
+        if (season != null && season > 1) pages.add("$seriesUrl?season=$season")
+        for (page in pages) {
+            val doc = PlayNet.fetchWithCf(page)?.document ?: continue
+            for (card in doc.select(".cinejoy-ep-card")) {
+                val m = Regex("ep-item-(\\d+)-(\\d+)").find(card.attr("id")) ?: continue
+                if (season != null && m.groupValues[1].toIntOrNull() != season) continue
+                if (episode != null && m.groupValues[2].toIntOrNull() != episode) continue
+                val href = card.selectFirst("a.cinejoy-ep-thumb-link")?.attr("href")?.trim().orEmpty()
+                if (href.isNotBlank()) return PlayNet.absolute(href, domain)
+            }
         }
-        when {
-            host.contains("modiplay") -> PlayModiplay.resolve(embedUrl, label, subtitleCallback, callback)
-            host.contains("iqsmartgames") || host.contains("filesforever") ->
-                PlayGdmirror.resolve(embedUrl, label, subtitleCallback, callback)
-            host.contains("nxsha") -> PlayNxsha.resolve(embedUrl, label, subtitleCallback, callback)
-            host.contains("vidout") -> PlayVidout.resolve(embedUrl, label, subtitleCallback, callback)
-            else -> {
-                val handled = PlayPacker.resolvePackedEmbed(embedUrl, label, "https://multimovies.casa/", callback)
-                if (!handled) {
-                    try {
-                        val res = app.get(embedUrl, headers = PlayNet.headers("https://multimovies.casa/"), timeout = 20L)
-                        val text = res.text
-                        val unpacked = if (text.contains("eval(function(p,a,c,k,e,d)")) {
-                            runCatching { getAndUnpack(text) }.getOrNull() ?: text
-                        } else text
-                        for (m in Regex("""(https?://[^"'\s\\]+\.m3u8[^"'\s\\]*)""").findAll(unpacked)) {
-                            PlayPacker.emitM3u8(m.groupValues[1], PlayNet.getBaseUrl(res.url), label, callback)
-                        }
-                    } catch (_: Exception) {}
+        return null
+    }
+
+    private data class WatchServer(val id: String, val name: String, val url: String)
+
+    private fun parseWatchConfig(html: String): List<WatchServer> {
+        val root = try {
+            JSONObject(extractBracedObject(html, "const watchConfig = "))
+        } catch (_: Exception) {
+            return emptyList()
+        }
+        val servers = root.optJSONArray("initialServers") ?: return emptyList()
+        val out = mutableListOf<WatchServer>()
+        for (i in 0 until servers.length()) {
+            val s = servers.optJSONObject(i) ?: continue
+            val url = s.optString("url")
+            if (url.isBlank()) continue
+            out.add(WatchServer(s.optString("id"), s.optString("name"), url))
+        }
+        return out
+    }
+
+    // line ending agnostic json block reader, the site mixes crlf and lf
+    private fun extractBracedObject(html: String, marker: String): String {
+        val start = html.indexOf(marker)
+        if (start < 0) return ""
+        val braceStart = html.indexOf('{', start)
+        if (braceStart < 0) return ""
+        var depth = 0
+        var inString = false
+        var escaped = false
+        for (i in braceStart until html.length) {
+            val ch = html[i]
+            if (escaped) {
+                escaped = false
+                continue
+            }
+            when {
+                ch == '\\' && inString -> escaped = true
+                ch == '"' -> inString = !inString
+                ch == '{' && !inString -> depth++
+                ch == '}' && !inString -> {
+                    depth--
+                    if (depth == 0) return html.substring(braceStart, i + 1)
                 }
             }
         }
+        return ""
     }
 
-    private suspend fun processPage(
-        domain: String,
-        pageUrl: String,
+    private data class TitleIds(val tmdbId: String?, val imdbId: String?)
+
+    private fun extractIds(servers: List<WatchServer>): TitleIds {
+        var tmdb: String? = null
+        var imdb: String? = null
+        for (server in servers) {
+            if (tmdb == null) {
+                tmdb = Regex("(?:movie\\?id=|watch/movie/|watch/tv/|embed/tmdb/tv\\?id=|/tv/)(\\d+)")
+                    .find(server.url)?.groupValues?.get(1)
+            }
+            if (imdb == null) {
+                imdb = Regex("(tt\\d{6,})").find(server.url)?.groupValues?.get(1)
+            }
+        }
+        return TitleIds(tmdb, imdb)
+    }
+
+    private fun yearOf(doc: Document): String? {
+        val text = doc.select(".cinejoy-meta-pill").eachText().joinToString(" ")
+        return Regex("\\b((?:19|20)\\d{2})\\b").find(text)?.groupValues?.get(1)
+    }
+
+    // the resolver output keeps the server names the site itself hands out,
+    // every link is renamed once here so the player list stays uniform
+    private fun wrappedCallbacks(
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
-    ) {
-        val doc = try {
-            app.get(pageUrl, headers = PlayNet.headers(domain), timeout = 20L).document
-        } catch (_: Exception) {
-            return
-        }
-        val options = optionsOf(doc)
-        if (options.isEmpty()) return
-        // several options resolve to the same cdn file, dedupe by url so the
-        // list does not show the same stream twice
+    ): Pair<(ExtractorLink) -> Unit, (SubtitleFile) -> Unit> {
         val seenLinks = java.util.Collections.newSetFromMap(
             java.util.concurrent.ConcurrentHashMap<String, Boolean>()
         )
@@ -979,19 +990,121 @@ internal object MultimoviesSite {
             java.util.concurrent.ConcurrentHashMap<String, Boolean>()
         )
         val linkCb: (ExtractorLink) -> Unit = { link ->
-            if (seenLinks.add(link.url)) callback(link)
+            if (seenLinks.add(link.url)) {
+                val name = "[Multimovies] - " + link.name.replace(Regex("\\s+"), " ").trim()
+                callback(
+                    ExtractorLink(
+                        "Multimovies",
+                        name,
+                        link.url,
+                        link.referer,
+                        link.quality,
+                        link.headers,
+                        link.extractorData,
+                        link.type,
+                        link.audioTracks
+                    )
+                )
+            }
         }
         val subCb: (SubtitleFile) -> Unit = { sub ->
             if (seenSubs.add(sub.url)) subtitleCallback(sub)
         }
-        coroutineScope {
-            options.forEach { option ->
-                async(Dispatchers.IO) {
-                    val embed = embedOf(domain, option, pageUrl) ?: return@async
-                    resolveEmbed(embed, option.label, subCb, linkCb)
-                }
+        return linkCb to subCb
+    }
+
+    private suspend fun resolveServer(
+        server: WatchServer,
+        ids: TitleIds,
+        isTv: Boolean,
+        season: Int?,
+        episode: Int?,
+        title: String,
+        year: String?,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit,
+    ): Boolean {
+        val host = MmNet.hostOf(server.url)
+        return when {
+            host.contains("modiplay.xyz") ->
+                MmCineverse.resolve(server.url, server.name, callback)
+
+            host.contains("iqsmartgames.com") ->
+                MmGdMirror.resolve(server.url, server.name, callback)
+
+            host.contains("filesforever.link") ->
+                MmGdMirror.resolveFilesforever(server.url, server.name, callback)
+
+            host.contains("vidout.pages.dev") -> {
+                val tmdb = ids.tmdbId ?: return false
+                MmVidout.resolve(tmdb, isTv, season, episode, server.name, subtitleCallback, callback)
+            }
+
+            host.contains("vidsync.pro") -> {
+                val tmdb = ids.tmdbId
+                val url = if (tmdb != null) server.url.replace("{tmdbId}", tmdb) else server.url
+                MmVidsync.resolve(url, server.name, callback)
+            }
+
+            host.contains("bingr.one") -> {
+                val tmdb = ids.tmdbId ?: return false
+                MmBingr.resolve(isTv, tmdb, title, year, season, episode, server.name, subtitleCallback, callback)
+            }
+
+            host.contains("filmu.in") -> {
+                val tmdb = ids.tmdbId ?: return false
+                MmFilmu.resolve(isTv, tmdb, season, episode, server.name, subtitleCallback, callback)
+            }
+
+            host.contains("vidbolt.xyz") -> {
+                val tmdb = ids.tmdbId ?: return false
+                MmVidbolt.resolve(isTv, tmdb, ids.imdbId, title, year, season, episode, server.name, callback)
+            }
+
+            else -> {
+                val html = MmNet.get(server.url, referer = "https://multimovies.garden/")
+                if (html != null) {
+                    val urls = Regex("https?://[^\"'\\s\\\\]+\\.m3u8[^\"'\\s\\\\]*")
+                        .findAll(html)
+                        .map { MmNet.deEsc(it.groupValues.first()) }
+                        .toSet()
+                    for (u in urls) {
+                        callback(newExtractorLink(server.name, server.name, u, type = ExtractorLinkType.M3U8))
+                    }
+                    urls.isNotEmpty()
+                } else false
             }
         }
+    }
+
+    private suspend fun resolvePost(
+        pageUrl: String,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        try {
+            val res = PlayNet.fetchWithCf(pageUrl) ?: return
+            val servers = parseWatchConfig(res.text)
+            if (servers.isEmpty()) return
+
+            val ids = extractIds(servers)
+            val isTv = pageUrl.contains("/series/")
+            val season = Regex("/season/(\\d+)/episode/").find(pageUrl)?.groupValues?.get(1)?.toIntOrNull()
+            val episode = Regex("/season/\\d+/episode/(\\d+)").find(pageUrl)?.groupValues?.get(1)?.toIntOrNull()
+            val title = res.document.selectFirst("h1")?.text()?.trim().orEmpty()
+            val year = yearOf(res.document)
+
+            val (linkCb, subCb) = wrappedCallbacks(subtitleCallback, callback)
+            coroutineScope {
+                servers.forEach { server ->
+                    async(Dispatchers.IO) {
+                        try {
+                            resolveServer(server, ids, isTv, season, episode, title, year, subCb, linkCb)
+                        } catch (_: Exception) {}
+                    }
+                }
+            }
+        } catch (_: Exception) {}
     }
 
     suspend fun invoke(
@@ -1000,82 +1113,24 @@ internal object MultimoviesSite {
         callback: (ExtractorLink) -> Unit
     ) {
         try {
-            val domain = FirebaseDomainHelper.getDomain("justplay_multimovies")
-                ?: FirebaseDomainHelper.getDomain("multimovies")
-                ?: DEFAULT_DOMAIN
+            val domain = currentDomain()
             val title = res.title ?: return
-            val slug = PlayNet.slugify(title)
-
-            val direct = if (res.season != null && res.episode != null) {
-                "$domain/episodes/$slug-${res.season}x${res.episode}"
-            } else if (res.season == null) {
-                "$domain/movies/$slug"
-            } else {
-                null
-            }
-
-            if (direct != null) {
-                try {
-                    val probe = app.get(direct, headers = PlayNet.headers(domain), timeout = 15L)
-                    if (probe.code == 200 && probe.text.contains("dooplay_player_option")) {
-                        processPage(domain, direct, subtitleCallback, callback)
-                        return
-                    }
-                } catch (_: Exception) {}
-            }
-
-            val searchDoc = app.get(
-                "$domain/?s=${Uri.encode(title)}",
-                headers = PlayNet.headers(domain),
-                timeout = 20L
-            ).document
-            val candidates = searchDoc.select("article a[href], .result-item a[href], .items a[href]")
-                .mapNotNull { el ->
-                    val href = el.attr("href").trim()
-                    if (!href.startsWith("http")) {
-                        null
-                    } else {
-                        val text = el.text().trim()
-                        if (PlayNet.titleMatches(text, title)) href else null
-                    }
-                }
-                .distinct()
-                .filter { it.contains("/tvshows/") || it.contains("/movies/") }
+            val cards = searchCards(domain, title)
 
             if (res.season == null) {
-                val movieUrl = candidates.firstOrNull { it.contains("/movies/") } ?: return
-                processPage(domain, movieUrl, subtitleCallback, callback)
+                val movie = cards.filter { !it.isTv }
+                    .firstOrNull { PlayNet.titleMatches(it.title, title) } ?: return
+                resolvePost(movie.url, subtitleCallback, callback)
             } else {
-                val showUrl = candidates.firstOrNull { it.contains("/tvshows/") }
-                if (showUrl == null) {
-                    candidates.firstOrNull { it.contains("/movies/") }?.let {
-                        processPage(domain, it, subtitleCallback, callback)
+                val show = cards.filter { it.isTv }
+                    .firstOrNull { PlayNet.titleMatches(it.title, title) }
+                    ?.let { card ->
+                        if (res.matchYear == null || PlayNet.yearMatches(card.title, res.matchYear)) card else null
                     }
-                    return
-                }
-                val showDoc = app.get(showUrl, headers = PlayNet.headers(domain), timeout = 20L).document
-                val episodeUrl = showDoc.select("div.se-c").mapNotNull { seC ->
-                    val seasonNum = seC.selectFirst("span.se-t")?.text()?.trim()?.toIntOrNull()
-                    if (seasonNum != res.season) null
-                    else seC.select("ul.episodios li").mapNotNull { li ->
-                        val numerando = li.selectFirst("div.numerando")?.text().orEmpty()
-                        val epNum = Regex("""(\d+)\s*-\s*(\d+)""").find(numerando)?.groupValues?.get(2)?.toIntOrNull()
-                        if (res.episode == null || epNum == res.episode) {
-                            li.selectFirst("div.episodiotitle a")?.attr("href")?.trim()?.takeIf { it.startsWith("http") }
-                        } else null
-                    }
-                }.flatten().firstOrNull()
-
-                if (episodeUrl != null) {
-                    processPage(domain, episodeUrl, subtitleCallback, callback)
-                } else if (res.episode != null && direct != null) {
-                    try {
-                        val probe = app.get(direct, headers = PlayNet.headers(domain), timeout = 15L)
-                        if (probe.code == 200 && probe.text.contains("dooplay_player_option")) {
-                            processPage(domain, direct, subtitleCallback, callback)
-                        }
-                    } catch (_: Exception) {}
-                }
+                    ?: cards.firstOrNull { it.isTv && PlayNet.titleMatches(it.title, title) }
+                    ?: return
+                val href = episodeHref(domain, show.url, res.season, res.episode) ?: return
+                resolvePost(href, subtitleCallback, callback)
             }
         } catch (_: Exception) {}
     }

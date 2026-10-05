@@ -21,12 +21,9 @@ class JustPlayPlugin : Plugin() {
         registerExtractorAPI(PlayGDFlix())
         registerExtractorAPI(PlayGDLink())
         openSettings = { ctx ->
-            val activity = ctx as? androidx.appcompat.app.AppCompatActivity
-            if (activity != null) {
-                try {
-                    JustPlaySettingsFragment().show(activity.supportFragmentManager, "JustPlaySettings")
-                } catch (_: Exception) {}
-            }
+            try {
+                JustPlaySettings.show(ctx)
+            } catch (_: Exception) {}
         }
     }
 }

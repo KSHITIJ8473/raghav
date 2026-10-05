@@ -192,17 +192,18 @@ internal object PlayNet {
         else -> url
     }
 
-    // only a real cloudflare challenge (cf-mitigated header or interstitial body) is worth a webview solve
+    // only a real interstitial is worth a webview solve, the jsd script tag
+    // that mentions challenge-platform ships on healthy cloudflare pages too
     private fun isCfChallenge(res: NiceResponse): Boolean {
         if (res.headers["cf-mitigated"] == "challenge") return true
         val body = try { res.text.lowercase() } catch (_: Exception) { "" }
-        return body.contains("just a moment") || body.contains("challenge-platform") ||
-            body.contains("checking your browser")
+        return (body.contains("just a moment") && body.contains("challenge-platform")) ||
+            body.contains("checking your browser") ||
+            body.contains("checking if the site connection is secure")
     }
 
-    // the killer keeps its cookies per host and never re-solves once it has
-    // some, dropping them for this host is what forces a fresh webview pass
-    // when the saved ones went stale
+    // the killer keeps its cookies per host, dropping them for this host is
+    // what forces a fresh webview pass once the saved ones went stale
     suspend fun fetchWithCf(
         url: String,
         referer: String? = null,
@@ -226,10 +227,8 @@ internal object PlayNet {
         return null
     }
 
-    // the drive hosts sit behind cloudflare, a plain request either dies in a
-    // redirect loop or lands on a challenge page, the killer solves the
-    // challenge in a webview, the manual walk with cookies survives the loop
-    // and the mirror host is the last resort
+    // the drive hosts sit behind cloudflare and die in redirect loops or on
+    // challenge pages, the killer, the cookie walk and the mirror host back each other up
     suspend fun fetchDrivePage(url: String, referer: String?): NiceResponse? {
         for (candidate in listOf(url, driveMirror(url))) {
             fetchWithCf(candidate, referer)?.let { return it }

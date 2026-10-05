@@ -669,11 +669,8 @@ class PlayVegaDrive : ExtractorApi() {
     }
 }
 
-// filepress is a react app whose html pages sit behind an interactive
-// turnstile while the json api is open, file/get describes the file (its
-// name is the only reliable zip pack detector), downlaod/ queues a task or
-// answers instantly depending on the method, downlaod2/ turns a finished
-// task into the link
+// filepress is a react app behind an interactive turnstile while its json
+// api is open, file/get names the file and the two downlaod endpoints queue the link
 class PlayFilePress : ExtractorApi() {
     override val name = "FilePress"
     override val mainUrl = "https://filebee.xyz"
@@ -803,8 +800,7 @@ class PlayFilePress : ExtractorApi() {
     }
 
     // the dotflix share page carries a per file code in a btoa call, the
-    // reversed base64 of it is posted to the extract endpoint which answers
-    // with the drive file url
+    // reversed base64 of it is posted to the extract endpoint for the file url
     private suspend fun resolveDotFlix(shareUrl: String): String? {
         return try {
             val text = app.get(

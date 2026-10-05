@@ -238,8 +238,25 @@ class MultimoviesProvider : MainAPI() {
     }
 
     private fun parseSeasons(doc: Document): List<Int> {
-        val select = doc.selectFirst("select.cinejoy-season-select") ?: return emptyList()
+        // the range select shares the cinejoy-season-select class, only the
+        // pill dropdown lists real seasons
+        val select = doc.selectFirst(".cinejoy-season-pill-dropdown select") ?: return emptyList()
         return select.select("option").mapNotNull { it.attr("value").toIntOrNull() }.sorted()
+    }
+
+    // seasons past 24 episodes come as ep_range pages, the selected range is
+    // the one already rendered on the page
+    private fun parseEpisodeRanges(doc: Document): List<Int> {
+        val select = doc.selectFirst("select.episode-range-select") ?: return emptyList()
+        return select.select("option")
+            .filterNot { it.hasAttr("selected") }
+            .mapNotNull { it.attr("value").toIntOrNull() }
+    }
+
+    private fun watchSeason(html: String): Int? = try {
+        JSONObject(extractBracedObject(html, "const watchConfig = ")).optInt("season").takeIf { it > 0 }
+    } catch (e: Exception) {
+        null
     }
 
     private fun parseEpisodes(doc: Document): List<Episode> {
@@ -267,35 +284,56 @@ class MultimoviesProvider : MainAPI() {
     override suspend fun load(url: String): LoadResponse? {
         refreshDomain()
         return try {
-            val doc = mmGet(url, headers = headers).document
+            val resp = mmGet(url, headers = headers)
+            val doc = resp.document
             val (title, plot, image) = parseMeta(doc)
             if (title.isBlank()) return null
             val genres = parseGenres(doc)
             val (year, duration, score) = parsePills(doc)
 
             if (url.contains("/series/")) {
+                val seriesBase = url.substringBefore('?')
                 val seasons = parseSeasons(doc)
+                val current = watchSeason(resp.text) ?: seasons.firstOrNull() ?: 1
                 val episodes = mutableListOf<Episode>()
                 episodes.addAll(parseEpisodes(doc))
 
-                val remaining = seasons.drop(1)
+                for (range in parseEpisodeRanges(doc)) {
+                    try {
+                        episodes.addAll(
+                            parseEpisodes(mmGet("$seriesBase?season=$current&ep_range=$range", headers = headers).document)
+                        )
+                    } catch (e: Exception) {
+                        Log.e(TAG, "episodes range $range: ${e.message}")
+                    }
+                }
+
+                val remaining = seasons.filter { it != current }
                 if (remaining.isNotEmpty()) {
                     coroutineScope {
                         remaining.map { season ->
                             async(Dispatchers.IO) {
                                 try {
-                                    mmGet(
-                                        "$url?season=$season",
-                                        headers = headers,
-                                    ).document
+                                    val seasonDoc = mmGet("$seriesBase?season=$season", headers = headers).document
+                                    val eps = parseEpisodes(seasonDoc).toMutableList()
+                                    for (range in parseEpisodeRanges(seasonDoc)) {
+                                        try {
+                                            eps.addAll(
+                                                parseEpisodes(
+                                                    mmGet("$seriesBase?season=$season&ep_range=$range", headers = headers).document
+                                                )
+                                            )
+                                        } catch (e: Exception) {
+                                            Log.e(TAG, "episodes season $season range $range: ${e.message}")
+                                        }
+                                    }
+                                    eps
                                 } catch (e: Exception) {
                                     Log.e(TAG, "episodes season $season: ${e.message}")
-                                    null
+                                    emptyList()
                                 }
                             }
-                        }.map { deferred ->
-                            deferred.await()?.let { episodes.addAll(parseEpisodes(it)) }
-                        }
+                        }.forEach { episodes.addAll(it.await()) }
                     }
                 }
 

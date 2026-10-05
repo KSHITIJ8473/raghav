@@ -908,27 +908,55 @@ internal object MultimoviesSite {
         emptyList()
     }
 
-    // the series page renders one season at a time, later seasons come through
-    // the query param, the episode card carries its own page url
+    private fun findEpisodeCard(
+        doc: Document,
+        domain: String,
+        season: Int?,
+        episode: Int?
+    ): String? {
+        for (card in doc.select(".cinejoy-ep-card")) {
+            val m = Regex("ep-item-(\\d+)-(\\d+)").find(card.attr("id")) ?: continue
+            if (season != null && m.groupValues[1].toIntOrNull() != season) continue
+            if (episode != null && m.groupValues[2].toIntOrNull() != episode) continue
+            val href = card.selectFirst("a.cinejoy-ep-thumb-link")?.attr("href")?.trim().orEmpty()
+            if (href.isNotBlank()) return PlayNet.absolute(href, domain)
+        }
+        return null
+    }
+
+    // the series page renders one season at a time and a long season one
+    // range at a time, each range value is that page's first episode
     private suspend fun episodeHref(
         domain: String,
         seriesUrl: String,
         season: Int?,
         episode: Int?
     ): String? {
-        val pages = mutableListOf(seriesUrl)
-        if (season != null && season > 1) pages.add("$seriesUrl?season=$season")
-        for (page in pages) {
-            val doc = PlayNet.fetchWithCf(page)?.document ?: continue
-            for (card in doc.select(".cinejoy-ep-card")) {
-                val m = Regex("ep-item-(\\d+)-(\\d+)").find(card.attr("id")) ?: continue
-                if (season != null && m.groupValues[1].toIntOrNull() != season) continue
-                if (episode != null && m.groupValues[2].toIntOrNull() != episode) continue
-                val href = card.selectFirst("a.cinejoy-ep-thumb-link")?.attr("href")?.trim().orEmpty()
-                if (href.isNotBlank()) return PlayNet.absolute(href, domain)
-            }
+        val base = seriesUrl.substringBefore('?')
+        val first = PlayNet.fetchWithCf(base) ?: return null
+        val renderedSeason = try {
+            JSONObject(extractBracedObject(first.text, "const watchConfig = ")).optInt("season", 1)
+        } catch (_: Exception) {
+            1
         }
-        return null
+
+        var doc = first.document
+        if (season != null && season != renderedSeason) {
+            doc = PlayNet.fetchWithCf("$base?season=$season")?.document ?: return null
+        }
+        findEpisodeCard(doc, domain, season, episode)?.let { return it }
+
+        if (episode == null) return null
+        val select = doc.selectFirst("select.episode-range-select") ?: return null
+        val selected = select.selectFirst("option[selected]")?.attr("value")?.toIntOrNull()
+        val target = select.select("option")
+            .mapNotNull { it.attr("value").toIntOrNull() }
+            .filter { it <= episode }
+            .maxOrNull() ?: return null
+        if (target == selected) return null
+        val rangeDoc = PlayNet.fetchWithCf("$base?season=${season ?: renderedSeason}&ep_range=$target")?.document
+            ?: return null
+        return findEpisodeCard(rangeDoc, domain, season, episode)
     }
 
     private data class WatchServer(val id: String, val name: String, val url: String)
@@ -1130,6 +1158,18 @@ internal object MultimoviesSite {
         } catch (_: Exception) {}
     }
 
+    // search results put close titles first, so One Piece needs its exact
+    // card over One Piece Live Action, the site year only acts as a soft filter
+    private fun pickCard(cards: List<MmCard>, title: String, year: Int?): MmCard? {
+        if (cards.isEmpty()) return null
+        val norm = PlayNet.normalizeTitle(title)
+        val exact = cards.filter { PlayNet.normalizeTitle(it.title) == norm }
+        val pool = exact.ifEmpty { cards }
+        return pool.firstOrNull { c ->
+            c.year == null || year == null || kotlin.math.abs(c.year - year) <= 1
+        } ?: pool.first()
+    }
+
     suspend fun invoke(
         res: PlayLinkData,
         subtitleCallback: (SubtitleFile) -> Unit,
@@ -1141,17 +1181,12 @@ internal object MultimoviesSite {
             val cards = searchCards(domain, title)
 
             if (res.season == null) {
-                val movie = cards.filter { !it.isTv }
-                    .firstOrNull { PlayNet.titleMatches(it.title, title) } ?: return
+                val matches = cards.filter { !it.isTv && PlayNet.titleMatches(it.title, title) }
+                val movie = pickCard(matches, title, res.year) ?: return
                 resolvePost(movie.url, subtitleCallback, callback)
             } else {
-                val show = cards.filter { it.isTv }
-                    .firstOrNull { PlayNet.titleMatches(it.title, title) }
-                    ?.let { card ->
-                        if (res.matchYear == null || PlayNet.yearMatches(card.title, res.matchYear)) card else null
-                    }
-                    ?: cards.firstOrNull { it.isTv && PlayNet.titleMatches(it.title, title) }
-                    ?: return
+                val matches = cards.filter { it.isTv && PlayNet.titleMatches(it.title, title) }
+                val show = pickCard(matches, title, res.matchYear) ?: return
                 val href = episodeHref(domain, show.url, res.season, res.episode) ?: return
                 resolvePost(href, subtitleCallback, callback)
             }

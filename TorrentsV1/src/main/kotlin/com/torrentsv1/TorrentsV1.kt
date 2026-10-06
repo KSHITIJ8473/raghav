@@ -1,8 +1,18 @@
 package com.torrentsv1
 
+import android.app.AlertDialog
+import android.graphics.Color
+import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
+import android.view.Gravity
+import android.widget.Button
+import android.widget.LinearLayout
+import android.widget.ScrollView
+import android.widget.TextView
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
+import com.lagradost.cloudstream3.CommonActivity.activity
 import com.lagradost.cloudstream3.LoadResponse.Companion.addAniListId
 import com.lagradost.cloudstream3.LoadResponse.Companion.addImdbId
 import com.lagradost.cloudstream3.LoadResponse.Companion.addTMDbId
@@ -13,6 +23,9 @@ import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.INFER_TYPE
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.newExtractorLink
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.sync.Mutex
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.net.URLEncoder
@@ -24,13 +37,25 @@ private const val TMDB_API = "https://api.themoviedb.org/3"
 private val TMDB_KEY get() = BuildConfig.TMDB_KEY
 private const val TMDB_IMG = "https://image.tmdb.org/t/p/w500"
 private const val TMDB_IMG_ORIG = "https://image.tmdb.org/t/p/original"
-private const val CINEMETA = "https://cinemeta-catalogs.strem.io"
-private const val CINEMETA_META = "https://v3-cinemeta.strem.io"
 
 private const val TORRENTIO_BASE = "https://torrentio.strem.fun"
 private const val TORRENTSDB_BASE = "https://torrentsdb.com"
 private const val TORRENTSDB_CFG = "eyJsaW1pdCI6IjMiLCJkZWJyaWRvcHRpb25zIjpbIm5vZG93bmxvYWRsaW5rcyJdfQ=="
-private const val ANIMETOSHO_API = "https://animetosho.xyz"
+
+// the old animetosho.xyz domain now bounces to the main site which dropped
+// the json feeds, everything lives on the feed host now
+private const val ANIMETOSHO_API = "https://feed.animetosho.net"
+
+private const val BROWSER_UA =
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+
+private val ANILIST_HEADERS = mapOf(
+    "Accept" to "application/json",
+    "Content-Type" to "application/json",
+    "User-Agent" to BROWSER_UA,
+    "Origin" to "https://anilist.co",
+    "Referer" to "https://anilist.co/"
+)
 
 private val HARDCODED_TRACKERS = listOf(
     "udp://tracker.opentrackr.org:1337/announce",
@@ -42,7 +67,7 @@ private val HARDCODED_TRACKERS = listOf(
 
 internal const val KEY_ANILIST = "torrentsv1_anilist"
 internal const val KEY_TMDB = "torrentsv1_tmdb"
-internal const val KEY_CINEMETA = "torrentsv1_cinemeta"
+internal const val KEY_TMDB_ON_TOP = "torrentsv1_tmdb_on_top"
 internal const val KEY_TORRENTIO = "torrentsv1_torrentio"
 internal const val KEY_TORRENTSDB = "torrentsv1_torrentsdb"
 internal const val KEY_ANIMETOSHO = "torrentsv1_animetosho"
@@ -80,7 +105,9 @@ internal fun saveStremioAddons(addons: List<StremioAddon>) {
 
 data class StremioAddon(val name: String, val url: String, val type: String)
 
-private fun buildMagnet(infoHash: String?, fileIdx: Int?, sourceTrackers: List<String>?): String? {
+private fun buildMagnet(
+    infoHash: String?, fileIdx: Int?, sourceTrackers: List<String>?, displayName: String? = null
+): String? {
     if (infoHash.isNullOrBlank()) return null
     val trackers = LinkedHashSet<String>()
     sourceTrackers?.forEach { src ->
@@ -89,7 +116,7 @@ private fun buildMagnet(infoHash: String?, fileIdx: Int?, sourceTrackers: List<S
     }
     HARDCODED_TRACKERS.forEach { trackers.add(it) }
     val sb = StringBuilder("magnet:?xt=urn:btih:").append(infoHash)
-    sb.append("&dn=").append(URLEncoder.encode(infoHash, "UTF-8"))
+    sb.append("&dn=").append(URLEncoder.encode(displayName ?: infoHash, "UTF-8"))
     if (fileIdx != null) sb.append("&index=").append(fileIdx)
     trackers.forEach { sb.append("&tr=").append(URLEncoder.encode(it, "UTF-8")) }
     return sb.toString()
@@ -118,15 +145,50 @@ private fun simplifyTitle(title: String?): String {
         .replace(Regex("\\s+"), " ").trim()
 }
 
+// anilist rate limits hard, so identical queries share one in flight request
+// and every answer is reused for a short while instead of hammering the api
+private val anilistCache = mutableMapOf<String, Pair<String, Long>>()
+private const val ANILIST_CACHE_TTL = 10 * 60 * 1000L
+private val anilistLocks = mutableMapOf<String, Mutex>()
+
 private suspend fun anilistQuery(query: String, variables: Map<String, Any?>): String {
-    val jsonBody = com.fasterxml.jackson.module.kotlin.jacksonObjectMapper().writeValueAsString(
-        mapOf("query" to query, "variables" to variables)
-    )
-    return app.post(
-        ANILIST_URL,
-        headers = mapOf("Accept" to "application/json", "Content-Type" to "application/json"),
-        requestBody = jsonBody.toRequestBody("application/json".toMediaTypeOrNull())
-    ).text
+    val cacheKey = "$query|${variables.toJson()}"
+    val now = System.currentTimeMillis()
+    anilistCache[cacheKey]?.let { (cached, time) ->
+        if (now - time < ANILIST_CACHE_TTL) return cached
+    }
+
+    val lock = synchronized(anilistLocks) { anilistLocks.getOrPut(cacheKey) { Mutex() } }
+    if (lock.isLocked) {
+        repeat(50) {
+            delay(100)
+            anilistCache[cacheKey]?.let { (cached, time) ->
+                if (now - time < ANILIST_CACHE_TTL) return cached
+            }
+        }
+    }
+    anilistCache[cacheKey]?.let { (cached, time) ->
+        if (now - time < ANILIST_CACHE_TTL) return cached
+    }
+
+    val requestBody = mapOf("query" to query, "variables" to variables)
+        .toJson().toRequestBody("application/json".toMediaTypeOrNull())
+    try {
+        val text = app.post(
+            ANILIST_URL, headers = ANILIST_HEADERS, requestBody = requestBody, timeout = 15L
+        ).text
+        if (text.isNotBlank() && !text.contains("\"errors\"")) {
+            if (anilistCache.size > 200) anilistCache.clear()
+            anilistCache[cacheKey] = text to now
+            return text
+        }
+    } catch (e: Exception) {
+        if (e is CancellationException) throw e
+    }
+
+    // a stale answer beats no answer when the api hiccups
+    anilistCache[cacheKey]?.let { (cached, _) -> return cached }
+    throw Exception("AniList query failed")
 }
 
 private suspend fun tmdbGet(path: String): String {
@@ -167,8 +229,11 @@ data class AniListMedia(
     val coverImage: AniListCover? = null, val bannerImage: String? = null,
     val description: String? = null, val episodes: Int? = null,
     val seasonYear: Int? = null, val averageScore: Int? = null,
-    val genres: List<String>? = null, val format: String? = null, val status: String? = null
+    val genres: List<String>? = null, val format: String? = null, val status: String? = null,
+    val nextAiringEpisode: AniListNextAiring? = null
 )
+@JsonIgnoreProperties(ignoreUnknown = true)
+data class AniListNextAiring(val episode: Int? = null)
 @JsonIgnoreProperties(ignoreUnknown = true) data class AniListTitle(val english: String? = null, val romaji: String? = null)
 @JsonIgnoreProperties(ignoreUnknown = true) data class AniListCover(val extraLarge: String? = null, val large: String? = null)
 
@@ -194,24 +259,21 @@ data class TmdbDetail(
 data class TmdbSeason(val season_number: Int? = null, val name: String? = null, val episode_count: Int? = null)
 @JsonIgnoreProperties(ignoreUnknown = true) data class TmdbExternalIds(val imdb_id: String? = null)
 
-@JsonIgnoreProperties(ignoreUnknown = true) data class CinemetaResponse(val metas: List<CinemetaMeta>? = null, val meta: CinemetaMeta? = null)
-@JsonIgnoreProperties(ignoreUnknown = true)
-data class CinemetaMeta(
-    val imdb_id: String? = null, val name: String? = null, val type: String? = null,
-    val poster: String? = null, val background: String? = null,
-    val description: String? = null, val year: String? = null,
-    val genres: List<String>? = null, val videos: List<CinemetaVideo>? = null
-)
-@JsonIgnoreProperties(ignoreUnknown = true)
-data class CinemetaVideo(val id: String? = null, val title: String? = null, val season: Int? = null, val episode: Int? = null, val thumbnail: String? = null)
-
 @JsonIgnoreProperties(ignoreUnknown = true) data class AniZipResponse(val mappings: AniZipMappings? = null, val episodes: Map<String, AniZipEpisode>? = null)
 @JsonIgnoreProperties(ignoreUnknown = true) data class AniZipMappings(val mal_id: Int? = null, val kitsu_id: Int? = null, val imdb_id: String? = null)
 @JsonIgnoreProperties(ignoreUnknown = true) data class AniZipEpisode(val anidbEid: Int? = null, val title: Map<String, String>? = null, val image: String? = null)
 
-@JsonIgnoreProperties(ignoreUnknown = true) data class AnimetoshoResponse(val data: AnimetoshoData? = null)
-@JsonIgnoreProperties(ignoreUnknown = true) data class AnimetoshoData(val entries: List<AnimetoshoEntry>? = null, val releases: List<AnimetoshoEntry>? = null)
-@JsonIgnoreProperties(ignoreUnknown = true) data class AnimetoshoEntry(val name: String? = null, val title: String? = null, val magnet: String? = null, val seeders: Int? = null, val size_bytes: Long? = null)
+@JsonIgnoreProperties(ignoreUnknown = true)
+data class AnimetoshoEpisodeResponse(val data: AnimetoshoEpisodeData? = null)
+@JsonIgnoreProperties(ignoreUnknown = true)
+data class AnimetoshoEpisodeData(val releases: List<AnimetoshoRelease>? = null)
+@JsonIgnoreProperties(ignoreUnknown = true)
+data class AnimetoshoListResponse(val data: List<AnimetoshoRelease>? = null)
+@JsonIgnoreProperties(ignoreUnknown = true)
+data class AnimetoshoRelease(
+    val title: String? = null, val magnet: String? = null,
+    val seeders: Int? = null, val size_bytes: Long? = null, val is_batch: Boolean? = null
+)
 
 data class LinkData(
     val source: String, val anilistId: Int? = null, val malId: Int? = null,
@@ -248,9 +310,87 @@ private val ANILIST_INFO = """
             id title { romaji english native }
             coverImage { large extraLarge } bannerImage description
             episodes seasonYear averageScore genres format status
+            nextAiringEpisode { episode }
         }
     }
 """.trimIndent()
+
+// animetosho search results carry everything in the release name,
+// so these patterns pull the episode number out and drop packs and batches
+private val batchWords = Regex(
+    """batch|complete|collection|\bbox\s?set|\bvol(ume)?s?\.?\s*\d"""
+)
+private val tildeRange = Regex("""\d\s*~\s*\d""")
+
+// a digit pair around a dash only reads as a range when it climbs and the
+// left number stands alone, "part 3 - 01" and "s2 - 12" are season tags in
+// front of an episode number and must survive the batch check
+private val dashRange = Regex(
+    """(?<!season )(?<!part )(?<!cour )(?<!stage )(?<!phase )(?<!series )(?<![a-z0-9])(\d{1,4})\s*-\s*(\d{1,4})"""
+)
+
+private fun isBatchTitle(title: String): Boolean {
+    val lower = title.lowercase()
+    if (batchWords.containsMatchIn(lower)) return true
+    if (tildeRange.containsMatchIn(lower)) return true
+    for (m in dashRange.findAll(lower)) {
+        val from = m.groupValues[1].toIntOrNull() ?: continue
+        val to = m.groupValues[2].toIntOrNull() ?: continue
+        if (to > from) return true
+    }
+    return false
+}
+
+private val episodeMarkers = listOf(
+    Regex("""\s-\s0*(\d{1,4})(?:v\d+)?\b"""),
+    Regex("""\bep(?:isode)?\.?\s*0*(\d{1,4})\b"""),
+    Regex("""\be0*(\d{1,4})\b"""),
+    Regex("""\s0*(\d{1,4})\s*\[""")
+)
+
+private fun episodeMatch(title: String): Pair<Int, MatchResult>? {
+    if (isBatchTitle(title)) return null
+    val lower = title.lowercase()
+    for (marker in episodeMarkers) {
+        val found = marker.findAll(lower).mapNotNull { m ->
+            m.groupValues[1].toIntOrNull()?.let { it to m }
+        }.toList()
+        if (found.isNotEmpty() && found.map { it.first }.distinct().size == 1) return found.first()
+    }
+    return null
+}
+
+private fun cleanForMatch(s: String): String = s.lowercase().replace(Regex("[^a-z0-9]"), "")
+
+// anilist writes sequels as "2nd Season" while release names say "S2", the
+// compact twin of a title catches those uploads
+private fun compactSeasonTitle(s: String): String = s
+    .replace(Regex("""(\d+)(?:st|nd|rd|th)\s+[Ss]eason"""), "S$1")
+    .replace(Regex("""[Ss]eason\s+(\d+)"""), "S$1")
+    .replace(":", "")
+
+private fun releaseMatchesTitle(releaseTitle: String, animeTitle: String): Boolean {
+    val needle = cleanForMatch(animeTitle)
+    if (needle.isBlank()) return false
+    return cleanForMatch(releaseTitle).contains(needle)
+}
+
+private fun titlePattern(title: String): Regex? {
+    val words = title.lowercase().split(Regex("[^a-z0-9]+")).filter { it.isNotEmpty() }
+    if (words.isEmpty()) return null
+    return words.joinToString("[^a-z0-9]*") { Regex.escape(it) }.toRegex()
+}
+
+// "One Piece - Gyojin Tou-hen - 01" is episode 1 of the fish-man island
+// re-edit and not of the show that was picked, the episode number has to sit
+// right behind the show name for a release to count
+private fun episodeAfterShowName(releaseTitle: String, marker: MatchResult, animeTitle: String): Boolean {
+    val pattern = titlePattern(animeTitle) ?: return false
+    val prefix = releaseTitle.lowercase().substring(0, marker.range.first)
+        .trimEnd { !it.isLetterOrDigit() }
+    val match = pattern.find(prefix) ?: return false
+    return match.range.last == prefix.length - 1
+}
 
 class TorrentsV1 : MainAPI() {
     override var mainUrl = "https://graphql.anilist.co"
@@ -263,10 +403,7 @@ class TorrentsV1 : MainAPI() {
         TvType.Movie, TvType.TvSeries, TvType.Torrent
     )
 
-    // STATIC mainPage — CloudStream reads this once at init.
-    // getMainPage() returns empty list for disabled catalogs.
-    override val mainPage = mainPageOf(
-        // AniList (10 sections)
+    private val anilistSections = listOf(
         "anilist_trending" to "Anime: Trending",
         "anilist_popular" to "Anime: Popular",
         "anilist_top" to "Anime: Top Rated",
@@ -276,8 +413,10 @@ class TorrentsV1 : MainAPI() {
         "anilist_drama" to "Anime: Drama",
         "anilist_scifi" to "Anime: Sci-Fi",
         "anilist_romance" to "Anime: Romance",
-        "anilist_movies" to "Anime: Movies",
-        // TMDB (10 sections)
+        "anilist_movies" to "Anime: Movies"
+    )
+
+    private val tmdbSections = listOf(
         "tmdb_trending" to "Trending Movies & TV",
         "tmdb_popular_movies" to "Popular Movies",
         "tmdb_popular_tv" to "Popular TV Shows",
@@ -287,19 +426,14 @@ class TorrentsV1 : MainAPI() {
         "tmdb_amazon" to "Amazon Prime",
         "tmdb_disney" to "Disney+",
         "tmdb_hbo" to "HBO",
-        "tmdb_korean" to "Korean Shows",
-        // Cinemeta (10 sections)
-        "cinemeta_top_movies" to "Cinemeta: Top Movies",
-        "cinemeta_top_series" to "Cinemeta: Top Series",
-        "cinemeta_year_movies" to "Cinemeta: New Movies",
-        "cinemeta_year_series" to "Cinemeta: New Series",
-        "cinemeta_imdb_rating_movies" to "Cinemeta: Rated Movies",
-        "cinemeta_imdb_rating_series" to "Cinemeta: Rated Series",
-        "cinemeta_imdb_popular_movies" to "Cinemeta: Popular Movies",
-        "cinemeta_imdb_popular_series" to "Cinemeta: Popular Series",
-        "cinemeta_last_voted_movies" to "Cinemeta: Voted Movies",
-        "cinemeta_last_voted_series" to "Cinemeta: Voted Series"
+        "tmdb_korean" to "Korean Shows"
     )
+
+    // the chosen catalog leads the home page, read on every access so a
+    // restart is all it takes to swap the order
+    override val mainPage: List<MainPageData>
+        get() = if (getSetting(KEY_TMDB_ON_TOP, false)) mainPageOf(*(tmdbSections + anilistSections).toTypedArray())
+        else mainPageOf(*(anilistSections + tmdbSections).toTypedArray())
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         DonationManager.checkAndShow()
@@ -307,15 +441,14 @@ class TorrentsV1 : MainAPI() {
             when {
                 request.data.startsWith("anilist_") -> {
                     if (!getSetting(KEY_ANILIST, true)) emptyList()
-                    else fetchAniListHome(request.data, page)
+                    else {
+                        isAniListDown()
+                        fetchAniListHome(request.data, page)
+                    }
                 }
                 request.data.startsWith("tmdb_") -> {
                     if (!getSetting(KEY_TMDB, true)) emptyList()
                     else fetchTmdbHome(request.data, page)
-                }
-                request.data.startsWith("cinemeta_") -> {
-                    if (!getSetting(KEY_CINEMETA, false)) emptyList()
-                    else fetchCinemetaHome(request.data, page)
                 }
                 else -> emptyList()
             }
@@ -340,8 +473,14 @@ class TorrentsV1 : MainAPI() {
             "anilist_movies" -> { variables["sort"] = listOf("SCORE_DESC"); variables["format"] = "MOVIE" }
             else -> variables["sort"] = listOf("TRENDING_DESC")
         }
-        val response = parseJson<AniListResponse>(anilistQuery(ANILIST_HOMEPAGE, variables))
-        return response.data?.Page?.media?.mapNotNull { it.toSearchResponse() } ?: emptyList()
+        return try {
+            val response = parseJson<AniListResponse>(anilistQuery(ANILIST_HOMEPAGE, variables))
+            val media = response.data?.Page?.media ?: emptyList()
+            if (media.isNotEmpty()) homePageCache["${data}_$page"] = media
+            media.mapNotNull { it.toSearchResponse() }
+        } catch (_: Throwable) {
+            homePageCache["${data}_$page"]?.mapNotNull { it.toSearchResponse() } ?: emptyList()
+        }
     }
 
     private suspend fun fetchTmdbHome(data: String, page: Int): List<SearchResponse> {
@@ -365,26 +504,6 @@ class TorrentsV1 : MainAPI() {
             "tmdb_korean" -> { parseJson<TmdbResponse>(tmdbGet("/discover/tv?page=$page&with_original_language=ko")).results?.forEach { it.toSearchResponse("tv")?.let { r -> results.add(r) } } }
         }
         return results
-    }
-
-    private suspend fun fetchCinemetaHome(data: String, page: Int): List<SearchResponse> {
-        // Parse cinemeta_xxx_movies or cinemeta_xxx_series
-        // Format: cinemeta_{catalogId}_{type}
-        val parts = data.split("_").toMutableList()
-        val type = if (parts.removeLast() == "movies") "movie" else "series"
-        val catalogId = parts.drop(1).joinToString("_") // drop "cinemeta", join rest
-        val skip = (page - 1) * 50
-        val url = "$CINEMETA/$catalogId/catalog/$type/$catalogId/skip=$skip.json"
-        val json = try { app.get(url, timeout = 30L).text } catch (_: Throwable) { return emptyList() }
-        val resp = try { parseJson<CinemetaResponse>(json) } catch (_: Throwable) { return emptyList() }
-        return resp.metas?.mapNotNull { meta ->
-            val imdbId = meta.imdb_id ?: return@mapNotNull null
-            val title = meta.name ?: return@mapNotNull null
-            newMovieSearchResponse(title, "$CINEMETA_META/meta/$type/$imdbId.json",
-                if (type == "movie") TvType.Movie else TvType.TvSeries) {
-                this.posterUrl = meta.poster
-            }
-        } ?: emptyList()
     }
 
     private fun AniListMedia.toSearchResponse(): SearchResponse? {
@@ -415,6 +534,7 @@ class TorrentsV1 : MainAPI() {
             {
                 if (getSetting(KEY_ANILIST, true)) {
                     try {
+                        isAniListDown()
                         val response = parseJson<AniListResponse>(
                             anilistQuery(ANILIST_SEARCH, mapOf("search" to query, "page" to 1, "perPage" to 15))
                         )
@@ -444,15 +564,16 @@ class TorrentsV1 : MainAPI() {
             url.contains("/anilist/") -> loadAniList(url)
             url.contains("/3/movie/") -> loadTmdb(url, "movie")
             url.contains("/3/tv/") -> loadTmdb(url, "tv")
-            url.contains("/meta/movie/") -> loadCinemeta(url, "movie")
-            url.contains("/meta/series/") -> loadCinemeta(url, "series")
             else -> null
         }
     }
 
     private suspend fun loadAniList(url: String): LoadResponse? {
         val anilistId = Regex("""/anilist/(\d+)""").find(url)?.groupValues?.get(1)?.toIntOrNull() ?: return null
-        val media = parseJson<AniListResponse>(anilistQuery(ANILIST_INFO, mapOf("id" to anilistId))).data?.Media ?: return null
+        isAniListDown()
+        val media = try {
+            parseJson<AniListResponse>(anilistQuery(ANILIST_INFO, mapOf("id" to anilistId))).data?.Media
+        } catch (_: Throwable) { null } ?: return null
         val title = media.title?.english ?: media.title?.romaji ?: "Unknown"
         val jpTitle = media.title?.romaji
         val posterUrl = media.coverImage?.extraLarge ?: media.coverImage?.large
@@ -465,6 +586,11 @@ class TorrentsV1 : MainAPI() {
             "OVA", "ONA" -> TvType.OVA
             else -> TvType.Anime
         }
+        val showStatus = when (media.status) {
+            "RELEASING" -> ShowStatus.Ongoing
+            "FINISHED" -> ShowStatus.Completed
+            else -> null
+        }
 
         val aniZip = try {
             val resp = app.get("$ANIZIP_API/mappings?anilist_id=$anilistId")
@@ -475,14 +601,20 @@ class TorrentsV1 : MainAPI() {
         val kitsuId = aniZip?.mappings?.kitsu_id
         val imdbId = aniZip?.mappings?.imdb_id
 
-        var totalEps = media.episodes ?: aniZip?.episodes?.size ?: 0
+        val anizipEpCount = aniZip?.episodes?.keys?.count { it.toIntOrNull() != null } ?: 0
+        var totalEps = media.episodes ?: anizipEpCount
+        // anilist keeps counting specials the tracker never lists as aired
+        media.nextAiringEpisode?.episode?.let { nextEp ->
+            if (totalEps >= nextEp) totalEps = nextEp - 1
+        }
         if (format == "MOVIE" && totalEps == 0) totalEps = 1
         if (totalEps == 0) totalEps = 1
 
         val episodes = mutableListOf<Episode>()
         for (i in 1..totalEps) {
             val epData = aniZip?.episodes?.get(i.toString())
-            val epTitle = epData?.title?.get("en") ?: epData?.title?.get("ja") ?: "Episode $i"
+            val epTitle = epData?.title?.get("en") ?: epData?.title?.get("ja")
+                ?: epData?.title?.get("x-jat") ?: "Episode $i"
             val linkData = LinkData(
                 source = "anilist", anilistId = anilistId, malId = malId,
                 kitsuId = kitsuId, imdbId = imdbId, title = title, jpTitle = jpTitle,
@@ -501,6 +633,8 @@ class TorrentsV1 : MainAPI() {
             this.year = year
             this.plot = plot
             this.tags = tags
+            if (media.averageScore != null) this.score = Score.from10((media.averageScore / 10.0).toString())
+            this.showStatus = showStatus
             addAniListId(anilistId)
             addEpisodes(DubStatus.Subbed, episodes)
             addEpisodes(DubStatus.Dubbed, episodes)
@@ -566,63 +700,6 @@ class TorrentsV1 : MainAPI() {
         }
     }
 
-    private suspend fun loadCinemeta(url: String, type: String): LoadResponse? {
-        val imdbId = Regex("""/meta/(?:movie|series)/([^/.]+)""").find(url)?.groupValues?.get(1) ?: return null
-        val json = app.get("$CINEMETA_META/meta/$type/$imdbId.json", timeout = 30L).text
-        val meta = try { parseJson<CinemetaResponse>(json).meta } catch (_: Throwable) { null } ?: return null
-        val title = meta.name ?: "Unknown"
-        val posterUrl = meta.poster
-        val plot = meta.description
-        val year = meta.year?.toIntOrNull()
-        val tags = meta.genres ?: emptyList()
-
-        return if (type == "movie") {
-            val linkData = LinkData(
-                source = "cinemeta", imdbId = imdbId, title = title,
-                episode = 1, season = null, year = year, format = "MOVIE"
-            ).toJson()
-            newMovieLoadResponse(title, url, TvType.Movie, linkData) {
-                this.posterUrl = posterUrl
-                this.backgroundPosterUrl = meta.background
-                this.year = year
-                this.plot = plot
-                this.tags = tags
-                addImdbId(imdbId)
-            }
-        } else {
-            val episodes = mutableListOf<Episode>()
-            meta.videos?.forEach { vid ->
-                val season = vid.season ?: 1
-                val ep = vid.episode ?: return@forEach
-                val linkData = LinkData(
-                    source = "cinemeta", imdbId = imdbId, title = title,
-                    episode = ep, season = season, year = year, format = "TV"
-                ).toJson()
-                episodes.add(newEpisode(linkData) {
-                    this.season = season
-                    this.episode = ep
-                    this.name = vid.title ?: "S${season}E$ep"
-                    this.posterUrl = vid.thumbnail
-                })
-            }
-            if (episodes.isEmpty()) {
-                val linkData = LinkData(
-                    source = "cinemeta", imdbId = imdbId, title = title,
-                    episode = 1, season = 1, year = year, format = "TV"
-                ).toJson()
-                episodes.add(newEpisode(linkData) { this.episode = 1 })
-            }
-            newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
-                this.posterUrl = posterUrl
-                this.backgroundPosterUrl = meta.background
-                this.year = year
-                this.plot = plot
-                this.tags = tags
-                addImdbId(imdbId)
-            }
-        }
-    }
-
     override suspend fun loadLinks(
         data: String, isCasting: Boolean,
         subtitleCallback: (SubtitleFile) -> Unit,
@@ -684,25 +761,93 @@ class TorrentsV1 : MainAPI() {
         fetchStremioStreams("TorrentsDB", url, callback)
     }
 
+    // animetosho matches releases to episodes by name alone, so the feed of
+    // one episode still carries batches, specials and sub series of the same
+    // franchise, every release is checked against the show and episode that
+    // was actually picked
+    private fun matchesRequestedEpisode(release: AnimetoshoRelease, linkData: LinkData): Boolean {
+        val title = release.title ?: return false
+        val names = (listOfNotNull(linkData.jpTitle, linkData.title) +
+            listOfNotNull(linkData.jpTitle, linkData.title).map { compactSeasonTitle(it) })
+            .filter { it.isNotBlank() }.distinct()
+        val match = episodeMatch(title)
+        for (name in names) {
+            if (!releaseMatchesTitle(title, name)) continue
+            if (linkData.format == "MOVIE") return !isBatchTitle(title)
+            if (match != null && match.first == linkData.episode &&
+                episodeAfterShowName(title, match.second, name)
+            ) return true
+        }
+        return false
+    }
+
     private suspend fun invokeAnimetosho(linkData: LinkData, callback: (ExtractorLink) -> Unit) {
         val aniZip = try {
             val resp = app.get("$ANIZIP_API/mappings?anilist_id=${linkData.anilistId}")
             if (resp.isSuccessful) parseJson<AniZipResponse>(resp.text) else null
-        } catch (_: Exception) { null } ?: return
-        val anidbEid = aniZip.episodes?.get(linkData.episode.toString())?.anidbEid ?: return
-        val res = try { app.get("$ANIMETOSHO_API/json/v1/episodes/$anidbEid", timeout = 100L).parsedSafe<AnimetoshoResponse>() } catch (_: Throwable) { null } ?: return
-        val items = (res.data?.entries ?: res.data?.releases ?: emptyList())
-            .filter { !it.magnet.isNullOrBlank() }
-            .sortedByDescending { it.seeders ?: -1 }
-        for (it in items) {
-            val magnet = it.magnet ?: continue
-            val title = it.title ?: it.name ?: ""
-            val seeders = it.seeders ?: 0
-            callback.invoke(
-                newExtractorLink("Animetosho", "Animetosho | $seeders | $title", magnet, ExtractorLinkType.MAGNET) {
-                    this.quality = getQualityFromString(title)
+        } catch (_: Exception) { null }
+
+        val anidbEid = aniZip?.episodes?.get(linkData.episode.toString())?.anidbEid
+        if (anidbEid != null) {
+            val res = try {
+                app.get("$ANIMETOSHO_API/json/v1/episodes/$anidbEid", timeout = 30L)
+                    .parsedSafe<AnimetoshoEpisodeResponse>()
+            } catch (_: Throwable) { null }
+            // the episode feed also picks up batches, specials and sub series
+            // of the same franchise, only releases that fit the picked show
+            // and episode reach the player
+            val items = res?.data?.releases.orEmpty()
+                .filter { !it.magnet.isNullOrBlank() && it.is_batch != true && (it.seeders ?: 0) > 0 }
+                .filter { matchesRequestedEpisode(it, linkData) }
+                .sortedByDescending { it.seeders ?: 0 }
+            for (it in items) {
+                val magnet = it.magnet ?: continue
+                val title = it.title ?: continue
+                val seeders = it.seeders ?: 0
+                callback.invoke(
+                    newExtractorLink("Animetosho", "Animetosho | $seeders | $title", magnet, ExtractorLinkType.MAGNET) {
+                        this.quality = getQualityFromString(title)
+                    }
+                )
+            }
+            if (items.isNotEmpty()) return
+        }
+
+        // anidb mapping is missing for plenty of shows, a title search still
+        // finds the releases as long as the episode can be read from the name
+        searchAnimetoshoReleases(linkData, callback)
+    }
+
+    private suspend fun searchAnimetoshoReleases(linkData: LinkData, callback: (ExtractorLink) -> Unit) {
+        val searchTitles = (listOfNotNull(linkData.jpTitle, linkData.title) +
+            listOfNotNull(linkData.jpTitle, linkData.title).map { compactSeasonTitle(it) })
+            .filter { it.isNotBlank() }.distinct()
+        for (query in searchTitles) {
+            val res = try {
+                app.get(
+                    "$ANIMETOSHO_API/json/v1/releases?q=${URLEncoder.encode(query, "UTF-8")}",
+                    headers = mapOf("User-Agent" to BROWSER_UA), timeout = 30L
+                ).parsedSafe<AnimetoshoListResponse>()
+            } catch (_: Throwable) { null } ?: continue
+
+            val matches = res.data.orEmpty()
+                .filter { !it.magnet.isNullOrBlank() && it.is_batch != true && (it.seeders ?: 0) > 0 }
+                .filter { matchesRequestedEpisode(it, linkData) }
+                .sortedByDescending { it.seeders ?: 0 }
+
+            if (matches.isNotEmpty()) {
+                for (item in matches.take(20)) {
+                    val magnet = item.magnet ?: continue
+                    val title = item.title ?: continue
+                    val seeders = item.seeders ?: 0
+                    callback.invoke(
+                        newExtractorLink("Animetosho", "Animetosho | $seeders | $title", magnet, ExtractorLinkType.MAGNET) {
+                            this.quality = getQualityFromString(title)
+                        }
+                    )
                 }
-            )
+                return
+            }
         }
     }
 
@@ -710,7 +855,7 @@ class TorrentsV1 : MainAPI() {
         addons: List<StremioAddon>, stremioId: String?, linkData: LinkData, isMovie: Boolean,
         subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit
     ) {
-        // Most addons accept the IMDB ID; fall back to the kitsu: ID.
+        // most addons accept the IMDB ID; fall back to the kitsu: ID
         val id = linkData.imdbId ?: stremioId ?: return
         addons.amap { addon ->
             try {
@@ -789,13 +934,13 @@ class TorrentsV1 : MainAPI() {
             if (stream.url != null && stream.url.isNotBlank()) {
                 var streamUrl = stream.url
 
-                // Some addons (e.g. notorrent) wrap the real URL in a /redirect endpoint
+                // some addons (e.g. notorrent) wrap the real URL in a /redirect endpoint
                 if (streamUrl.contains("/redirect")) {
                     try {
                         val resp = app.get(streamUrl, allowRedirects = false)
                         val location = resp.headers?.get("location") ?: ""
                         if (location.isNotBlank()) {
-                            // The redirect target may carry the m3u8 URL in a query param,
+                            // the redirect target may carry the m3u8 URL in a query param,
                             // e.g. https://host/vid1.php?url=/vid/movies/720p/tt123.m3u8
                             val urlParam = Regex("""[?&]url=([^&]+\.m3u8)""").find(location)?.groupValues?.get(1)
                             if (urlParam != null) {
@@ -825,5 +970,96 @@ class TorrentsV1 : MainAPI() {
                 )
             }
         }
+    }
+
+    private suspend fun isAniListDown(): Boolean {
+        val now = System.currentTimeMillis()
+        if (now - lastDownCheckTime < DOWN_CHECK_INTERVAL) {
+            return anilistDownPopupShown
+        }
+        if (!downCheckLock.tryLock()) return anilistDownPopupShown
+        try {
+            lastDownCheckTime = now
+            val testQuery = "query { Page(page:1, perPage:1) { media(type: ANIME) { id } } }"
+            val responseText = try { anilistQuery(testQuery, emptyMap()) } catch (_: Exception) { return false }
+
+            if (responseText.contains("temporarily disabled")) {
+                showAniListDownPopup()
+                return true
+            }
+
+            if (responseText.contains("\"data\"") && !responseText.contains("\"data\":null")) {
+                anilistDownPopupShown = false
+                return false
+            }
+            return false
+        } finally {
+            downCheckLock.unlock()
+        }
+    }
+
+    private fun showAniListDownPopup() {
+        if (anilistDownPopupShown) return
+        anilistDownPopupShown = true
+        val ctx = activity ?: return
+        ctx.runOnUiThread {
+            try {
+                val cBg = Color.parseColor("#0A0A0A")
+                val cAccent = Color.parseColor("#E53935")
+                val cTextSub = Color.parseColor("#9E9E9E")
+                val d = ctx.resources.displayMetrics.density
+                fun Int.dp() = (this * d).toInt()
+
+                val container = LinearLayout(ctx).apply {
+                    orientation = LinearLayout.VERTICAL
+                    setPadding(24.dp(), 28.dp(), 24.dp(), 24.dp())
+                    setBackgroundColor(cBg)
+                }
+
+                container.addView(TextView(ctx).apply {
+                    text = "AniList API is Down"
+                    textSize = 20f
+                    setTextColor(cAccent)
+                    setTypeface(typeface, Typeface.BOLD)
+                    gravity = Gravity.CENTER
+                    setPadding(0, 0, 0, 12.dp())
+                })
+
+                container.addView(TextView(ctx).apply {
+                    text = "TorrentsV1 depends on the AniList API for anime metadata, search, and homepage content.\n\nThis may be because the AniList API is disabled from their end, or something is wrong from our end. Whichever the case, it will soon be fixed.\n\nIf AniList is disabled from their end, everything will work again once AniList restores services.\n\nTMDB content keeps working in the meantime."
+                    textSize = 13f
+                    setTextColor(cTextSub)
+                    setLineSpacing(1.4f, 1.0f)
+                    setPadding(0, 0, 0, 20.dp())
+                })
+
+                val scroll = ScrollView(ctx).apply { addView(container) }
+                val dialog = AlertDialog.Builder(ctx).setView(scroll).create()
+
+                container.addView(Button(ctx).apply {
+                    text = "Got it"
+                    setTextColor(Color.WHITE)
+                    textSize = 14f
+                    setTypeface(typeface, Typeface.BOLD)
+                    background = GradientDrawable().apply {
+                        cornerRadius = 12 * d
+                        setColor(cAccent)
+                    }
+                    setPadding(0, 14.dp(), 0, 14.dp())
+                    setOnClickListener { dialog.dismiss() }
+                })
+
+                dialog.show()
+                dialog.window?.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(Color.TRANSPARENT))
+            } catch (_: Exception) {}
+        }
+    }
+
+    companion object {
+        private val homePageCache = mutableMapOf<String, List<AniListMedia>>()
+        @Volatile private var anilistDownPopupShown = false
+        private val downCheckLock = Mutex()
+        @Volatile private var lastDownCheckTime = 0L
+        private const val DOWN_CHECK_INTERVAL = 60_000L
     }
 }

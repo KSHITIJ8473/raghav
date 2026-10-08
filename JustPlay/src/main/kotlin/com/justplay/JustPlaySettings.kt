@@ -466,7 +466,7 @@ object JustPlaySettings {
         pills.addView(statusPill(ctx, modeText, withDot = true))
         pills.addView(statusPill(
             ctx,
-            "${JustPlay.sites.count { JustPlay.siteEnabled(it.id) }}/7 SITES ON",
+            "${JustPlay.sites.count { JustPlay.siteEnabled(it.id) }}/${JustPlay.sites.size} SITES ON",
             withDot = false
         ))
         hero.addView(pills)

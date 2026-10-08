@@ -9,6 +9,8 @@ internal object PlayLabels {
         "themoviesflix" to "TheMoviesFlix",
         "multimovies" to "Multimovies",
         "movies4u" to "Movies4u",
+        "moviesdrive" to "MoviesDrive",
+        "hindmoviez" to "HindMoviez",
         "netnaija" to "NetNaija"
     )
 

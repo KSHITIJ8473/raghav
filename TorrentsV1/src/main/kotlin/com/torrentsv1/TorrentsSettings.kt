@@ -501,9 +501,9 @@ object TorrentsSettings {
         val debridKey = getStringSetting(KEY_DEBRID_KEY)
         val debridOn = debridProvider.isNotBlank() && debridKey.isNotBlank() && debridProvider != "None"
         pills.addView(statusPill(ctx, if (debridOn) "DEBRID ACTIVE" else "MAGNET MODE", withDot = true))
-        val sourcesOn = listOf(KEY_TORRENTIO, KEY_TORRENTSDB, KEY_ANIMETOSHO)
+        val sourcesOn = listOf(KEY_TORRENTIO, KEY_TORRENTSDB, KEY_ANIMETOSHO, KEY_NYAA)
             .count { getSetting(it, true) }
-        pills.addView(statusPill(ctx, "$sourcesOn/3 SOURCES ON", withDot = false))
+        pills.addView(statusPill(ctx, "$sourcesOn/4 SOURCES ON", withDot = false))
         hero.addView(pills)
         root.addView(hero)
 
@@ -515,7 +515,7 @@ object TorrentsSettings {
         val catalogsRow = homeRow(ctx, "Catalogs", "AniList and TMDB sections") { openCatalogs(ctx) }
         root.addView(catalogsRow)
 
-        val sourcesRow = homeRow(ctx, "Torrent Sources", "Torrentio, TorrentsDB, Animetosho") { openSources(ctx) }
+        val sourcesRow = homeRow(ctx, "Torrent Sources", "Torrentio, TorrentsDB, Animetosho, Nyaa") { openSources(ctx) }
         root.addView(sourcesRow)
 
         val debridRow = homeRow(ctx, "Debrid Service", "Provider and API key") { openDebrid(ctx) }
@@ -614,7 +614,8 @@ object TorrentsSettings {
             listOf(
                 Triple("Torrentio", "Main torrent provider", KEY_TORRENTIO),
                 Triple("TorrentsDB", "Alternative provider", KEY_TORRENTSDB),
-                Triple("Animetosho", "Anime releases", KEY_ANIMETOSHO)
+                Triple("Animetosho", "Anime releases", KEY_ANIMETOSHO),
+                Triple("Nyaa", "Anime torrent tracker", KEY_NYAA)
             ).forEach { (label, desc, key) ->
                 val (row, sw) = toggleRow(ctx, label, desc, getSetting(key, true)) { }
                 switches[key] = sw

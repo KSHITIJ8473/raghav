@@ -11,7 +11,10 @@ internal object PlayLabels {
         "movies4u" to "Movies4u",
         "moviesdrive" to "MoviesDrive",
         "hindmoviez" to "HindMoviez",
-        "netnaija" to "NetNaija"
+        "netnaija" to "NetNaija",
+        "netmirror_nf" to "NetMirror Netflix",
+        "netmirror_hs" to "NetMirror Hotstar",
+        "netmirror_pv" to "NetMirror Prime Video"
     )
 
     private val qualityRegex = Regex("(?i)\\b(2160p|1440p|1080[pi]|720[pi]|480[pi]|360p|240p|4k|8k|uhd)\\b")

@@ -1,4 +1,4 @@
-version = 21
+version = 22
 
 android {
     namespace = "com.torrentsv1"
@@ -16,7 +16,7 @@ dependencies {
 
 cloudstream {
     language = "en"
-    description = "Torrent support for Anime, Movies and TV via Torrentio, TorrentsDB, Animetosho and custom Stremio addons"
+    description = "Torrent support for Anime, Movies and TV via Torrentio, TorrentsDB, Animetosho, Nyaa and custom Stremio addons"
     authors = listOf("raghav")
     status = 1
     tvTypes = listOf("Anime", "AnimeMovie", "OVA", "Movie", "TvSeries", "Torrent")

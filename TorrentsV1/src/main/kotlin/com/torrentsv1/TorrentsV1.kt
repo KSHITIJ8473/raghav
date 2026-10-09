@@ -26,6 +26,7 @@ import com.lagradost.cloudstream3.utils.newExtractorLink
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.net.URLEncoder
@@ -45,6 +46,12 @@ private const val TORRENTSDB_CFG = "eyJsaW1pdCI6IjMiLCJkZWJyaWRvcHRpb25zIjpbIm5v
 // the old animetosho.xyz domain now bounces to the main site which dropped
 // the json feeds, everything lives on the feed host now
 private const val ANIMETOSHO_API = "https://feed.animetosho.net"
+
+// nyaa.si is unreachable on many isp networks, nyaa.net mirrors the same
+// index so the domains are tried until one answers and the winner is kept
+private val NYAA_DOMAINS = listOf("https://nyaa.si", "https://nyaa.net")
+private const val NYAA_TIMEOUT = 12L
+private const val NYAA_TOTAL_MS = 40_000L
 
 private const val BROWSER_UA =
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
@@ -71,6 +78,7 @@ internal const val KEY_TMDB_ON_TOP = "torrentsv1_tmdb_on_top"
 internal const val KEY_TORRENTIO = "torrentsv1_torrentio"
 internal const val KEY_TORRENTSDB = "torrentsv1_torrentsdb"
 internal const val KEY_ANIMETOSHO = "torrentsv1_animetosho"
+internal const val KEY_NYAA = "torrentsv1_nyaa"
 internal const val KEY_STREMIO_ADDONS = "torrentsv1_stremio_addons"
 internal const val KEY_DEBRID_PROVIDER = "torrentsv1_debrid_provider"
 internal const val KEY_DEBRID_KEY = "torrentsv1_debrid_key"
@@ -373,6 +381,31 @@ private fun releaseMatchesTitle(releaseTitle: String, animeTitle: String): Boole
     val needle = cleanForMatch(animeTitle)
     if (needle.isBlank()) return false
     return cleanForMatch(releaseTitle).contains(needle)
+}
+
+private data class NyaaItem(
+    val title: String, val infoHash: String, val seeders: Int
+)
+
+private fun unescapeXmlEntities(s: String): String = s
+    .replace(Regex("&#(\\d+);")) { m -> m.groupValues[1].toIntOrNull()?.toChar()?.toString() ?: m.value }
+    .replace(Regex("&#x([0-9A-Fa-f]+);")) { m -> m.groupValues[1].toIntOrNull(16)?.toChar()?.toString() ?: m.value }
+    .replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"")
+    .replace("&apos;", "'").replace("&amp;", "&")
+
+private fun parseNyaaItems(xml: String): List<NyaaItem> {
+    if (!xml.contains("<item>")) return emptyList()
+    return Regex("<item>(.*?)</item>", RegexOption.DOT_MATCHES_ALL).findAll(xml).mapNotNull { blockMatch ->
+        val block = blockMatch.groupValues[1]
+        fun tag(name: String): String? =
+            Regex("<$name>(.*?)</$name>", RegexOption.DOT_MATCHES_ALL).find(block)?.groupValues?.get(1)
+        val title = tag("title")?.let { unescapeXmlEntities(it.trim()) } ?: return@mapNotNull null
+        val infoHash = tag("nyaa:infoHash")?.trim()?.lowercase() ?: return@mapNotNull null
+        if (infoHash.length !in 40..64) return@mapNotNull null
+        if (tag("nyaa:remake")?.trim().equals("yes", ignoreCase = true)) return@mapNotNull null
+        val seeders = tag("nyaa:seeders")?.trim()?.toIntOrNull() ?: 0
+        NyaaItem(title, infoHash, seeders)
+    }.toList()
 }
 
 private fun titlePattern(title: String): Regex? {
@@ -717,6 +750,7 @@ class TorrentsV1 : MainAPI() {
         val torrentioOn = getSetting(KEY_TORRENTIO, true)
         val torrentsDbOn = getSetting(KEY_TORRENTSDB, true)
         val animetoshoOn = getSetting(KEY_ANIMETOSHO, true)
+        val nyaaOn = getSetting(KEY_NYAA, true)
         val addons = getStremioAddons()
         val debridProvider = getStringSetting(KEY_DEBRID_PROVIDER)
         val debridKey = getStringSetting(KEY_DEBRID_KEY)
@@ -726,6 +760,7 @@ class TorrentsV1 : MainAPI() {
             { if (torrentioOn) try { invokeTorrentio(stremioId, linkData, isMovie, hasDebrid, debridProvider, debridKey, callback) } catch (_: Throwable) {} },
             { if (torrentsDbOn) try { invokeTorrentsDB(stremioId, linkData, isMovie, callback) } catch (_: Throwable) {} },
             { if (animetoshoOn && linkData.source == "anilist") try { invokeAnimetosho(linkData, callback) } catch (_: Throwable) {} },
+            { if (nyaaOn && linkData.source == "anilist") try { invokeNyaa(linkData, callback) } catch (_: Throwable) {} },
             { try { invokeCustomStremioAddons(addons, stremioId, linkData, isMovie, subtitleCallback, callback) } catch (_: Throwable) {}}
         )
         return true
@@ -849,6 +884,89 @@ class TorrentsV1 : MainAPI() {
                 return
             }
         }
+    }
+
+    private suspend fun invokeNyaa(linkData: LinkData, callback: (ExtractorLink) -> Unit) {
+        val isMovie = linkData.format == "MOVIE"
+        val searchTitles = (listOfNotNull(linkData.jpTitle, linkData.title) +
+            listOfNotNull(linkData.jpTitle, linkData.title).map { compactSeasonTitle(it) })
+            .filter { it.isNotBlank() }.distinct()
+        if (searchTitles.isEmpty()) return
+
+        // a dead mirror must never hold the whole link load open until the
+        // app timeout kills it, everything nyaa does has to fit in here
+        withTimeoutOrNull(NYAA_TOTAL_MS) {
+            var host = nyaaHost
+            var sweepsFailed = 0
+            for (base in searchTitles) {
+                val attempts = mutableListOf<String>()
+                if (isMovie) {
+                    attempts.add("\"$base\"")
+                    attempts.add(base)
+                } else {
+                    val ep = if (linkData.episode < 10) "0${linkData.episode}" else "${linkData.episode}"
+                    // nearly every release is named "title - nn", the quoted
+                    // phrase pins that shape and keeps season packs out of the
+                    // top of the feed, the loose queries catch the rest
+                    attempts.add("\"$base - $ep\"")
+                    attempts.add("$base $ep")
+                    attempts.add(base)
+                }
+
+                for (query in attempts) {
+                    val rss = fetchNyaaRss(query, host)
+                    if (rss == null) {
+                        // every domain just timed out, trying more queries on a
+                        // blocked network is pointless so give up after a recheck
+                        host = null
+                        if (++sweepsFailed >= 2) return@withTimeoutOrNull
+                        continue
+                    }
+                    sweepsFailed = 0
+                    host = rss.first
+                    nyaaHost = rss.first
+
+                    val matches = parseNyaaItems(rss.second)
+                        .filter { item ->
+                            if (item.seeders <= 0) return@filter false
+                            if (!releaseMatchesTitle(item.title, base)) return@filter false
+                            if (isMovie) !isBatchTitle(item.title)
+                            else episodeMatch(item.title)?.first == linkData.episode
+                        }
+                        .sortedByDescending { it.seeders }
+
+                    if (matches.isNotEmpty()) {
+                        for (item in matches.take(20)) {
+                            val magnet = buildMagnet(item.infoHash, null, null, item.title) ?: continue
+                            callback.invoke(
+                                newExtractorLink("Nyaa", "Nyaa | ${item.seeders} | ${item.title}", magnet, ExtractorLinkType.MAGNET) {
+                                    this.quality = getQualityFromString(item.title)
+                                }
+                            )
+                        }
+                        return@withTimeoutOrNull
+                    }
+                }
+            }
+        }
+    }
+
+    // asks the pinned host, or walks every known domain when nothing is
+    // pinned, and reports which host produced the feed
+    private suspend fun fetchNyaaRss(query: String, pinned: String?): Pair<String, String>? {
+        val hosts = if (pinned != null) listOf(pinned) else NYAA_DOMAINS
+        for (host in hosts) {
+            try {
+                val text = app.get(
+                    "$host/?page=rss&q=${URLEncoder.encode(query, "UTF-8")}&c=0_0&f=0&s=seeders&o=desc",
+                    headers = mapOf("User-Agent" to BROWSER_UA), timeout = NYAA_TIMEOUT
+                ).text
+                if (text.isNotBlank()) return host to text
+            } catch (e: Throwable) {
+                if (e is CancellationException) throw e
+            }
+        }
+        return null
     }
 
     private suspend fun invokeCustomStremioAddons(
@@ -1061,5 +1179,8 @@ class TorrentsV1 : MainAPI() {
         private val downCheckLock = Mutex()
         @Volatile private var lastDownCheckTime = 0L
         private const val DOWN_CHECK_INTERVAL = 60_000L
+        // remembers which nyaa domain answered last so blocked networks only
+        // pay the fallback walk once per app session
+        @Volatile private var nyaaHost: String? = null
     }
 }

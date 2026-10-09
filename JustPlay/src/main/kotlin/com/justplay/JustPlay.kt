@@ -78,7 +78,8 @@ class JustPlay : MainAPI() {
             SiteRow("multimovies", "Multimovies", "Streaming servers"),
             SiteRow("movies4u", "Movies4u", "Movies and series"),
             SiteRow("moviesdrive", "MoviesDrive", "Movies and series up to 4K"),
-            SiteRow("hindmoviez", "HindMoviez", "Hindi movies and series")
+            SiteRow("hindmoviez", "HindMoviez", "Hindi movies and series"),
+            SiteRow("netmirror", "NetMirror", "Netflix, Hotstar and Prime Video mirrors")
         )
 
         fun downloadOnlyEnabled(): Boolean = try {
@@ -380,7 +381,8 @@ class JustPlay : MainAPI() {
             SiteEntry("multimovies") { r, s, c -> MultimoviesSite.invoke(r, s, c) },
             SiteEntry("movies4u") { r, s, c -> Movies4uSite.invoke(r, s, c) },
             SiteEntry("moviesdrive") { r, s, c -> MoviesDriveSite.invoke(r, s, c) },
-            SiteEntry("hindmoviez") { r, s, c -> HindMoviezSite.invoke(r, s, c) }
+            SiteEntry("hindmoviez") { r, s, c -> HindMoviezSite.invoke(r, s, c) },
+            SiteEntry("netmirror") { r, s, c -> NetMirrorSite.invoke(r, s, c) }
         )
 
         val active = allSites.filter { siteEnabled(it.id) }

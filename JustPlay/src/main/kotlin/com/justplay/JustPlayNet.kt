@@ -5,6 +5,7 @@ import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.base64Decode
 import com.lagradost.cloudstream3.network.CloudflareKiller
 import com.lagradost.cloudstream3.utils.ExtractorLink
+import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.loadExtractor
 import com.lagradost.cloudstream3.utils.newExtractorLink
@@ -26,8 +27,6 @@ internal object PlayNet {
         return h
     }
 
-    // themoviesflix and its drive hosts block a bare user agent on a lot of
-    // networks, only the full browser header set gets through
     fun browserHeaders(referer: String? = null): Map<String, String> {
         val h = LinkedHashMap<String, String>()
         h["User-Agent"] = PLAY_UA
@@ -45,8 +44,6 @@ internal object PlayNet {
         return h
     }
 
-    // one kilobyte range request, drops links whose file is gone before
-    // they reach the player
     suspend fun probe(url: String, referer: String? = null): Int? {
         return try {
             val res = app.get(
@@ -58,6 +55,28 @@ internal object PlayNet {
         } catch (_: Exception) {
             null
         }
+    }
+
+    fun linkType(url: String): ExtractorLinkType {
+        val clean = url.substringBefore("?").substringBefore("#").lowercase()
+        return if (clean.endsWith(".mp4") || clean.endsWith(".mkv") || clean.endsWith(".avi") ||
+            clean.endsWith(".webm") || clean.endsWith(".mov") || clean.endsWith(".m4a")
+        ) ExtractorLinkType.VIDEO else ExtractorLinkType.M3U8
+    }
+
+    suspend fun m3u8Alive(url: String, headers: Map<String, String> = emptyMap()): Boolean {
+        if (!url.startsWith("http")) return false
+        return try {
+            val res = app.get(url, headers = headers, timeout = 12L)
+            res.code == 200 && res.text.trimStart().startsWith("#EXTM3U")
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    suspend fun fileAlive(url: String, referer: String? = null): Boolean {
+        if (!url.startsWith("http")) return false
+        return probe(url, referer) in 200..299
     }
 
     fun getBaseUrl(url: String): String = try {
@@ -113,8 +132,6 @@ internal object PlayNet {
         return seasons.ifEmpty { null }
     }
 
-    // short names match half the catalog without a full compare, and short
-    // phrases like The Boys also match To All the Boys, so posts must start with them
     fun titleMatches(postTitle: String?, query: String): Boolean {
         if (postTitle.isNullOrBlank()) return false
         val normQuery = normalizeTitle(query)
@@ -159,8 +176,6 @@ internal object PlayNet {
         ""
     }
 
-    // okhttp gives up after 20 redirects and some drive pages bounce between ad mirrors forever,
-    // walk the headers by hand with the cookie jar so the cloudflare clearance survives each hop
     suspend fun followManually(url: String, referer: String?): NiceResponse? {
         var current = url
         val jar = mutableMapOf<String, String>()
@@ -192,8 +207,6 @@ internal object PlayNet {
         else -> url
     }
 
-    // only a real interstitial is worth a webview solve, the jsd script tag
-    // that mentions challenge-platform ships on healthy cloudflare pages too
     private fun isCfChallenge(res: NiceResponse): Boolean {
         if (res.headers["cf-mitigated"] == "challenge") return true
         val body = try { res.text.lowercase() } catch (_: Exception) { "" }
@@ -202,8 +215,6 @@ internal object PlayNet {
             body.contains("checking if the site connection is secure")
     }
 
-    // the killer keeps its cookies per host, dropping them for this host is
-    // what forces a fresh webview pass once the saved ones went stale
     suspend fun fetchWithCf(
         url: String,
         referer: String? = null,
@@ -227,8 +238,6 @@ internal object PlayNet {
         return null
     }
 
-    // the drive hosts sit behind cloudflare and die in redirect loops or on
-    // challenge pages, the killer, the cookie walk and the mirror host back each other up
     suspend fun fetchDrivePage(url: String, referer: String?): NiceResponse? {
         for (candidate in listOf(url, driveMirror(url))) {
             fetchWithCf(candidate, referer)?.let { return it }
@@ -237,8 +246,6 @@ internal object PlayNet {
         return null
     }
 
-    // the 10gbps buttons hide a google drive file behind a chain of worker
-    // redirects, the final url is the only playable one
     suspend fun resolveRedirectTarget(url: String, referer: String? = null): String? {
         var current = url
         repeat(7) {
@@ -256,8 +263,6 @@ internal object PlayNet {
         return null
     }
 
-    // greenmotors and the wp shorteners answer with a redirect first, the payload
-    // with the real target only sits on the page after following it
     suspend fun decryptIdLink(url: String, referer: String? = null): String? {
         return try {
             val res = app.get(
@@ -313,8 +318,7 @@ internal object PlayNet {
         quality: Int?,
         link: ExtractorLink
     ): ExtractorLink? {
-        // the hubcloud family names its links "Server [file | size]", the
-        // part before the bracket is the server, the rest is info
+
         val server = link.name.substringBefore(" [").trim()
         val extras = link.name.substringAfter(" [", "").removeSuffix("]").trim()
         val info = listOf(extras, label).filter { it.isNotBlank() }.joinToString(" ")
@@ -353,8 +357,6 @@ internal object PlayNet {
         } catch (_: Exception) {}
     }
 
-    // routes through justplay's own extractors because loadExtractor picks
-    // whichever extension registered last for a host
     suspend fun emitOwnLink(
         site: String,
         url: String,

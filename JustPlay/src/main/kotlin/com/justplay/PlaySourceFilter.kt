@@ -2,8 +2,6 @@ package com.justplay
 
 import com.lagradost.cloudstream3.utils.ExtractorLink
 
-// download-only sources are matched by name on the final label the player
-// shows, same link comes back tagged when download mode is active
 internal object PlaySourceFilter {
 
     private val downloadTokens = listOf(
@@ -20,7 +18,6 @@ internal object PlaySourceFilter {
         return downloadTokens.any { n.contains(it) }
     }
 
-    // built directly because newExtractorLink is suspend and this is not
     fun taggedDownloadOnly(link: ExtractorLink): ExtractorLink {
         val name = if (link.name.contains("(DOWNLOAD ONLY)", ignoreCase = true)) {
             link.name

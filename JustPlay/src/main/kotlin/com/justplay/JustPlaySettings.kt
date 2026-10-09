@@ -181,7 +181,6 @@ object JustPlaySettings {
             ).apply { bottomMargin = dp(ctx, 12) }
         }
 
-        // the bar rests at half height and stretches while pressed
         val bar = View(ctx).apply {
             background = shape(RED, 2, ctx)
             scaleY = 0.55f
@@ -207,7 +206,6 @@ object JustPlaySettings {
         })
         row.addView(col)
 
-        // the chevron nudges right while pressed
         val chev = FrameLayout(ctx).apply {
             background = shape(SURFACE_2, 17, ctx, 1, BORDER_HI)
         }
@@ -300,7 +298,7 @@ object JustPlaySettings {
     }
 
     private fun bounceBackOn(ctx: Context, row: LinearLayout, sw: SwitchCompat) {
-        sw.isChecked = true // SwitchCompat animates the thumb sliding back
+        sw.isChecked = true
         ObjectAnimator.ofFloat(row, View.TRANSLATION_X, 0f, -16f, 13f, -8f, 4f, 0f).apply {
             duration = 460
             interpolator = DecelerateInterpolator()
@@ -406,7 +404,7 @@ object JustPlaySettings {
     }
 
     fun show(context: Context) {
-        // unwrap in case a ContextWrapper is handed over
+
         var ctx = context
         var p = context
         while (p is android.content.ContextWrapper) {
@@ -503,7 +501,6 @@ object JustPlaySettings {
         }
         root.addView(close)
 
-        // hidden until shown so the first frame never flashes
         hero.alpha = 0f; hero.translationY = 28f
         hero.scaleX = 0.94f; hero.scaleY = 0.94f
         section.alpha = 0f; section.translationX = 70f
@@ -572,16 +569,15 @@ object JustPlaySettings {
         subWindow(ctx, "MANAGE SOURCES") { body ->
             body.addView(labelBlock(ctx, "Link modes", null))
 
-            // the handlers reach their sibling switch through these refs
             var dlSwitch: SwitchCompat? = null
             var streamSwitch: SwitchCompat? = null
             var downloadRow: LinearLayout? = null
             var streamRow: LinearLayout? = null
-            var guard = false // suppress re-entrant listener events
+            var guard = false
 
             fun dlChanged(checked: Boolean) {
                 if (guard) return
-                // the last mode standing can never be switched off
+
                 if (!checked && streamSwitch?.isChecked != true) {
                     val row = downloadRow ?: return
                     val sw = dlSwitch ?: return
@@ -618,7 +614,6 @@ object JustPlaySettings {
             streamRow = rowSt
             body.addView(rowSt)
 
-            // persists the pair the user sees, no partial writes
             val dlRef = dlSwitch
             val streamRef = streamSwitch
             body.addView(saveAndRestartButton(ctx) {

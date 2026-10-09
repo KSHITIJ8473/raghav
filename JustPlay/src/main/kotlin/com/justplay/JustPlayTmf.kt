@@ -31,8 +31,6 @@ internal object PlayTmfNet {
     @Volatile
     private var activeDomain: String? = null
 
-    // the firebase entry regularly points at a dead or cloudflare walled mirror,
-    // the first domain that answers a search is the one that gets used
     suspend fun domain(): String {
         activeDomain?.let { return it }
         return domainMutex.withLock {
@@ -95,7 +93,6 @@ internal object PlayTmfNet {
             .filter { it.isNotBlank() && !it.equals("links", true) }
             .joinToString(" · ")
 
-    // links that belong to the drive page itself and never carry a file
     private val DRIVE_SELF = listOf(
         "nexdrive", "mobilejsr", "vglist", "w.org", "wordpress", "gmpg",
         "googleapis", "googletagmanager", "font-awesome", "schema", "category/",
@@ -115,8 +112,6 @@ internal object PlayTmfNet {
             if (href.startsWith("http") && !isDriveJunk(href)) href else null
         }.distinct()
 
-        // episode pages put each episode under an h4 header with its button
-        // set in the paragraphs right below it
         val episodes = mutableMapOf<Int, MutableList<String>>()
         for (h4 in root.select("h4")) {
             val text = h4.text().trim()
@@ -190,8 +185,6 @@ internal object PlayTmfNet {
         else -> url
     }
 
-    // nexdrive and mobilejsr serve the same drive app, when one has a bad day the
-    // other answers, zip pack pages are skipped because no player opens an archive
     suspend fun fetchDrivePage(url: String): DrivePage? {
         val key = url.replace("mobilejsr.rest", "nexdrive.fit")
         driveCache[key]?.let { cached ->
@@ -221,8 +214,6 @@ internal object PlayTmfNet {
     }
 }
 
-// hosts are resolved here instead of through loadExtractor, whose result depends
-// on extension order
 internal object PlayTmfSources {
 
     class Stream(
@@ -263,8 +254,6 @@ internal object PlayTmfSources {
         return current
     }
 
-    // fastdl serves a redirect stub with the drive link in the reurl variable,
-    // the hubcdn wiki host serves the same stub with one extra base64 hop in r
     suspend fun resolveFastDl(url: String): List<Stream> {
         return try {
             val res = app.get(
@@ -297,8 +286,6 @@ internal object PlayTmfSources {
         }
     }
 
-    // older vcloud pages carry a div.main h4 a hop first, the current ones
-    // hide the target in a script variable behind a hub page
     suspend fun resolveVCloud(url: String): List<Stream> {
         return try {
             val res = app.get(
@@ -369,8 +356,6 @@ internal object PlayTmfSources {
             ?.takeIf { it.startsWith("http") }
     }
 
-    // the vegadrive share page lists one bridge provider per host, vegadrop
-    // (skydrop) streams the drive file itself while the rest land on partner pages, every result is host checked
     suspend fun resolveVegaDrive(url: String): List<Stream> {
         return try {
             val page = app.get(
@@ -420,8 +405,6 @@ internal object PlayTmfSources {
         }
     }
 
-    // the provider pages only answer when the share page is sent as referer,
-    // without it they bounce straight back to the picker
     private suspend fun resolveVegaProvider(
         base: String,
         token: String,
@@ -438,8 +421,6 @@ internal object PlayTmfSources {
     private val FILEPRESS_ID = Regex("""/file/([a-f0-9]{16,40})""")
     private const val FILEBEE_API = "https://filebee.xyz/api"
 
-    // filepress is a react app behind an interactive turnstile while its
-    // json api is open, file/get names the file and the two downlaod endpoints queue the link
     suspend fun resolveFilePress(url: String): List<Stream> {
         val id = FILEPRESS_ID.find(url)?.groupValues?.get(1) ?: return emptyList()
         return try {
@@ -459,7 +440,6 @@ internal object PlayTmfSources {
 
             val out = mutableListOf<Stream>()
 
-            // dotflix mirrors the drive file and serves it as an instant link
             val dotflix = filePressDownload(id, "dotFlixDownlaod")
             if (dotflix != null && dotflix.startsWith("http")) {
                 val direct = resolveDotFlix(dotflix)
@@ -473,8 +453,6 @@ internal object PlayTmfSources {
                 out.add(Stream("FilePress Telegram", telegram, ExtractorLinkType.VIDEO))
             }
 
-            // the index worker proxies through its own host with a short
-            // lived link, it is only emitted when the file actually answers
             val indexTask = filePressDownload(id, "indexDownlaod")
             if (indexTask != null && indexTask.matches(Regex("[a-f0-9]{16,40}"))) {
                 val link = filePressFinal(indexTask, "indexDownlaod")
@@ -564,8 +542,6 @@ internal object PlayTmfSources {
         }
     }
 
-    // the dotflix share page carries a per file code in a btoa call, the
-    // reversed base64 of it is posted to the extract endpoint for the file url
     private suspend fun resolveDotFlix(shareUrl: String): String? {
         return try {
             val page = app.get(
@@ -614,8 +590,6 @@ internal object PlayTmfSources {
         }
     }
 
-    // ads and site plumbing that sit next to the real download buttons on
-    // the hub pages, none of them carry a file
     private val hubJunk = Regex(
         "tinyurl|t\\.me|telegram|/tg/|winexch|a-ads|snvhost|one\\.one\\.one\\.one|" +
             "google\\.com/search|hubcloud\\.fans|drive/admin"
@@ -623,8 +597,6 @@ internal object PlayTmfSources {
 
     private val pxlRegex = Regex("""var\s+pxl\s*=\s*["']([^"']+)["']""")
 
-    // the pixel button href is a dead placeholder shared by every file, the
-    // real pixeldrain link sits in the pxl variable of the page
     private fun pixelFileUrl(pageHtml: String, buttonHref: String): String? {
         val pxl = pxlRegex.find(pageHtml)?.groupValues?.get(1)
         val link = pxl?.takeIf { it.startsWith("http") } ?: buttonHref
@@ -638,8 +610,6 @@ internal object PlayTmfSources {
     private fun isArchiveName(name: String): Boolean =
         Regex("""(?i)\.(zip|rar|7z)\s*$""").containsMatchIn(name.trim())
 
-    // the old hub layout with a generate button first and the full server
-    // list behind it, still used by the vcloud target pages
     private suspend fun hubStreams(
         doc: Document,
         base: String,
@@ -802,10 +772,9 @@ internal object PlayTmfSources {
                             )
                             emitted.set(true)
                         }
-                        // the host family is claimed but nothing came back,
-                        // the registered extractors still get one shot
+
                         if (streams.isEmpty()) {
-                            PlayNet.emitSiteLink(
+                            PlayNet.emitOwnLink(
                                 "themoviesflix", href, info, qualityHint, "https://nexdrive.fit/",
                                 subtitleCallback
                             ) {
@@ -814,7 +783,7 @@ internal object PlayTmfSources {
                             }
                         }
                     } else {
-                        PlayNet.emitSiteLink(
+                        PlayNet.emitOwnLink(
                             "themoviesflix", href, info, qualityHint, "https://nexdrive.fit/",
                             subtitleCallback
                         ) {

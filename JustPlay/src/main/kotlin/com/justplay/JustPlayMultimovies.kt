@@ -31,7 +31,6 @@ internal object MmNet {
     const val UA =
         "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
 
-    // hosts that keep per-session cookies, the byse player binds its captcha to them
     private val cookieJar = ConcurrentHashMap<String, MutableMap<String, String>>()
 
     fun urlEncode(s: String): String = URLEncoder.encode(s, "UTF-8")
@@ -143,7 +142,6 @@ internal object MmNet {
         }
     }
 
-    // the byse proof of work is pure integer work, keep it off the io threads
     suspend fun <T> compute(block: () -> T): T = withContext(Dispatchers.Default) { block() }
 }
 
@@ -218,7 +216,6 @@ internal object MmCrypto {
         }
     }
 
-    // java emits asn.1 der, the byse endpoint expects the webcrypto raw r||s layout
     private fun derToRaw(der: ByteArray): ByteArray {
         var i = 2
         if ((der[1].toInt() and 0xff) > 0x7f) i = 3
@@ -241,7 +238,6 @@ internal object MmCrypto {
         return r + s
     }
 
-    // the byse proof of work uses a custom 256 bit digest over raw bytes
     fun grHash(bytes: ByteArray): IntArray {
         val st = IntArray(4)
         st[0] = 1779033703; st[1] = 3144134277.toInt(); st[2] = 1013904242; st[3] = 2773480762.toInt()
@@ -311,7 +307,6 @@ internal object MmCrypto {
         return total
     }
 
-    // finds s where grHash(nonce + ":" + s) has at least difficulty leading zero bits
     fun solvePow(nonce: String, difficulty: Int, maxMillis: Long = 15_000): String? {
         if (difficulty <= 0) return "0"
         val prefix = nonce + ":"
@@ -326,7 +321,6 @@ internal object MmCrypto {
     }
 }
 
-// dean edwards js packer, eval(function(p,a,c,k,e,d))
 internal object MmJsPacker {
     private const val CHARS = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
 
@@ -346,7 +340,7 @@ internal object MmJsPacker {
         for (i in c - 1 downTo 0) {
             if (i < k.size && k[i].isNotEmpty()) {
                 val pattern = Regex("\\b${Regex.escape(baseN(i, a))}\\b")
-                // lambda form keeps $ and backslashes in the key literal
+
                 payload = pattern.replace(payload) { _ -> k[i] }
             }
         }
@@ -439,13 +433,10 @@ internal object MmJsPacker {
     }
 }
 
-// the rozgarlelo hub fronts several mirror platforms, some it resolves server side
-// into a relay player page, others it redirects to their own player domains
 internal object MmCineverse {
 
     private const val HUB = "https://rozgarlelo.modiplay.xyz"
 
-    // hosts running the shared api v1 player with the static protocol derived cipher
     private val apiV1Hosts = mapOf(
         "multimovies.rpmhub.site" to "RPM Share",
         "multimovies.embedseek.xyz" to "Seek Streaming",
@@ -493,7 +484,7 @@ internal object MmCineverse {
 
         var added = false
         val cfNative = video.optString("cfNative")
-        if (cfNative.isNotBlank()) {
+        if (cfNative.isNotBlank() && PlayNet.m3u8Alive(cfNative)) {
             val quality = Regex("(\\d{3,4})p").find(title)?.groupValues?.get(1)
             callback(
                 newExtractorLink(label, label + (quality?.let { " ${it}p" } ?: ""), cfNative, type = ExtractorLinkType.M3U8)
@@ -524,8 +515,10 @@ internal object MmCineverse {
             } else {
                 "https://$host$tiktok"
             }
-            callback(newExtractorLink(label, "$label Relay", url, type = ExtractorLinkType.M3U8))
-            added = true
+            if (PlayNet.m3u8Alive(url)) {
+                callback(newExtractorLink(label, "$label Relay", url, type = ExtractorLinkType.M3U8))
+                added = true
+            }
         }
         return added
     }
@@ -556,27 +549,52 @@ internal object MmCineverse {
 
         if (resp.code in 300..399) {
             val location = resp.headers["location"] ?: return false
-            val host = MmNet.hostOf(location)
-            val hash = location.substringAfter("#", "")
+            val target = MmNet.abs(HUB, location)
+            val host = MmNet.hostOf(target)
+            val hash = target.substringAfter("#", "")
             val name = apiV1Hosts[host]
             if (name != null && hash.isNotBlank()) {
                 return resolveApiV1(host, hash, "$labelPrefix $name", callback)
             }
-            if (host == "bysetayico.com" && hash.isBlank()) {
-                val fileCode = location.substringAfterLast("/")
+            if (host == "bysetayico.com") {
+                val fileCode = target.substringAfterLast("/").substringBefore("#")
                 return MmByseBridge.resolveByse("$labelPrefix Filemoon", fileCode, callback)
             }
-            return false
+            if (host == "vidara.to") {
+                return MmVidara.resolve(target, "$labelPrefix $displayName", callback)
+            }
+            if (host == MmNet.hostOf(HUB)) {
+                val relay = MmNet.get(target, referer = "$HUB/")?.let { page ->
+                    Regex("var\\s+src=\"([^\"]+)\"").find(page)?.groupValues?.get(1)
+                }
+                if (!relay.isNullOrBlank()) {
+                    return emitRelay(MmNet.abs(HUB, MmNet.deEsc(relay)), "$labelPrefix $displayName", callback)
+                }
+                return false
+            }
+            if (MmXvid.isXvidStyle(host)) {
+                return MmXvid.resolve(target, "$labelPrefix $displayName", "$HUB/", callback)
+            }
+            return MmXvid.resolveGeneric(target, "$labelPrefix $displayName", callback)
         }
 
         val html = resp.text
         val src = Regex("var\\s+src=\"([^\"]+)\"").find(html)?.groupValues?.get(1)
         if (src.isNullOrBlank()) return false
-        val stream = MmNet.deEsc(src)
+        return emitRelay(MmNet.abs(HUB, MmNet.deEsc(src)), "$labelPrefix $displayName", callback)
+    }
+
+    private suspend fun emitRelay(
+        stream: String,
+        label: String,
+        callback: (ExtractorLink) -> Unit,
+    ): Boolean {
+        if (!stream.startsWith("http")) return false
+        if (!PlayNet.m3u8Alive(stream, mapOf("Referer" to "$HUB/", "User-Agent" to MmNet.UA))) return false
         callback(
             newExtractorLink(
-                "$labelPrefix $displayName",
-                "$labelPrefix $displayName",
+                label,
+                label,
                 stream,
                 type = ExtractorLinkType.M3U8,
             ) {
@@ -601,7 +619,6 @@ internal object MmCineverse {
             SubServer(m.groupValues[2], m.groupValues[3], m.groupValues[4])
         }.distinctBy { it.platform }
 
-        // the default frame mirrors the first dropdown entry, keep the order stable
         val defaultFrame = doc.selectFirst("#playerFrame")?.attr("src")
         val ordered = if (defaultFrame != null) {
             val defaultPlatform = Regex("[?&]p=([^&]+)").find(defaultFrame)?.groupValues?.get(1)
@@ -619,15 +636,45 @@ internal object MmCineverse {
                     callback,
                 ) || any
             } catch (_: Exception) {
-                // a dead mirror must not take the rest down
+
             }
         }
         return any
     }
 }
 
-// byse powered file hosts: challenge, ecdsa attestation, proof of work, then an
-// aes-gcm sealed playback payload whose key halves hide in a version indexed pair
+internal object MmVidara {
+
+    suspend fun resolve(
+        embedUrl: String,
+        label: String,
+        callback: (ExtractorLink) -> Unit,
+    ): Boolean {
+        val code = embedUrl.substringAfterLast("/", "").substringBefore("?")
+        if (code.isBlank()) return false
+        val body = MmNet.postJson(
+            "https://vidara.to/api/stream",
+            JSONObject()
+                .put("filecode", code)
+                .put("device", "desktop")
+                .put("codecs", org.json.JSONArray().put("h264").put("h265").put("av1"))
+                .toString(),
+            referer = embedUrl,
+        )?.let { (status, text) ->
+            if (status == 200) text else null
+        } ?: return false
+        val root = try {
+            JSONObject(body)
+        } catch (_: Exception) {
+            null
+        } ?: return false
+        val url = root.optString("streaming_url")
+        if (!url.startsWith("http") || !PlayNet.m3u8Alive(url)) return false
+        callback(newExtractorLink(label, label, url, type = PlayNet.linkType(url)))
+        return true
+    }
+}
+
 internal object MmByse {
 
     private data class Fingerprint(
@@ -639,7 +686,6 @@ internal object MmByse {
 
     private data class PlaybackSource(val url: String, val label: String, val height: Int)
 
-    // one cold session per host, the pow is too costly to repeat for every file
     private val sessionCache = HashMap<String, Fingerprint>()
     private val sessionMutex = Mutex()
 
@@ -770,7 +816,6 @@ internal object MmByse {
         return out
     }
 
-    // resolve every playable file hosted under a byse frontend, code is the file id
     suspend fun resolve(
         embedFrameUrl: String,
         code: String,
@@ -829,21 +874,23 @@ internal object MmByse {
         } ?: return false
         val encrypted = playback.optJSONObject("playback") ?: return false
         val sources = parsePlayback(encrypted)
+        var emitted = 0
         for (src in sources) {
+            if (!PlayNet.m3u8Alive(src.url)) continue
             callback(
                 newExtractorLink(
                     "$labelPrefix Filemoon",
                     "$labelPrefix Filemoon ${src.label}",
                     src.url,
-                    type = ExtractorLinkType.M3U8,
+                    type = PlayNet.linkType(src.url),
                 )
             )
+            emitted++
         }
-        return sources.isNotEmpty()
+        return emitted > 0
     }
 }
 
-// translates bysetayico file links into the shared player domain before the heavy flow
 internal object MmByseBridge {
     suspend fun resolveByse(
         label: String,
@@ -864,8 +911,6 @@ internal object MmByseBridge {
     }
 }
 
-// the gd mirror lists the same film on several file hosts and exposes one
-// file id per host, each id then resolves through that host own pipeline
 internal object MmGdMirror {
 
     private const val API = "https://streams.iqsmartgames.com"
@@ -975,7 +1020,7 @@ internal object MmGdMirror {
 
             host == "bysetayico.com" -> MmByseBridge.resolveByse(label, mirror.code, callback)
 
-            MmXvid.isXvidStyle(host) -> MmXvid.resolve(pageUrl, label, callback)
+            MmXvid.isXvidStyle(host) -> MmXvid.resolve(pageUrl, label, "https://pro.iqsmartgames.com/", callback)
 
             else -> MmXvid.resolveGeneric(pageUrl, label, callback)
         }
@@ -1000,15 +1045,13 @@ internal object MmGdMirror {
                 try {
                     any = dispatchMirror(mirror, "$labelPrefix $fileLabel", callback) || any
                 } catch (_: Exception) {
-                    // a single dead mirror is expected, keep the rest
+
                 }
             }
         }
         return any
     }
 
-    // filesforever links are iqsmart file ids in disguise, the landing page only
-    // confirms the id before the shared mirror helper takes over
     suspend fun resolveFilesforever(
         embedUrl: String,
         labelPrefix: String,
@@ -1034,14 +1077,13 @@ internal object MmGdMirror {
             try {
                 any = dispatchMirror(mirror, "$labelPrefix $sid", callback) || any
             } catch (_: Exception) {
-                // keep going on a single dead mirror
+
             }
         }
         return any
     }
 }
 
-// xvidstyle frontends expose their playlist through a dean edwards packed jw setup
 internal object MmXvid {
 
     private val knownHosts = setOf(
@@ -1064,13 +1106,14 @@ internal object MmXvid {
         for (m in Regex("https?://[^\"'\\s\\\\]+\\.m3u8[^\"'\\s\\\\]*").findAll(unpacked)) {
             absolute.add(MmNet.deEsc(m.groupValues.first()))
         }
-        // the cdn copies outlive the same origin stream tokens, list them first
+
         return (absolute + relative).filter { it.startsWith("http") }
     }
 
     suspend fun resolve(
         pageUrl: String,
         label: String,
+        referer: String,
         callback: (ExtractorLink) -> Unit,
     ): Boolean {
         val base = try {
@@ -1079,20 +1122,28 @@ internal object MmXvid {
         } catch (_: Exception) {
             return false
         }
-        val html = MmNet.get(pageUrl, referer = "https://pro.iqsmartgames.com/") ?: return false
+        val html = MmNet.get(pageUrl, referer = referer) ?: return false
         val unpacked = MmJsPacker.parseAndUnpack(html) ?: return false
         val links = extractLinks(unpacked, base)
+        var emitted = 0
         for (url in links) {
+            val type = PlayNet.linkType(url)
+            val alive = if (type == ExtractorLinkType.M3U8) {
+                PlayNet.m3u8Alive(url, mapOf("Referer" to "$base/"))
+            } else {
+                PlayNet.fileAlive(url, "$base/")
+            }
+            if (!alive) continue
             callback(
-                newExtractorLink(label, label, url, type = ExtractorLinkType.M3U8) {
+                newExtractorLink(label, label, url, type = type) {
                     this.headers = mapOf("Referer" to "$base/")
                 }
             )
+            emitted++
         }
-        return links.isNotEmpty()
+        return emitted > 0
     }
 
-    // unknown hosts still get a plain m3u8 sweep of the raw page
     suspend fun resolveGeneric(
         pageUrl: String,
         label: String,
@@ -1103,19 +1154,20 @@ internal object MmXvid {
             .findAll(html)
             .map { MmNet.deEsc(it.groupValues.first()) }
             .toSet()
+        var emitted = 0
         for (url in urls) {
+            if (!PlayNet.m3u8Alive(url)) continue
             callback(newExtractorLink(label, label, url, type = ExtractorLinkType.M3U8))
+            emitted++
         }
-        return urls.isNotEmpty()
+        return emitted > 0
     }
 }
 
-// vidout is a thin wrapper over a github hosted index of direct hls links
 internal object MmVidout {
 
     private const val RAW = "https://raw.githubusercontent.com/Watchout2025/api/refs/heads/main"
 
-    // the watchout cdn only serves its playlists to the vidout embed origin
     private suspend fun addLink(url: String, label: String, callback: (ExtractorLink) -> Unit) {
         callback(
             newExtractorLink(label, label, url, type = ExtractorLinkType.M3U8) {
@@ -1154,7 +1206,7 @@ internal object MmVidout {
                         }
                     }
                 } catch (_: Exception) {
-                    // subtitle metadata is optional
+
                 }
             }
         } else if (season != null) {
@@ -1179,7 +1231,6 @@ internal object MmVidout {
     }
 }
 
-// vidsync publishes a plain embed, a best effort m3u8 grep keeps it usable when it is up
 internal object MmVidsync {
     suspend fun resolve(
         url: String,
@@ -1198,7 +1249,6 @@ internal object MmVidsync {
     }
 }
 
-// bingr fans a request out over its own fleet of named scrapers
 internal object MmBingr {
 
     private data class Server(val id: String, val name: String)
@@ -1304,7 +1354,7 @@ internal object MmBingr {
                         "$labelPrefix ${server.name}",
                         "$labelPrefix ${server.name} $quality",
                         url,
-                        type = ExtractorLinkType.M3U8,
+                        type = PlayNet.linkType(url),
                     )
                 )
                 any = true
@@ -1315,7 +1365,6 @@ internal object MmBingr {
     }
 }
 
-// filmu exposes one singularity endpoint per media type with a plain source list
 internal object MmFilmu {
 
     private const val HOST = "https://embed.filmu.in"
@@ -1331,7 +1380,7 @@ internal object MmFilmu {
                 label,
                 "$label $quality",
                 url,
-                type = ExtractorLinkType.M3U8,
+                type = PlayNet.linkType(url),
             )
         )
     }
@@ -1414,7 +1463,6 @@ internal object MmFilmu {
     }
 }
 
-// vidbolt mixes a movy mirror with its own scraper fleet
 internal object MmVidbolt {
 
     private const val MOVY_KEY = "0f461eaa465bb2a7acd037425217f2f209ef540a3171e1ac"
@@ -1449,7 +1497,7 @@ internal object MmVidbolt {
                     label,
                     "$label $quality$langTag",
                     url,
-                    type = ExtractorLinkType.M3U8,
+                    type = PlayNet.linkType(url),
                 )
             )
             any = true

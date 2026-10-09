@@ -123,8 +123,6 @@ internal object NetNaijaSite {
         "X-Client-Info" to """{"timezone":"Asia/Kolkata"}"""
     )
 
-    // the api hands out a fresh anonymous jwt in the x-user header whenever the
-    // old one is close to expiring, reading it on every answer keeps it alive
     private fun readToken(response: com.lagradost.nicehttp.NiceResponse) {
         try {
             val xUser = response.headers["x-user"] ?: return
@@ -151,8 +149,6 @@ internal object NetNaijaSite {
         }
     }
 
-    // list endpoints want the bearer and the play endpoint wants the cookie, so
-    // both ride along on every call
     private suspend fun authHeaders(site: String, extra: Map<String, String> = emptyMap()): Map<String, String> {
         val h = baseHeaders(site).toMutableMap()
         val t = ensureToken(site)
@@ -178,8 +174,6 @@ internal object NetNaijaSite {
         return if (dub.type == 1) "$pretty Hardsub" else pretty
     }
 
-    // the api search is fuzzy, privileged movies show up for a prestige query,
-    // so only exact normalized titles of the right type and year may resolve
     private fun pickSubject(items: List<NaSubject>, res: PlayLinkData): NaSubject? {
         val wantTv = res.season != null
         val title = res.title ?: return null

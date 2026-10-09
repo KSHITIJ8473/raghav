@@ -72,8 +72,6 @@ internal object HindMoviezSite {
         return "$domain/r.php?d=${URLEncoder.encode(encoded, "UTF-8")}&t=$t&s=$signature"
     }
 
-    // the hpage button wraps the real file url in two base64 layers, it is the
-    // way out whenever the page behind the button stays cloudflare walled
     private fun wrappedDirectUrl(href: String): String? {
         return try {
             val outer = href.substringAfter("url=")
@@ -142,8 +140,6 @@ internal object HindMoviezSite {
         )
     }
 
-    // the share page answers with the file name, the size and one button per
-    // host, the hpage host is the only one that serves a direct file
     private suspend fun emitShareLinks(
         shareHref: String,
         heading: String,
@@ -224,8 +220,7 @@ internal object HindMoviezSite {
                         val href = a.attr("href").trim()
                         if (!href.startsWith("http")) null else a to heading
                     }
-                    // single season posts label their buttons with the quality
-                    // alone, so buttons without any season tag come in as backup
+
                     val chosen = seasonButtons.filter { (_, heading) ->
                         PlayNet.seasonsOf(heading)?.contains(res.season) == true
                     }.ifEmpty { seasonButtons.filter { (_, heading) -> PlayNet.seasonsOf(heading) == null } }

@@ -16,8 +16,7 @@ import org.json.JSONObject
 import java.net.URI
 
 internal object DrivePages {
-    // hosts that never carry a playable file: cloudflare walled mirrors, site plumbing and ad jumps,
-    // gdtot, filebee and filepress stay out because loadExtractor may still resolve them
+
     private val junk = Regex(
         "gmpg\\.org|googleapis|googletagmanager|fonts\\.|schema\\.org|w3\\.org|" +
             "twitter\\.com|facebook\\.com|pinterest|whatsapp|telegram|t\\.me/|/tg/|catimages|tinyurl|bonuscaf|" +
@@ -73,12 +72,12 @@ internal object DrivePages {
         callback: (ExtractorLink) -> Unit
     ) {
         try {
-            // mobilejsr rest loops redirects for some visitors, nexdrive serves the same app
+
             val fetchUrl = driveUrl.replace("mobilejsr.rest", "nexdrive.fit")
             val res = PlayNet.fetchDrivePage(fetchUrl, referer)
                 ?: throw Exception("drive page unreachable")
             val doc = res.document
-            // season packs arrive as zip archives, no player can open them
+
             val pageTitle = doc.title().substringBefore(" – ").substringBefore(" - ").trim()
             if (pageTitle.contains("zip", true)) return
             val driveHost = try {
@@ -136,8 +135,7 @@ internal object DrivePages {
                 else if (junk.containsMatchIn(href) || isSelfLink(href, hosts)) null
                 else href
             }.distinct()
-            // movies4u hands over a bare drive url, the drive page title carries
-            // the same quality and size info the other sites put in headings
+
             val fallbackTitle = if (label.isBlank()) {
                 doc.title().substringBefore(" – ").substringBefore(" - ").trim()
             } else ""
@@ -192,8 +190,6 @@ internal object VegaMoviesSite {
         emptyList()
     }
 
-    // the search api happily answers with pets movies for a walter mitty query,
-    // so only a real title, year and season match is allowed to resolve
     private fun pickDoc(docs: List<VegaDoc>, res: PlayLinkData): VegaDoc? {
         val title = res.title ?: return null
         docs.firstOrNull { res.imdbId != null && it.imdbId.equals(res.imdbId, ignoreCase = true) }?.let { return it }
@@ -209,8 +205,6 @@ internal object VegaMoviesSite {
             ?: matched.firstOrNull()
     }
 
-    // the download anchors below a heading belong to that heading's label,
-    // a button counts when it is a dwd button or points at a known drive host
     private fun collectRows(doc: Document, season: Int?): List<Pair<String, String>> {
         val seasonRegex = season?.let { Regex("(?i)Season\\s*$it(?!\\d)|\\bS${it.toString().padStart(2, '0')}\\b") }
         val heads = doc.select("h3, h4, h5").filter { el ->
@@ -314,7 +308,7 @@ internal object HdHub4uSite {
                 val permalink = d.optString("permalink")
                 if (postTitle.isBlank() || permalink.isBlank()) return@mapNotNull null
                 val url2 = if (permalink.startsWith("http", true)) {
-                    // the indexed permalinks point at dead mirrors, only the path is stable
+
                     val path = try {
                         URI(permalink).path
                     } catch (_: Exception) {
@@ -340,7 +334,7 @@ internal object HdHub4uSite {
     ) {
         val target = if (url.contains("id=")) PlayNet.decryptIdLink(url, referer) ?: return else url
         if (target.isBlank()) return
-        PlayNet.emitSiteLink("hdhub4u", target, label, PlayNet.getIndexQuality(label), referer, subtitleCallback, callback)
+        PlayNet.emitOwnLink("hdhub4u", target, label, PlayNet.getIndexQuality(label), referer, subtitleCallback, callback)
     }
 
     private suspend fun processPost(
@@ -364,7 +358,7 @@ internal object HdHub4uSite {
                     if (watch != null) {
                         val watchHref = watch.absUrl("href").ifBlank { watch.attr("href") }
                         if (watchHref.startsWith("http")) {
-                            PlayNet.emitSiteLink("hdhub4u", watchHref, "Episode $epNum Watch", null, domain, subtitleCallback, callback)
+                            PlayNet.emitOwnLink("hdhub4u", watchHref, "Episode $epNum Watch", null, domain, subtitleCallback, callback)
                         }
                     }
 
@@ -398,8 +392,7 @@ internal object HdHub4uSite {
             val titleMatched = posts.filter { (postTitle, _) ->
                 PlayNet.titleMatches(postTitle, title)
             }
-            // a season request must never land on a post that only carries a
-            // different season, and posts without any season tag come last
+
             val chosen = if (res.season != null) {
                 val seasonPosts = titleMatched.filter { (postTitle, _) ->
                     PlayNet.seasonsOf(postTitle)?.contains(res.season) == true
@@ -435,8 +428,7 @@ internal object FourKhdHubSite {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        // a movie page carries a dozen encoded links, a burst that big gets
-        // throttled by the linker so keep it at six in flight
+
         val semaphore = Semaphore(6)
         coroutineScope {
             hrefs.distinct().forEach { href ->
@@ -445,7 +437,7 @@ internal object FourKhdHubSite {
                         if (!href.startsWith("http")) return@withPermit
                         val target = if (href.contains("id=")) PlayNet.decryptIdLink(href, domain) ?: return@withPermit else href
                         if (target.isNotBlank()) {
-                            PlayNet.emitSiteLink(
+                            PlayNet.emitOwnLink(
                                 "4khdhub", target, label, PlayNet.getIndexQuality(label),
                                 domain, subtitleCallback, callback
                             )
@@ -606,8 +598,6 @@ internal object Movies4uSite {
         null
     }
 
-    // a post page only hands out m4ulinks buttons, the real hubcloud and
-    // gdflix links sit behind those under h4 quality headings
     private fun qualityBlocks(doc: Document): List<Pair<String, String>> {
         val out = mutableListOf<Pair<String, String>>()
         for (block in doc.select("div.downloads-btns-div")) {
@@ -662,8 +652,7 @@ internal object Movies4uSite {
             }
         }
         if (rows.isEmpty()) {
-            // the links page carries the real quality headings, one block per
-            // file, so the label comes from the page instead of the caller
+
             for ((href, headLabel) in qualityBlocks(doc)) {
                 rows.add(href to headLabel.ifBlank { label })
             }
@@ -773,8 +762,6 @@ internal object TmfSite {
         }
     }
 
-    // whole season packs arrive as zip archives, they are not playable so the
-    // button and its group are dropped before the drive page is fetched
     private val packRegex = Regex("""(?i)\b(zip|rar|7z|batch)\b""")
 
     private data class DriveGroup(val label: String, val redirectUrl: String)
@@ -859,8 +846,6 @@ internal object MultimoviesSite {
     @Volatile private var checkedRemote: String? = null
     @Volatile private var resolvedDomain: String? = null
 
-    // the firebase entry can point at a domain that now serves a different site,
-    // so a remote only wins when its homepage still carries the current player
     private suspend fun currentDomain(): String {
         val remote = FirebaseDomainHelper.getDomain("justplay_multimovies")
             ?: FirebaseDomainHelper.getDomain("multimovies")
@@ -924,8 +909,6 @@ internal object MultimoviesSite {
         return null
     }
 
-    // the series page renders one season at a time and a long season one
-    // range at a time, each range value is that page's first episode
     private suspend fun episodeHref(
         domain: String,
         seriesUrl: String,
@@ -978,7 +961,6 @@ internal object MultimoviesSite {
         return out
     }
 
-    // line ending agnostic json block reader, the site mixes crlf and lf
     private fun extractBracedObject(html: String, marker: String): String {
         val start = html.indexOf(marker)
         if (start < 0) return ""
@@ -1028,8 +1010,6 @@ internal object MultimoviesSite {
         return Regex("\\b((?:19|20)\\d{2})\\b").find(text)?.groupValues?.get(1)
     }
 
-    // the resolver output keeps the server names the site itself hands out,
-    // every link is renamed once here so the player list stays uniform
     private fun wrappedCallbacks(
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
@@ -1158,8 +1138,6 @@ internal object MultimoviesSite {
         } catch (_: Exception) {}
     }
 
-    // search results put close titles first, so One Piece needs its exact
-    // card over One Piece Live Action, the site year only acts as a soft filter
     private fun pickCard(cards: List<MmCard>, title: String, year: Int?): MmCard? {
         if (cards.isEmpty()) return null
         val norm = PlayNet.normalizeTitle(title)

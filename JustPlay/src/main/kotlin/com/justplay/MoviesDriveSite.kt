@@ -18,7 +18,6 @@ internal object MoviesDriveSite {
     private const val DOMAIN_REGISTRY =
         "https://raw.githubusercontent.com/SaurabhKaperwan/Utils/refs/heads/main/urls.json"
 
-    // the archive pages only hand out hubcloud, gdflix and gdlink drives
     private val driveLink = Regex("hubcloud|gdflix|gdlink", RegexOption.IGNORE_CASE)
     private val packText = Regex("""(?i)\b(zip|rar|7z|batch)\b""")
 
@@ -73,8 +72,6 @@ internal object MoviesDriveSite {
         }
     }
 
-    // the search answers with every quality post separately, the imdb field is
-    // the only exact one so it goes first, the rest lean on title, year, season
     private fun pickPost(posts: List<DrivePost>, res: PlayLinkData): DrivePost? {
         val title = res.title ?: return null
         res.imdbId?.takeIf { it.isNotBlank() }?.let { id ->
@@ -150,8 +147,6 @@ internal object MoviesDriveSite {
         }
     }
 
-    // one quality block is a plain h5 with the season and quality text, the
-    // h5 after it carries the episode archive link
     private fun seasonHeadings(doc: Document, season: Int): List<Element> {
         val wanted = Regex("(?i)Season\\s*$season(?!\\d)|\\bS${season.toString().padStart(2, '0')}\\b")
         return doc.select("h5").filter { el ->
@@ -159,8 +154,6 @@ internal object MoviesDriveSite {
         }
     }
 
-    // the episode page groups each episode as an ep heading with one h5 link
-    // per drive host behind it, the walk stops at the next ep heading
     private suspend fun emitEpisode(
         archiveUrl: String,
         season: Int,

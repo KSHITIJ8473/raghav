@@ -27,8 +27,7 @@ data class PlayLinkData(
     val showYear: Int? = null,
     val isMovie: Boolean = false
 ) {
-    // posts list the year the show started, an episode only knows the season air
-    // year, so series matching always runs against the show year
+
     val matchYear: Int?
         get() = if (season != null) (showYear ?: year) else year
 }
@@ -388,8 +387,6 @@ class JustPlay : MainAPI() {
         val active = allSites.filter { siteEnabled(it.id) }
         if (active.isEmpty()) return false
 
-        // both modes may be on at once, but one of them always has to stay
-        // active even if the stored keys ever end up inconsistent
         val dlOnly = downloadOnlyEnabled()
         val streamOnly = streamOnlyEnabled() || !dlOnly
 

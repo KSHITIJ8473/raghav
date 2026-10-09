@@ -25,8 +25,6 @@ internal object NetMirrorSite {
     private const val TAG = "NM"
     private const val BASE = "https://net52.cc"
 
-    // the api only answers the gatu wrapper user agents, plain browser ones
-    // get an empty verify hash back
     private const val SOLVE_UA =
         "Mozilla/5.0 (Linux; Android 12; RMX2117 Build/SP1A.210812.016; wv) " +
             "AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/147.0.7727.55 " +
@@ -47,7 +45,6 @@ internal object NetMirrorSite {
     private const val KEY_COOKIE = "JUSTPLAY_NETMIRROR_COOKIE"
     private const val KEY_COOKIE_AT = "JUSTPLAY_NETMIRROR_COOKIE_AT"
 
-    // the wrapper app sends this exact set on the catalog pages
     private val pageHeaders = mapOf(
         "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif," +
             "image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
@@ -68,8 +65,6 @@ internal object NetMirrorSite {
 
     private class Ott(val code: String, val path: String, val site: String)
 
-    // netflix answers on the bare mobile path, hotstar and prime video sit
-    // behind their own prefix
     private val catalogs = listOf(
         Ott("nf", "/mobile", "netmirror_nf"),
         Ott("hs", "/mobile/hs", "netmirror_hs"),
@@ -125,8 +120,6 @@ internal object NetMirrorSite {
 
     private fun unixTime(): Long = System.currentTimeMillis() / 1000
 
-    // the cookie stays valid for around fifteen hours, a fresh solve blocks
-    // for up to a minute so the stored one is worth keeping around
     private fun cookieFresh(at: Long): Boolean =
         !cookieValue.isNullOrEmpty() && System.currentTimeMillis() - at < 54_000_000L
 
@@ -175,8 +168,6 @@ internal object NetMirrorSite {
         ""
     }
 
-    // the home page parks a verify hash, a worker server cracks it in the
-    // background and the verify endpoint trades it for the real cookie
     private suspend fun solveCookie(): String? {
         val headers = mapOf("User-Agent" to SOLVE_UA, "X-Requested-With" to XRW_APP)
         var addhash = try {
@@ -185,8 +176,7 @@ internal object NetMirrorSite {
             ""
         }
         if (addhash.isEmpty()) {
-            // some networks get a cloudflare wall on the home page, the
-            // webview killer clears it and the same request goes through
+
             addhash = try {
                 addhashOf(
                     app.get(
@@ -204,7 +194,6 @@ internal object NetMirrorSite {
             return null
         }
 
-        // the hash goes out raw on both calls, encoding it breaks the worker
         try {
             app.get(
                 "https://userver.net52.cc/?hee5=$addhash&a=y&t=${Math.random()}",
@@ -213,8 +202,6 @@ internal object NetMirrorSite {
         } catch (_: Exception) {
         }
 
-        // the wrapper sends the hash as an already encoded form value, a
-        // plain form post would percent escape it and the solve never lands
         val form = FormBody.Builder().addEncoded("verify", addhash).build()
         repeat(7) {
             delay(10_000L)
@@ -307,8 +294,7 @@ internal object NetMirrorSite {
             val title = root.optString("title")
             val arr = root.optJSONArray("episodes") ?: return null
             if (title.isBlank() || arr.length() == 0) return null
-            // a movie post leads its episode list with an empty slot, series
-            // posts carry a real episode right at the front
+
             MirrorPost(
                 title,
                 root.optString("year").takeIf { it.isNotBlank() },
@@ -323,8 +309,6 @@ internal object NetMirrorSite {
         }
     }
 
-    // the wrapper keeps the whole id json in the series argument, the season
-    // id rides in the s one and pages run until the reply says otherwise
     private suspend fun fetchEpisodePages(
         cookie: String,
         ott: Ott,
@@ -367,6 +351,29 @@ internal object NetMirrorSite {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         val headers = playlistHeaders(cookie, ott.code)
+        val arr = fetchPlaylist(ott, id, title, headers, cookie)
+            ?: return false
+        if (emitSources(site, ott, arr, headers, subtitleCallback, callback)) return true
+
+        cookieValue = null
+        cookieAt = 0L
+        try {
+            CloudStreamApp.setKey(KEY_COOKIE_AT, "0")
+        } catch (_: Exception) {
+        }
+        val fresh = solvedCookie() ?: return false
+        val freshHeaders = playlistHeaders(fresh, ott.code)
+        val retry = fetchPlaylist(ott, id, title, freshHeaders, fresh) ?: return false
+        return emitSources(site, ott, retry, freshHeaders, subtitleCallback, callback)
+    }
+
+    private suspend fun fetchPlaylist(
+        ott: Ott,
+        id: String,
+        title: String,
+        headers: Map<String, String>,
+        cookie: String,
+    ): JSONArray? {
         val text = try {
             app.get(
                 "$BASE${ott.path}/playlist.php?id=$id&t=$title&tm=${unixTime()}",
@@ -376,55 +383,87 @@ internal object NetMirrorSite {
                 timeout = 20L
             ).text
         } catch (_: Exception) {
-            return false
+            return null
         }
-        val arr = try {
+        return try {
             JSONArray(text)
         } catch (_: Exception) {
             null
-        } ?: return false
+        }
+    }
 
-        var emitted = 0
+    private suspend fun emitSources(
+        site: String,
+        ott: Ott,
+        arr: JSONArray,
+        headers: Map<String, String>,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
+        val candidates = mutableListOf<Pair<String, String>>()
         for (i in 0 until arr.length()) {
             val item = arr.optJSONObject(i) ?: continue
+            val tracks = item.optJSONArray("tracks")
+            if (tracks != null) {
+                for (j in 0 until tracks.length()) {
+                    val track = tracks.optJSONObject(j) ?: continue
+                    if (track.optString("kind") != "captions") continue
+                    val file = track.optString("file").replace("\\", "")
+                    if (!file.startsWith("http")) continue
+                    subtitleCallback(
+                        newSubtitleFile(track.optString("label"), httpsify(file)) {
+                            this.headers = mapOf("Referer" to "$BASE/")
+                        }
+                    )
+                }
+            }
             val sources = item.optJSONArray("sources") ?: continue
             for (j in 0 until sources.length()) {
                 val src = sources.optJSONObject(j) ?: continue
                 val file = src.optString("file")
                 if (!file.startsWith("/")) continue
-                callback(
-                    newExtractorLink(
-                        "[${PlayLabels.siteName(site)}]",
-                        PlayLabels.buildLabel(site, src.optString("label"), ""),
-                        BASE + file,
-                        ExtractorLinkType.M3U8
-                    ) {
-                        this.referer = "$BASE/mobile/home?app=1"
-                        this.quality = getQualityFromName(file.substringAfter("q=", ""))
-                        this.headers = headers
-                    }
-                )
-                emitted++
-            }
-            val tracks = item.optJSONArray("tracks") ?: continue
-            for (j in 0 until tracks.length()) {
-                val track = tracks.optJSONObject(j) ?: continue
-                if (track.optString("kind") != "captions") continue
-                val file = track.optString("file").replace("\\", "")
-                if (!file.startsWith("http")) continue
-                subtitleCallback(
-                    newSubtitleFile(track.optString("label"), httpsify(file)) {
-                        this.headers = mapOf("Referer" to "$BASE/")
-                    }
-                )
+                candidates.add(file to src.optString("label"))
             }
         }
-        if (emitted > 0) Log.d(TAG, "links $emitted ${ott.code}")
-        return emitted > 0
+        if (candidates.isEmpty()) return false
+        val verified = kotlinx.coroutines.withTimeoutOrNull(45_000L) {
+            coroutineScope {
+                candidates.map { (file, label) ->
+                    async(Dispatchers.IO) {
+                        playableFile(file, headers)?.let { it to label }
+                    }
+                }.mapNotNull { it.await() }
+            }
+        } ?: emptyList()
+        for ((url, label) in verified) {
+            callback(
+                newExtractorLink(
+                    "[${PlayLabels.siteName(site)}]",
+                    PlayLabels.buildLabel(site, label, ""),
+                    url,
+                    ExtractorLinkType.M3U8
+                ) {
+                    this.referer = "$BASE/mobile/home?app=1"
+                    this.quality = getQualityFromName(url.substringAfter("q=", ""))
+                    this.headers = headers
+                }
+            )
+        }
+        if (verified.isNotEmpty()) Log.d(TAG, "links ${verified.size} ${ott.code}")
+        return verified.isNotEmpty()
     }
 
-    // a movie plays off its own post id, a series episode plays off the
-    // episode id its season list carries
+    private suspend fun playableFile(file: String, headers: Map<String, String>): String? {
+        val url = BASE + file
+        if (PlayNet.m3u8Alive(url, headers)) return url
+        if (file.contains("hp=yes")) {
+            val stripped = file.replace("&hp=yes", "").replace("hp=yes&", "").replace("?hp=yes", "")
+            val bare = BASE + stripped
+            if (PlayNet.m3u8Alive(bare, headers)) return bare
+        }
+        return null
+    }
+
     private suspend fun resolvePost(
         cookie: String,
         ott: Ott,
@@ -449,8 +488,7 @@ internal object NetMirrorSite {
                 ott.site, cookie, ott, it.id, post.title, subtitleCallback, callback
             )
         }
-        // the latest season rides in the post reply, the older ones need
-        // their own fetch through the season ids
+
         for (season in post.seasons.dropLast(1)) {
             val eps = fetchEpisodePages(cookie, ott, idJson, season.id, 1)
             val hit = eps.firstOrNull { it.season == res.season && it.episode == res.episode }
@@ -475,8 +513,6 @@ internal object NetMirrorSite {
             .filter { PlayNet.titleMatches(it.title, title) }
         if (hits.isEmpty()) return
 
-        // same title remakes are common across the three catalogs, the year
-        // picks the right one and the first hit stays as the fallback
         var fallback: Pair<String, MirrorPost>? = null
         for (hit in hits.take(3)) {
             val post = fetchPost(cookie, ott, hit.id) ?: continue

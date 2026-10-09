@@ -36,8 +36,6 @@ internal object PlayLabels {
     fun siteName(id: String): String =
         siteNames[id] ?: id.replaceFirstChar { it.uppercase() }
 
-    // drops emoji, arrows, box drawing and private use glyphs that leak into
-    // headings and file names from the download sites
     fun cleanText(s: String): String {
         val sb = StringBuilder(s.length)
         for (ch in s) {
@@ -103,8 +101,6 @@ internal object PlayLabels {
     private fun normalizeAudio(s: String): String =
         cleanText(s).uppercase().replace(Regex("([A-Z])\\."), "$1 ")
 
-    // x264 and h264 are the same family, keep the first spelling only so a
-    // heading and a file name cannot stack three codecs into one label
     private fun codecFamily(s: String): Int {
         return when (s.lowercase().replace(".", "")) {
             "x264", "h264", "avc" -> 1
@@ -113,8 +109,6 @@ internal object PlayLabels {
         }
     }
 
-    // pulls the useful parts out of whatever heading or file name a site hands
-    // over and lays them out in a fixed order, anything left over is dropped
     fun buildLabel(site: String, server: String, info: String): String {
         val prefix = "[${siteName(site)}]"
         val text = cleanText(info)

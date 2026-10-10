@@ -7,11 +7,15 @@ import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.AppUtils.toJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.raghav.donation.DonationManager
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONObject
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
@@ -56,7 +60,11 @@ class JustPlay : MainAPI() {
 
         private const val KEY_DL_ONLY = "JUSTPLAY_DL_ONLY"
         private const val KEY_STREAM_ONLY = "JUSTPLAY_STREAM_ONLY"
+        private const val KEY_CONCURRENCY = "JUSTPLAY_CONCURRENCY"
         private const val LINKS_PER_SOURCE = 12
+
+        // the app cancels loadLinks after 120s, every site gets cut off before that
+        private const val SITE_BUDGET_MS = 90_000L
 
         private fun widenClient() {
             try {
@@ -103,6 +111,18 @@ class JustPlay : MainAPI() {
             CloudStreamApp.getKey<Boolean>(KEY_STREAM_ONLY) ?: true
         } catch (_: Exception) {
             true
+        }
+
+        fun siteConcurrency(): Int = try {
+            (CloudStreamApp.getKey<Int>(KEY_CONCURRENCY) ?: 6).coerceIn(2, 12)
+        } catch (_: Exception) {
+            6
+        }
+
+        fun setConcurrency(value: Int) {
+            try {
+                CloudStreamApp.setKey(KEY_CONCURRENCY, value.coerceIn(2, 12))
+            } catch (_: Exception) {}
         }
 
         fun setDownloadOnly(on: Boolean) {
@@ -163,8 +183,12 @@ class JustPlay : MainAPI() {
         }
     }
 
+    private val prefetchScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         DonationManager.checkAndShow()
+        // netmirror needs a ~1 min cookie solve on cold start, warm it up before anything is opened
+        prefetchScope.launch { NetMirrorSite.prefetch() }
         val parts = request.data.split("&", limit = 2)
         val path = parts[0]
         val extra = parts.getOrNull(1)?.split("&")?.mapNotNull {
@@ -188,6 +212,7 @@ class JustPlay : MainAPI() {
 
     override suspend fun search(query: String): List<SearchResponse>? {
         if (query.isBlank()) return null
+        prefetchScope.launch { NetMirrorSite.prefetch() }
         val json = tmdbGet(
             "/search/multi",
             mapOf("query" to query, "include_adult" to "false", "page" to "1", "language" to "en-US")
@@ -202,6 +227,7 @@ class JustPlay : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse? {
+        prefetchScope.launch { NetMirrorSite.prefetch() }
         val data = try {
             parseJson<PlayTmdbData>(url)
         } catch (_: Exception) {
@@ -425,14 +451,17 @@ class JustPlay : MainAPI() {
         }
 
         coroutineScope {
-            val gate = Semaphore(6)
+            val gate = Semaphore(siteConcurrency())
             active.forEach { site ->
                 async(Dispatchers.IO) {
-                    gate.withPermit {
-                        try {
-                            site.invoke(res, subtitleCallback, guardedCallback)
-                        } catch (_: Exception) {}
-                    }
+                    // the budget also covers the permit wait so a queued site never overruns the app's cancel
+                    try {
+                        withTimeoutOrNull(SITE_BUDGET_MS) {
+                            gate.withPermit {
+                                site.invoke(res, subtitleCallback, guardedCallback)
+                            }
+                        }
+                    } catch (_: Exception) {}
                 }
             }
         }

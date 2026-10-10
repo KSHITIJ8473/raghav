@@ -1052,13 +1052,19 @@ internal object MultimoviesSite {
         val linkCb: (ExtractorLink) -> Unit = { link ->
             if (seenLinks.add(link.url)) {
                 val name = "[Multimovies] - " + link.name.replace(Regex("\\s+"), " ").trim()
+                // multimovies servers rarely tag quality on the link, the label usually carries it
+                val quality = if (link.quality != Qualities.Unknown.value) {
+                    link.quality
+                } else {
+                    PlayNet.getIndexQuality(name)
+                }
                 callback(
                     ExtractorLink(
                         "Multimovies",
                         name,
                         link.url,
                         link.referer,
-                        link.quality,
+                        quality,
                         link.headers,
                         link.extractorData,
                         link.type,

@@ -1,5 +1,6 @@
 package com.justplay
 
+import android.net.Uri
 import android.util.Log
 import com.lagradost.cloudstream3.CloudStreamApp
 import com.lagradost.cloudstream3.SubtitleFile
@@ -7,6 +8,7 @@ import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.newSubtitleFile
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
+import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.getQualityFromName
 import com.lagradost.cloudstream3.utils.httpsify
 import com.lagradost.cloudstream3.utils.newExtractorLink
@@ -463,7 +465,7 @@ internal object NetMirrorSite {
                     ExtractorLinkType.M3U8
                 ) {
                     this.referer = "$BASE/mobile/home?app=1"
-                    this.quality = getQualityFromName(url.substringAfter("q=", ""))
+                    this.quality = streamQuality(url)
                     this.headers = headers
                 }
             )
@@ -473,14 +475,28 @@ internal object NetMirrorSite {
     }
 
     private suspend fun playableFile(file: String, headers: Map<String, String>): String? {
-        val url = BASE + file
-        if (PlayNet.m3u8Alive(url, headers)) return url
-        if (file.contains("hp=yes")) {
-            val stripped = file.replace("&hp=yes", "").replace("hp=yes&", "").replace("?hp=yes", "")
-            val bare = BASE + stripped
+        // the hp variant html-blocks later requests, prefer the plain url when it validates
+        val strippedFile = file
+            .replace("&hp=yes", "")
+            .replace("hp=yes&", "")
+            .replace("?hp=yes", "")
+        if (strippedFile != file) {
+            val bare = BASE + strippedFile
             if (PlayNet.m3u8Alive(bare, headers)) return bare
         }
+        val url = BASE + file
+        if (PlayNet.m3u8Alive(url, headers)) return url
         return null
+    }
+
+    private fun streamQuality(url: String): Int {
+        val q = try {
+            Uri.parse(url).getQueryParameter("q")
+        } catch (_: Exception) {
+            null
+        }
+        if (q.isNullOrBlank()) return Qualities.P1080.value
+        return getQualityFromName(q).takeIf { it != Qualities.Unknown.value } ?: Qualities.P1080.value
     }
 
     private suspend fun resolvePost(
@@ -561,6 +577,14 @@ internal object NetMirrorSite {
                     }
                 }
             }
+        } catch (_: Exception) {
+        }
+    }
+
+    // the solve takes about a minute without a stored cookie, warm it up before a show is opened
+    suspend fun prefetch() {
+        try {
+            solvedCookie()
         } catch (_: Exception) {
         }
     }

@@ -15,7 +15,9 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.sync.withPermit
 import okhttp3.FormBody
 import org.json.JSONArray
 import org.json.JSONObject
@@ -182,7 +184,7 @@ internal object NetMirrorSite {
                     app.get(
                         "$BASE/mobile/home?app=1",
                         headers = headers,
-                        interceptor = PlayNet.cfKiller,
+                        interceptor = PlayNet.killerFor("$BASE/mobile/home?app=1"),
                         timeout = 60L
                     )
                 )
@@ -231,14 +233,20 @@ internal object NetMirrorSite {
     }
 
     private suspend fun search(cookie: String, ott: Ott, query: String): List<MirrorHit> {
+        val text = PlayNet.retry {
+            try {
+                app.get(
+                    "$BASE${ott.path}/search.php?s=$query&t=${unixTime()}",
+                    headers = mapOf("User-Agent" to DESKTOP_UA),
+                    referer = "$BASE/home",
+                    cookies = apiCookies(cookie, ott.code),
+                    timeout = 20L
+                ).text
+            } catch (_: Exception) {
+                null
+            }
+        } ?: return emptyList()
         return try {
-            val text = app.get(
-                "$BASE${ott.path}/search.php?s=$query&t=${unixTime()}",
-                headers = mapOf("User-Agent" to DESKTOP_UA),
-                referer = "$BASE/home",
-                cookies = apiCookies(cookie, ott.code),
-                timeout = 20L
-            ).text
             val arr = JSONObject(text).optJSONArray("searchResult") ?: return emptyList()
             (0 until arr.length()).mapNotNull { i ->
                 val o = arr.optJSONObject(i) ?: return@mapNotNull null
@@ -282,14 +290,20 @@ internal object NetMirrorSite {
     }
 
     private suspend fun fetchPost(cookie: String, ott: Ott, id: String): MirrorPost? {
+        val text = PlayNet.retry {
+            try {
+                app.get(
+                    "$BASE${ott.path}/post.php?id=$id&t=${unixTime()}",
+                    headers = pageHeaders,
+                    referer = "$BASE/home",
+                    cookies = apiCookies(cookie, ott.code),
+                    timeout = 20L
+                ).text
+            } catch (_: Exception) {
+                null
+            }
+        } ?: return null
         return try {
-            val text = app.get(
-                "$BASE${ott.path}/post.php?id=$id&t=${unixTime()}",
-                headers = pageHeaders,
-                referer = "$BASE/home",
-                cookies = apiCookies(cookie, ott.code),
-                timeout = 20L
-            ).text
             val root = JSONObject(text)
             val title = root.optString("title")
             val arr = root.optJSONArray("episodes") ?: return null
@@ -374,17 +388,19 @@ internal object NetMirrorSite {
         headers: Map<String, String>,
         cookie: String,
     ): JSONArray? {
-        val text = try {
-            app.get(
-                "$BASE${ott.path}/playlist.php?id=$id&t=$title&tm=${unixTime()}",
-                headers = headers,
-                referer = "$BASE/mobile/home?app=1",
-                cookies = apiCookies(cookie, ott.code),
-                timeout = 20L
-            ).text
-        } catch (_: Exception) {
-            return null
-        }
+        val text = PlayNet.retry {
+            try {
+                app.get(
+                    "$BASE${ott.path}/playlist.php?id=$id&t=$title&tm=${unixTime()}",
+                    headers = headers,
+                    referer = "$BASE/mobile/home?app=1",
+                    cookies = apiCookies(cookie, ott.code),
+                    timeout = 20L
+                ).text
+            } catch (_: Exception) {
+                null
+            }
+        } ?: return null
         return try {
             JSONArray(text)
         } catch (_: Exception) {
@@ -428,9 +444,12 @@ internal object NetMirrorSite {
         if (candidates.isEmpty()) return false
         val verified = kotlinx.coroutines.withTimeoutOrNull(45_000L) {
             coroutineScope {
+                val gate = Semaphore(3)
                 candidates.map { (file, label) ->
                     async(Dispatchers.IO) {
-                        playableFile(file, headers)?.let { it to label }
+                        gate.withPermit {
+                            playableFile(file, headers)?.let { it to label }
+                        }
                     }
                 }.mapNotNull { it.await() }
             }

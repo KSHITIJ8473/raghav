@@ -53,12 +53,18 @@ internal object MoviesDriveSite {
     private data class DrivePost(val title: String, val url: String, val imdbId: String)
 
     private suspend fun searchPosts(domain: String, query: String): List<DrivePost> {
+        val text = PlayNet.retry {
+            try {
+                app.get(
+                    "$domain/search.php?q=${Uri.encode(query)}",
+                    headers = PlayNet.headers(),
+                    timeout = 15L
+                ).text
+            } catch (_: Exception) {
+                null
+            }
+        } ?: return emptyList()
         return try {
-            val text = app.get(
-                "$domain/search.php?q=${Uri.encode(query)}",
-                headers = PlayNet.headers(),
-                timeout = 15L
-            ).text
             val hits = JSONObject(text).optJSONArray("hits") ?: return emptyList()
             (0 until hits.length()).mapNotNull { i ->
                 val d = hits.optJSONObject(i)?.optJSONObject("document") ?: return@mapNotNull null

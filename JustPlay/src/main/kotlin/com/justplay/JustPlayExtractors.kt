@@ -193,7 +193,7 @@ class PlayHubCloud : ExtractorApi() {
                     found.distinctBy { it.second }.map { (name, url) ->
                         async(Dispatchers.IO) {
                             semaphore.withPermit {
-                                if (PlayNet.fileAlive(url)) name to url else null
+                                if (PlayNet.alive(url, ExtractorLinkType.VIDEO)) name to url else null
                             }
                         }
                     }.mapNotNull { runCatching { it.await() }.getOrNull() }
@@ -684,7 +684,7 @@ class PlayHblinks : ExtractorApi() {
             val doc = app.get(
                 url,
                 headers = PlayNet.headers(referer),
-                interceptor = PlayNet.cfKiller,
+                interceptor = PlayNet.killerFor(url),
                 timeout = 20L
             ).document
             val seen = mutableSetOf<String>()
@@ -712,7 +712,7 @@ class PlayHubdrive : ExtractorApi() {
             val doc = app.get(
                 url,
                 headers = PlayNet.headers(referer),
-                interceptor = PlayNet.cfKiller,
+                interceptor = PlayNet.killerFor(url),
                 timeout = 20L
             ).document
             val seen = mutableSetOf<String>()

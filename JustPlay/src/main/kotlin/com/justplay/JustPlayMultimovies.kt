@@ -1128,12 +1128,7 @@ internal object MmXvid {
         var emitted = 0
         for (url in links) {
             val type = PlayNet.linkType(url)
-            val alive = if (type == ExtractorLinkType.M3U8) {
-                PlayNet.m3u8Alive(url, mapOf("Referer" to "$base/"))
-            } else {
-                PlayNet.fileAlive(url, "$base/")
-            }
-            if (!alive) continue
+            if (!PlayNet.alive(url, type, mapOf("Referer" to "$base/"))) continue
             callback(
                 newExtractorLink(label, label, url, type = type) {
                     this.headers = mapOf("Referer" to "$base/")
@@ -1169,6 +1164,7 @@ internal object MmVidout {
     private const val RAW = "https://raw.githubusercontent.com/Watchout2025/api/refs/heads/main"
 
     private suspend fun addLink(url: String, label: String, callback: (ExtractorLink) -> Unit) {
+        if (!PlayNet.alive(url, ExtractorLinkType.M3U8)) return
         callback(
             newExtractorLink(label, label, url, type = ExtractorLinkType.M3U8) {
                 this.headers = mapOf("Referer" to "https://vidout.pages.dev/")
@@ -1242,10 +1238,13 @@ internal object MmVidsync {
             .findAll(html)
             .map { MmNet.deEsc(it.groupValues.first()) }
             .toSet()
+        var any = false
         for (u in urls) {
+            if (!PlayNet.alive(u, ExtractorLinkType.M3U8)) continue
             callback(newExtractorLink(label, label, u, type = ExtractorLinkType.M3U8))
+            any = true
         }
-        return urls.isNotEmpty()
+        return any
     }
 }
 
@@ -1348,13 +1347,15 @@ internal object MmBingr {
                 val src = sources.optJSONObject(i) ?: continue
                 val url = src.optString("url")
                 if (url.isBlank()) continue
+                val type = PlayNet.linkType(url)
+                if (!PlayNet.alive(url, type)) continue
                 val quality = src.optString("quality").ifBlank { "HD" }
                 callback(
                     newExtractorLink(
                         "$labelPrefix ${server.name}",
                         "$labelPrefix ${server.name} $quality",
                         url,
-                        type = PlayNet.linkType(url),
+                        type = type,
                     )
                 )
                 any = true
@@ -1375,12 +1376,14 @@ internal object MmFilmu {
         label: String,
         callback: (ExtractorLink) -> Unit,
     ) {
+        val type = PlayNet.linkType(url)
+        if (!PlayNet.alive(url, type)) return
         callback(
             newExtractorLink(
                 label,
                 "$label $quality",
                 url,
-                type = PlayNet.linkType(url),
+                type = type,
             )
         )
     }
@@ -1484,6 +1487,7 @@ internal object MmVidbolt {
         callback: (ExtractorLink) -> Unit,
     ): Boolean {
         val sources = root.optJSONArray("sources") ?: return false
+        val usedNames = mutableSetOf<String>()
         var any = false
         for (i in 0 until sources.length()) {
             val src = sources.optJSONObject(i) ?: continue
@@ -1492,12 +1496,16 @@ internal object MmVidbolt {
             val quality = src.optString("quality").ifBlank { "HD" }
             val language = src.optString("language").ifBlank { "" }
             val langTag = if (language.isNotBlank() && language.lowercase() != "original") " $language" else ""
+            val type = PlayNet.linkType(url)
+            if (!PlayNet.alive(url, type)) continue
+            val name = "$label $quality$langTag"
+            if (!usedNames.add(name)) continue
             callback(
                 newExtractorLink(
                     label,
-                    "$label $quality$langTag",
+                    name,
                     url,
-                    type = PlayNet.linkType(url),
+                    type = type,
                 )
             )
             any = true

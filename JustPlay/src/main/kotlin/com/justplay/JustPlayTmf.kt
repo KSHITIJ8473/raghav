@@ -56,11 +56,13 @@ internal object PlayTmfNet {
     }
 
     suspend fun fetchPage(url: String, referer: String? = null): Document? {
-        val res = try {
-            app.get(url, headers = PlayNet.browserHeaders(referer), timeout = 25L)
-        } catch (_: Exception) {
-            return null
-        }
+        val res = PlayNet.retry {
+            try {
+                app.get(url, headers = PlayNet.browserHeaders(referer), timeout = 25L)
+            } catch (_: Exception) {
+                null
+            }
+        } ?: return null
         if (!res.isSuccessful) return null
         return try {
             res.document
@@ -758,6 +760,7 @@ internal object PlayTmfSources {
                         }
                         for (s in streams) {
                             if (!s.url.startsWith("http")) continue
+                            if (!PlayNet.alive(s.url, s.type, s.headers)) continue
                             val name = PlayLabels.buildLabel("themoviesflix", s.name, info)
                             callback.invoke(
                                 ExtractorLink(

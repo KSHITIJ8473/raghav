@@ -10,15 +10,46 @@ import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.loadExtractor
 import com.lagradost.cloudstream3.utils.newExtractorLink
 import com.lagradost.nicehttp.NiceResponse
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONObject
 import java.net.URI
+import java.util.concurrent.ConcurrentHashMap
 
 internal const val PLAY_UA =
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 
 internal object PlayNet {
 
-    val cfKiller: CloudflareKiller by lazy { CloudflareKiller() }
+    private val cfKillers = ConcurrentHashMap<String, CloudflareKiller>()
+    private val cfLocks = ConcurrentHashMap<String, Mutex>()
+
+    fun killerFor(url: String): CloudflareKiller =
+        cfKillers.getOrPut(hostOf(url)) { CloudflareKiller() }
+
+    private fun lockFor(url: String): Mutex =
+        cfLocks.getOrPut(hostOf(url)) { Mutex() }
+
+    private val verifiedUrls: MutableSet<String> = ConcurrentHashMap.newKeySet()
+    private val verifyGate = Semaphore(8)
+
+    suspend fun <T> retry(attempts: Int = 2, gapMs: Long = 600L, block: suspend () -> T?): T? {
+        repeat(attempts) { i ->
+            try {
+                block()?.let { return it }
+            } catch (_: Exception) {
+            }
+            if (i < attempts - 1) delay(gapMs)
+        }
+        return null
+    }
 
     fun headers(referer: String? = null, extra: Map<String, String> = emptyMap()): Map<String, String> {
         val h = mutableMapOf("User-Agent" to PLAY_UA)
@@ -44,16 +75,50 @@ internal object PlayNet {
         return h
     }
 
-    suspend fun probe(url: String, referer: String? = null): Int? {
+    suspend fun probe(
+        url: String,
+        referer: String? = null,
+        headers: Map<String, String> = emptyMap()
+    ): Int? {
         return try {
-            val res = app.get(
-                url,
-                headers = browserHeaders(referer).toMutableMap().apply { put("Range", "bytes=0-1023") },
-                timeout = 15L
-            )
+            val h = browserHeaders(referer).toMutableMap()
+            h.putAll(headers)
+            h["Range"] = "bytes=0-1023"
+            val res = app.get(url, headers = h, timeout = 12L)
             res.code
         } catch (_: Exception) {
             null
+        }
+    }
+
+    suspend fun alive(
+        url: String,
+        type: ExtractorLinkType,
+        headers: Map<String, String> = emptyMap(),
+        referer: String? = null
+    ): Boolean {
+        if (!url.startsWith("http")) return false
+        if (url in verifiedUrls) return true
+        return verifyGate.withPermit {
+            if (url in verifiedUrls) return@withPermit true
+            val merged = if (referer != null && headers.keys.none { it.equals("Referer", true) }) {
+                headers + mapOf("Referer" to referer)
+            } else {
+                headers
+            }
+            val ok = try {
+                when (type) {
+                    ExtractorLinkType.M3U8 -> m3u8Alive(url, merged)
+                    else -> probe(url, referer, merged)?.let { it in 200..399 } ?: false
+                }
+            } catch (_: Exception) {
+                false
+            }
+            if (ok) {
+                if (verifiedUrls.size > 600) verifiedUrls.clear()
+                verifiedUrls.add(url)
+            }
+            ok
         }
     }
 
@@ -228,14 +293,16 @@ internal object PlayNet {
         }
         if (plain != null && plain.code == 200 && !isCfChallenge(plain)) return plain
 
-        runCatching { cfKiller.savedCookies.remove(URI(url).host) }
-        val solved = try {
-            app.get(url, headers = headers(referer), interceptor = cfKiller, timeout = solveTimeout)
-        } catch (_: Exception) {
-            null
+        return lockFor(url).withLock {
+            val killer = killerFor(url)
+            runCatching { killer.savedCookies.remove(URI(url).host) }
+            val solved = try {
+                app.get(url, headers = headers(referer), interceptor = killer, timeout = solveTimeout)
+            } catch (_: Exception) {
+                null
+            }
+            if (solved != null && solved.code == 200 && !isCfChallenge(solved)) solved else null
         }
-        if (solved != null && solved.code == 200 && !isCfChallenge(solved)) return solved
-        return null
     }
 
     suspend fun fetchDrivePage(url: String, referer: String?): NiceResponse? {
@@ -351,9 +418,7 @@ internal object PlayNet {
             loadExtractor(url, referer, subtitleCallback) { link ->
                 collected.add(link)
             }
-            for (link in collected) {
-                buildSiteLink(site, label, quality, link)?.let(callback)
-            }
+            emitChecked(site, label, quality, collected, callback)
         } catch (_: Exception) {}
     }
 
@@ -391,9 +456,29 @@ internal object PlayNet {
         try {
             val collected = mutableListOf<ExtractorLink>()
             resolver(referer, subtitleCallback) { collected.add(it) }
-            for (link in collected) {
-                buildSiteLink(site, label, quality, link)?.let(callback)
-            }
+            emitChecked(site, label, quality, collected, callback)
         } catch (_: Exception) {}
+    }
+
+    private suspend fun emitChecked(
+        site: String,
+        label: String,
+        quality: Int?,
+        links: List<ExtractorLink>,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        if (links.isEmpty()) return
+        val checked = withTimeoutOrNull(45_000L) {
+            coroutineScope {
+                links.map { link ->
+                    async(Dispatchers.IO) {
+                        if (alive(link.url, link.type, link.headers, link.referer)) link else null
+                    }
+                }.mapNotNull { runCatching { it.await() }.getOrNull() }
+            }
+        } ?: return
+        for (link in checked) {
+            buildSiteLink(site, label, quality, link)?.let(callback)
+        }
     }
 }

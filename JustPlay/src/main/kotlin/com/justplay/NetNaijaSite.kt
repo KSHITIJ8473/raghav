@@ -204,12 +204,18 @@ internal object NetNaijaSite {
                 ?: DEFAULT_SITE
             val title = res.title ?: return
 
-            val searchRes = app.post(
-                "$BFF/subject/search",
-                headers = authHeaders(site),
-                json = mapOf("keyword" to title, "page" to 1, "perPage" to 30),
-                timeout = 15L
-            )
+            val searchRes = PlayNet.retry {
+                try {
+                    app.post(
+                        "$BFF/subject/search",
+                        headers = authHeaders(site),
+                        json = mapOf("keyword" to title, "page" to 1, "perPage" to 30),
+                        timeout = 15L
+                    )
+                } catch (_: Exception) {
+                    null
+                }
+            } ?: return
             readToken(searchRes)
             val items = try {
                 AppUtils.parseJson<NaSearchResponse>(searchRes.text).data?.items.orEmpty()
@@ -284,6 +290,12 @@ internal object NetNaijaSite {
 
                             play.streams.orEmpty().filter { it.vipLocked != true }.forEach { stream ->
                                 val url = stream.url ?: return@forEach
+                                val streamHeaders = mapOf(
+                                    "Referer" to "$site/",
+                                    "Origin" to site,
+                                    "User-Agent" to NA_UA
+                                )
+                                if (!PlayNet.alive(url, ExtractorLinkType.VIDEO, headers = streamHeaders)) return@forEach
                                 val quality = stream.resolutions?.toIntOrNull() ?: Qualities.Unknown.value
                                 val sizeText = stream.size?.toLongOrNull()?.let { if (it > 0) "${it / 1048576} MB" else "" } ?: ""
                                 val parts = listOfNotNull(
@@ -300,17 +312,19 @@ internal object NetNaijaSite {
                                         ExtractorLinkType.VIDEO
                                     ) {
                                         this.quality = quality
-                                        this.headers = mapOf(
-                                            "Referer" to "$site/",
-                                            "Origin" to site,
-                                            "User-Agent" to NA_UA
-                                        )
+                                        this.headers = streamHeaders
                                     }
                                 )
                             }
 
                             play.dash.orEmpty().forEach { stream ->
                                 val url = stream.url ?: return@forEach
+                                val dashHeaders = mapOf(
+                                    "Referer" to "$site/",
+                                    "Origin" to site,
+                                    "User-Agent" to NA_UA
+                                )
+                                if (!PlayNet.alive(url, ExtractorLinkType.DASH, headers = dashHeaders)) return@forEach
                                 val dashName = if (audioLabel.isBlank()) {
                                     "[NetNaija] - DASH"
                                 } else {
@@ -323,11 +337,7 @@ internal object NetNaijaSite {
                                         url,
                                         ExtractorLinkType.DASH
                                     ) {
-                                        this.headers = mapOf(
-                                            "Referer" to "$site/",
-                                            "Origin" to site,
-                                            "User-Agent" to NA_UA
-                                        )
+                                        this.headers = dashHeaders
                                     }
                                 )
                             }

@@ -179,15 +179,23 @@ internal object VegaMoviesSite {
     @JsonIgnoreProperties(ignoreUnknown = true)
     data class VegaResponse(val hits: List<VegaHit> = emptyList())
 
-    private suspend fun fetchResults(api: String, query: String): List<VegaDoc> = try {
-        val text = app.get(
-            "$api/search.php?q=${Uri.encode(query)}",
-            headers = headers(api),
-            timeout = 15L
-        ).text
-        AppUtils.parseJson<VegaResponse>(text).hits.mapNotNull { it.document }
-    } catch (_: Exception) {
-        emptyList()
+    private suspend fun fetchResults(api: String, query: String): List<VegaDoc> {
+        val text = PlayNet.retry {
+            try {
+                app.get(
+                    "$api/search.php?q=${Uri.encode(query)}",
+                    headers = headers(api),
+                    timeout = 15L
+                ).text
+            } catch (_: Exception) {
+                null
+            }
+        } ?: return emptyList()
+        return try {
+            AppUtils.parseJson<VegaResponse>(text).hits.mapNotNull { it.document }
+        } catch (_: Exception) {
+            emptyList()
+        }
     }
 
     private fun pickDoc(docs: List<VegaDoc>, res: PlayLinkData): VegaDoc? {
@@ -266,12 +274,15 @@ internal object VegaMoviesSite {
             val rows = collectRows(doc, res.season)
             if (res.season == null) {
                 coroutineScope {
+                    val gate = Semaphore(4)
                     rows.forEach { (link, label) ->
                         async(Dispatchers.IO) {
-                            DrivePages.emit(
-                                "vegamovies", link, null, null, label, api, api,
-                                subtitleCallback, callback
-                            )
+                            gate.withPermit {
+                                DrivePages.emit(
+                                    "vegamovies", link, null, null, label, api, api,
+                                    subtitleCallback, callback
+                                )
+                            }
                         }
                     }
                 }
@@ -296,11 +307,17 @@ internal object HdHub4uSite {
                 "?q=${Uri.encode(query)}" +
                 "&query_by=post_title,category&query_by_weights=4,2" +
                 "&sort_by=sort_by_date:desc&limit=20&highlight_fields=none&use_cache=true&page=1"
-            val text = app.get(
-                url,
-                headers = mapOf("User-Agent" to PLAY_UA, "Referer" to "$domain/"),
-                timeout = 15L
-            ).text
+            val text = PlayNet.retry {
+                try {
+                    app.get(
+                        url,
+                        headers = mapOf("User-Agent" to PLAY_UA, "Referer" to "$domain/"),
+                        timeout = 15L
+                    ).text
+                } catch (_: Exception) {
+                    null
+                }
+            } ?: return emptyList()
             val hits = org.json.JSONObject(text).optJSONArray("hits") ?: return emptyList()
             (0 until hits.length()).mapNotNull { i ->
                 val d = hits.optJSONObject(i)?.optJSONObject("document") ?: return@mapNotNull null
@@ -469,11 +486,17 @@ internal object FourKhdHubSite {
                 ?: DEFAULT_DOMAIN
             val title = res.title ?: return
 
-            val searchDoc = app.get(
-                "$domain/?s=${Uri.encode(title)}",
-                headers = PlayNet.headers(),
-                timeout = 20L
-            ).document
+            val searchDoc = PlayNet.retry {
+                try {
+                    app.get(
+                        "$domain/?s=${Uri.encode(title)}",
+                        headers = PlayNet.headers(),
+                        timeout = 20L
+                    ).document
+                } catch (_: Exception) {
+                    null
+                }
+            } ?: return
             val elements = searchDoc.select("div.card-grid > a.movie-card")
             fun contentOf(el: Element): String = el.selectFirst("div.movie-card-content")?.text()?.lowercase() ?: ""
 
@@ -563,12 +586,18 @@ internal object Movies4uSite {
     }
 
     private suspend fun searchPosts(domain: String, query: String): List<Pair<String, String>>? {
+        val text = PlayNet.retry {
+            try {
+                app.get(
+                    "$domain/lookup.php?q=${Uri.encode(query)}&page=1&per_page=30",
+                    headers = PlayNet.headers(),
+                    timeout = 15L
+                ).text
+            } catch (_: Exception) {
+                null
+            }
+        } ?: return null
         return try {
-            val text = app.get(
-                "$domain/lookup.php?q=${Uri.encode(query)}&page=1&per_page=30",
-                headers = PlayNet.headers(),
-                timeout = 15L
-            ).text
             val hits = JSONObject(text).optJSONArray("hits") ?: return emptyList()
             (0 until hits.length()).mapNotNull { i ->
                 val hit = hits.optJSONObject(i) ?: return@mapNotNull null
@@ -1099,10 +1128,13 @@ internal object MultimoviesSite {
                         .findAll(html)
                         .map { MmNet.deEsc(it.groupValues.first()) }
                         .toSet()
+                    var any = false
                     for (u in urls) {
+                        if (!PlayNet.alive(u, ExtractorLinkType.M3U8)) continue
                         callback(newExtractorLink(server.name, server.name, u, type = ExtractorLinkType.M3U8))
+                        any = true
                     }
-                    urls.isNotEmpty()
+                    any
                 } else false
             }
         }

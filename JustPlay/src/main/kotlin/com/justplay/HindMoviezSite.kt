@@ -84,12 +84,18 @@ internal object HindMoviezSite {
     }
 
     private suspend fun searchPosts(domain: String, query: String): List<Pair<String, String>> {
+        val doc = PlayNet.retry {
+            try {
+                app.get(
+                    "$domain/?s=${URLEncoder.encode(query, "UTF-8")}",
+                    headers = PlayNet.headers(),
+                    timeout = 15L
+                ).document
+            } catch (_: Exception) {
+                null
+            }
+        } ?: return emptyList()
         return try {
-            val doc = app.get(
-                "$domain/?s=${URLEncoder.encode(query, "UTF-8")}",
-                headers = PlayNet.headers(),
-                timeout = 15L
-            ).document
             doc.select("h2.entry-title > a[href]").mapNotNull { a ->
                 val title = a.text().replace(Regex("\\s+"), " ").trim()
                 val href = a.attr("href").trim()
@@ -126,6 +132,7 @@ internal object HindMoviezSite {
         referer: String,
         callback: (ExtractorLink) -> Unit
     ) {
+        if (!PlayNet.alive(url, ExtractorLinkType.VIDEO, referer = referer)) return
         val name = PlayLabels.buildLabel("hindmoviez", "", info)
         callback(
             newExtractorLink(

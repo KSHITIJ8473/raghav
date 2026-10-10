@@ -13,6 +13,8 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import org.json.JSONObject
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicInteger
 
 @JsonIgnoreProperties(ignoreUnknown = true)
 data class PlayLinkData(
@@ -54,6 +56,16 @@ class JustPlay : MainAPI() {
 
         private const val KEY_DL_ONLY = "JUSTPLAY_DL_ONLY"
         private const val KEY_STREAM_ONLY = "JUSTPLAY_STREAM_ONLY"
+        private const val LINKS_PER_SOURCE = 12
+
+        private fun widenClient() {
+            try {
+                val dispatcher = app.baseClient.dispatcher
+                if (dispatcher.maxRequestsPerHost < 12) dispatcher.maxRequestsPerHost = 12
+                if (dispatcher.maxRequests < 96) dispatcher.maxRequests = 96
+            } catch (_: Exception) {
+            }
+        }
 
         fun tmdbImageUrl(path: String?): String? {
             if (path.isNullOrBlank()) return null
@@ -293,7 +305,7 @@ class JustPlay : MainAPI() {
 
         coroutineScope {
             val semaphore = Semaphore(8)
-            val deferred = seasons.map { (seasonNum, airDate) ->
+            val deferred = seasons.map { (seasonNum, _) ->
                 async(Dispatchers.IO) {
                     semaphore.withPermit {
                         try {
@@ -304,28 +316,35 @@ class JustPlay : MainAPI() {
                             val epsArr = seasonJson.optJSONArray("episodes") ?: return@withPermit emptyList()
                             (0 until epsArr.length()).mapNotNull { i ->
                                 val ep = epsArr.optJSONObject(i) ?: return@mapNotNull null
-                                val epNum = ep.optInt("episode_number", 0)
-                                if (epNum <= 0) return@mapNotNull null
-                                val linkData = PlayLinkData(
-                                    id = id,
-                                    imdbId = imdbId,
-                                    type = type,
-                                    season = seasonNum,
-                                    episode = epNum,
-                                    title = title,
-                                    orgTitle = orgTitle.ifBlank { null },
-                                    year = airDate.take(4).toIntOrNull() ?: year,
-                                    showYear = year,
-                                    isMovie = false
-                                )
-                                newEpisode(linkData.toJson()) {
-                                    this.name = ep.optString("name").ifBlank { "Episode $epNum" }
-                                    this.season = seasonNum
-                                    this.episode = epNum
-                                    this.posterUrl = tmdbImageUrl(ep.optString("still_path"))
-                                    this.description = ep.optString("overview")
-                                    score = Score.from10(ep.optDouble("vote_average", 0.0))
-                                    ep.optString("air_date").takeIf { it.isNotBlank() }?.let { addDate(it) }
+                                try {
+                                    val epNum = ep.optInt("episode_number", 0)
+                                    if (epNum <= 0) return@mapNotNull null
+                                    val airDate = ep.optString("air_date")
+                                    val linkData = PlayLinkData(
+                                        id = id,
+                                        imdbId = imdbId,
+                                        type = type,
+                                        season = seasonNum,
+                                        episode = epNum,
+                                        title = title,
+                                        orgTitle = orgTitle.ifBlank { null },
+                                        year = airDate.take(4).toIntOrNull() ?: year,
+                                        showYear = year,
+                                        isMovie = false
+                                    )
+                                    newEpisode(linkData.toJson()) {
+                                        this.name = ep.optString("name").ifBlank { "Episode $epNum" }
+                                        this.season = seasonNum
+                                        this.episode = epNum
+                                        this.posterUrl = tmdbImageUrl(ep.optString("still_path"))
+                                        this.description = ep.optString("overview")
+                                        score = Score.from10(ep.optDouble("vote_average", 0.0))
+                                        if (airDate.length >= 8 && airDate[0].isDigit()) {
+                                            runCatching { addDate(airDate) }
+                                        }
+                                    }
+                                } catch (_: Exception) {
+                                    null
                                 }
                             }
                         } catch (_: Exception) {
@@ -390,20 +409,30 @@ class JustPlay : MainAPI() {
         val dlOnly = downloadOnlyEnabled()
         val streamOnly = streamOnlyEnabled() || !dlOnly
 
-        val guardedCallback: (ExtractorLink) -> Unit = { link ->
+        widenClient()
+
+        val seenUrls = ConcurrentHashMap.newKeySet<String>()
+        val sourceCounts = ConcurrentHashMap<String, AtomicInteger>()
+
+        val guardedCallback: (ExtractorLink) -> Unit = label@{ link ->
             val isDownload = PlaySourceFilter.isDownloadOnlyName(link.name)
             val allowed = if (isDownload) dlOnly else streamOnly
-            if (allowed) {
-                callback(if (isDownload) PlaySourceFilter.taggedDownloadOnly(link) else link)
-            }
+            if (!allowed) return@label
+            if (!seenUrls.add(link.url)) return@label
+            val emitted = sourceCounts.computeIfAbsent(link.source) { AtomicInteger() }
+            if (emitted.incrementAndGet() > LINKS_PER_SOURCE) return@label
+            callback(if (isDownload) PlaySourceFilter.taggedDownloadOnly(link) else link)
         }
 
         coroutineScope {
+            val gate = Semaphore(6)
             active.forEach { site ->
                 async(Dispatchers.IO) {
-                    try {
-                        site.invoke(res, subtitleCallback, guardedCallback)
-                    } catch (_: Exception) {}
+                    gate.withPermit {
+                        try {
+                            site.invoke(res, subtitleCallback, guardedCallback)
+                        } catch (_: Exception) {}
+                    }
                 }
             }
         }

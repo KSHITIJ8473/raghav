@@ -266,6 +266,7 @@ class RareAnimesProvider : MainAPI() {
                     if (isProseRow(el)) continue
                     val href = el.attr("abs:href")
                     val text = el.text().trim()
+                    if (isInfoLabel(text) || (text.isBlank() && isInfoLabel(context))) continue
                     when {
                         href.contains("$STORE_HOST/archives/") ->
                             sources.add(SourceRef(text.ifBlank { context }, href, "archive", dubKeyOf(context)))
@@ -318,8 +319,16 @@ class RareAnimesProvider : MainAPI() {
     // linker pages sometimes label every row with the button name instead of the episode
     private fun isSourceLabel(name: String): Boolean {
         return when (name.trim().lowercase()) {
-            "multiquality", "watchmultiquality", "quickmulti", "watchnow",
-            "hubcloud", "mega", "zip", "download", "watch", "dlbeta" -> true
+            "multiquality", "watchmultiquality", "watchmultquality", "quickmulti", "watchnow",
+            "watchbeta", "hubcloud", "gofile", "mega", "zip", "download", "watch", "dlbeta" -> true
+            else -> false
+        }
+    }
+
+    // the site hides dead ad redirects behind info headings, they never resolve to a file
+    private fun isInfoLabel(name: String): Boolean {
+        return when (name.trim().lowercase().removeSuffix(":")) {
+            "movie info", "movies info", "series info", "cartoon series info", "anime info" -> true
             else -> false
         }
     }
@@ -348,6 +357,32 @@ class RareAnimesProvider : MainAPI() {
         }
     }
 
+    private val ROW_BLOCK_TAGS = setOf(
+        "p", "div", "ul", "ol", "li", "table", "thead", "tbody", "tr", "td", "th",
+        "blockquote", "section", "article", "figure",
+        "h1", "h2", "h3", "h4", "h5", "h6"
+    )
+
+    // posts wrap their episode rows in arbitrary containers, the parser needs the rows flat
+    private fun contentRows(content: Element): List<Element> {
+        val rows = mutableListOf<Element>()
+        fun walk(el: Element) {
+            for (child in el.children()) {
+                if (!ROW_BLOCK_TAGS.contains(child.tagName())) {
+                    rows.add(child)
+                    continue
+                }
+                if (child.children().any { ROW_BLOCK_TAGS.contains(it.tagName()) }) {
+                    walk(child)
+                } else {
+                    rows.add(child)
+                }
+            }
+        }
+        walk(content)
+        return rows
+    }
+
     private fun parseDirectEpisodes(
         doc: Document,
         defaultSeason: Int
@@ -360,7 +395,7 @@ class RareAnimesProvider : MainAPI() {
         var sectionKey = ""
         var sectionSeason: Int? = null
         val usedOrphanNames = mutableSetOf<String>()
-        for (el in content.children()) {
+        for (el in contentRows(content)) {
             val tag = el.tagName().lowercase()
             if (tag == "hr") continue
             val text = el.text().trim()
@@ -400,7 +435,7 @@ class RareAnimesProvider : MainAPI() {
                 val href = a.attr("abs:href")
                 if (href.isBlank()) continue
                 val label = a.text().trim()
-                if (label.isBlank()) continue
+                if (label.isBlank() || isInfoLabel(label)) continue
                 val target = current
                 if (target != null) {
                     val variantName = if (lang.isBlank()) label else "$lang $label"
@@ -582,18 +617,22 @@ class RareAnimesProvider : MainAPI() {
         val content = doc.selectFirst("div.entry-content") ?: return emptyList()
         val out = mutableListOf<HubLink>()
         val seen = mutableSetOf<String>()
-        for (h in content.select("h2, h3, h4")) {
+        for (h in content.select("h2, h3, h4, li")) {
             val candidates = h.select("a[href]").mapNotNull { a ->
                 val href = a.attr("abs:href")
                 if (isInternalPostLink(href)) a else null
             }
             if (candidates.isEmpty()) continue
+            val isListItem = h.tagName() == "li"
+            // list rows carry one entry each, anything else is a menu or a tag cloud
+            if (isListItem && (candidates.size != 1)) continue
             val link = candidates.firstOrNull { it.text().isNotBlank() } ?: candidates.first()
             val href = link.attr("abs:href")
             if (!seen.add(href)) continue
             val headingText = h.text().trim()
             val text = link.text().trim().ifBlank { headingText }
             if (text.isBlank()) continue
+            if (isListItem && text.length < 8) continue
             val seasonNumber = HUB_SEASON_NUMBER.find(text)?.groupValues?.get(1)?.toIntOrNull()
                 ?: HUB_SEASON_NUMBER.find(headingText)?.groupValues?.get(1)?.toIntOrNull()
             val movieNumber = if (seasonNumber == null) {
@@ -861,7 +900,11 @@ class RareAnimesProvider : MainAPI() {
             } else {
                 if (twin) continue
                 val episodes = buildSubPageEpisodes(content)
-                if (episodes.size > 1) {
+                // movie linker rows are server buttons for one file, only numbered rows make a real episode list
+                val asSeries = episodes.size > 1 &&
+                    (link.kind != "movie" ||
+                        episodes.any { it.name.isNotBlank() && parseEpisodeNumber(it.name) != null })
+                if (asSeries) {
                     extraSeries.add(link.name to episodes)
                 } else {
                     val variants = buildSubPageVariants(content)

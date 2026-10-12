@@ -50,7 +50,7 @@ class JustPlay : MainAPI() {
     override val hasMainPage = true
     override val hasDownloadSupport = true
     override val instantLinkLoading = true
-    override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)
+    override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries, TvType.Live)
     override var lang = "en"
 
     companion object {
@@ -61,6 +61,9 @@ class JustPlay : MainAPI() {
         private const val KEY_DL_ONLY = "JUSTPLAY_DL_ONLY"
         private const val KEY_STREAM_ONLY = "JUSTPLAY_STREAM_ONLY"
         private const val KEY_CONCURRENCY = "JUSTPLAY_CONCURRENCY"
+        private const val KEY_LIVE_SPORTS = "JUSTPLAY_LIVE_SPORTS"
+        private const val KEY_LIVE_SPORTS_TOP = "JUSTPLAY_LIVE_SPORTS_TOP"
+        private const val LIVE_ROW = "live_sports"
         private const val LINKS_PER_SOURCE = 12
 
         // the app cancels loadLinks after 120s, every site gets cut off before that
@@ -69,8 +72,9 @@ class JustPlay : MainAPI() {
         private fun widenClient() {
             try {
                 val dispatcher = app.baseClient.dispatcher
-                if (dispatcher.maxRequestsPerHost < 12) dispatcher.maxRequestsPerHost = 12
-                if (dispatcher.maxRequests < 96) dispatcher.maxRequests = 96
+                // live sports resolve beside site scrapes, both need room in the queue
+                if (dispatcher.maxRequestsPerHost < 40) dispatcher.maxRequestsPerHost = 40
+                if (dispatcher.maxRequests < 200) dispatcher.maxRequests = 200
             } catch (_: Exception) {
             }
         }
@@ -114,14 +118,38 @@ class JustPlay : MainAPI() {
         }
 
         fun siteConcurrency(): Int = try {
-            (CloudStreamApp.getKey<Int>(KEY_CONCURRENCY) ?: 6).coerceIn(2, 12)
+            (CloudStreamApp.getKey<Int>(KEY_CONCURRENCY) ?: 15).coerceIn(6, 40)
         } catch (_: Exception) {
-            6
+            15
         }
 
         fun setConcurrency(value: Int) {
             try {
-                CloudStreamApp.setKey(KEY_CONCURRENCY, value.coerceIn(2, 12))
+                CloudStreamApp.setKey(KEY_CONCURRENCY, value.coerceIn(6, 40))
+            } catch (_: Exception) {}
+        }
+
+        fun liveSportsEnabled(): Boolean = try {
+            CloudStreamApp.getKey<Boolean>(KEY_LIVE_SPORTS) ?: true
+        } catch (_: Exception) {
+            true
+        }
+
+        fun liveSportsOnTop(): Boolean = try {
+            CloudStreamApp.getKey<Boolean>(KEY_LIVE_SPORTS_TOP) ?: false
+        } catch (_: Exception) {
+            false
+        }
+
+        fun setLiveSports(on: Boolean) {
+            try {
+                CloudStreamApp.setKey(KEY_LIVE_SPORTS, on)
+            } catch (_: Exception) {}
+        }
+
+        fun setLiveSportsTop(onTop: Boolean) {
+            try {
+                CloudStreamApp.setKey(KEY_LIVE_SPORTS_TOP, onTop)
             } catch (_: Exception) {}
         }
 
@@ -151,7 +179,7 @@ class JustPlay : MainAPI() {
         }
     }
 
-    override val mainPage = mainPageOf(
+    private val tmdbRows = listOf(
         Pair("/trending/all/day", "Trending Now"),
         Pair("/movie/popular", "Popular Movies"),
         Pair("/tv/popular", "Popular TV Shows"),
@@ -165,6 +193,15 @@ class JustPlay : MainAPI() {
         Pair("/discover/tv&with_original_language=ko&sort_by=popularity.desc", "Korean Shows"),
         Pair("/discover/tv&with_genres=16&with_original_language=ja&sort_by=popularity.desc", "Anime Series")
     )
+
+    // the live rows follow the position picked in settings, read on every
+    // access so a restart is all it takes to move them
+    override val mainPage: List<MainPageData>
+        get() = when {
+            !liveSportsEnabled() -> mainPageOf(*tmdbRows.toTypedArray())
+            liveSportsOnTop() -> mainPageOf(*(listOf(Pair(LIVE_ROW, "Live Sports")) + tmdbRows).toTypedArray())
+            else -> mainPageOf(*(tmdbRows + Pair(LIVE_ROW, "Live Sports")).toTypedArray())
+        }
 
     private fun toSearchResponse(item: JSONObject, fallbackType: String): SearchResponse? {
         val id = item.optInt("id", 0)
@@ -187,8 +224,14 @@ class JustPlay : MainAPI() {
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         DonationManager.checkAndShow()
-        // netmirror needs a ~1 min cookie solve on cold start, warm it up before anything is opened
+        // netmirror needs a ~1 min cookie solve on cold start, get it going before the user opens anything
         prefetchScope.launch { NetMirrorSite.prefetch() }
+        if (request.data == LIVE_ROW) {
+            if (!liveSportsEnabled()) {
+                return newHomePageResponse(request.name, emptyList<SearchResponse>(), hasNext = false)
+            }
+            return LiveSports.homePage(this)
+        }
         val parts = request.data.split("&", limit = 2)
         val path = parts[0]
         val extra = parts.getOrNull(1)?.split("&")?.mapNotNull {
@@ -226,8 +269,59 @@ class JustPlay : MainAPI() {
         return items
     }
 
+    // official title artwork from the tmdb images endpoint, the app draws it
+    // instead of the plain text name on the info page, svg only as a last
+    // resort because the image loader cannot render it
+    private fun pickTmdbLogo(logos: org.json.JSONArray?): String? {
+        if (logos == null || logos.length() == 0) return null
+        fun urlOf(logo: org.json.JSONObject) =
+            "https://image.tmdb.org/t/p/w500" + logo.optString("file_path")
+
+        var svgFallback: org.json.JSONObject? = null
+        for (i in 0 until logos.length()) {
+            val logo = logos.optJSONObject(i) ?: continue
+            if (logo.optString("file_path").isBlank()) continue
+            if (logo.optString("iso_639_1").equals("en", ignoreCase = true)) {
+                if (!logo.optString("file_path").endsWith(".svg", true)) return urlOf(logo)
+                if (svgFallback == null) svgFallback = logo
+            }
+        }
+        svgFallback?.let { return urlOf(it) }
+
+        fun voted(o: org.json.JSONObject) =
+            o.optDouble("vote_average", 0.0) > 0.0 && o.optInt("vote_count", 0) > 0
+
+        var best: org.json.JSONObject? = null
+        var bestSvg: org.json.JSONObject? = null
+        for (i in 0 until logos.length()) {
+            val logo = logos.optJSONObject(i) ?: continue
+            if (!voted(logo) || logo.optString("file_path").isBlank()) continue
+            val isSvg = logo.optString("file_path").endsWith(".svg", true)
+            val slot = if (isSvg) bestSvg else best
+            if (slot == null || logo.optDouble("vote_average", 0.0) > slot.optDouble("vote_average", 0.0) ||
+                (logo.optDouble("vote_average", 0.0) == slot.optDouble("vote_average", 0.0) &&
+                    logo.optInt("vote_count", 0) > slot.optInt("vote_count", 0))
+            ) {
+                if (isSvg) bestSvg = logo else best = logo
+            }
+        }
+        best?.let { return urlOf(it) }
+        bestSvg?.let { return urlOf(it) }
+        return null
+    }
+
     override suspend fun load(url: String): LoadResponse? {
         prefetchScope.launch { NetMirrorSite.prefetch() }
+        // live events and tmdb titles share this entry point, live payloads
+        // always carry a slug so they are told apart first
+        val live = try {
+            parseJson<LiveLoadData>(url)
+        } catch (_: Exception) {
+            null
+        }
+        if (live?.slug != null) {
+            return LiveSports.buildLoadResponse(this, live, url)
+        }
         val data = try {
             parseJson<PlayTmdbData>(url)
         } catch (_: Exception) {
@@ -241,7 +335,7 @@ class JustPlay : MainAPI() {
             "/$type/$id",
             mapOf(
                 "language" to "en-US",
-                "append_to_response" to "external_ids,credits,videos,recommendations"
+                "append_to_response" to "external_ids,credits,videos,recommendations,images"
             )
         ) ?: return null
 
@@ -255,6 +349,11 @@ class JustPlay : MainAPI() {
         val overview = detail.optString("overview")
         val runtime = detail.optInt("runtime", 0).takeIf { it > 0 }
         val imdbId = detail.optJSONObject("external_ids")?.optString("imdb_id")?.takeIf { it.isNotBlank() }
+        val logo = try {
+            pickTmdbLogo(detail.optJSONObject("images")?.optJSONArray("logos"))
+        } catch (_: Exception) {
+            null
+        }
 
         val genres = mutableListOf<String>()
         detail.optJSONArray("genres")?.let { arr ->
@@ -305,6 +404,7 @@ class JustPlay : MainAPI() {
             return newMovieLoadResponse(title, url, TvType.Movie, linkData.toJson()) {
                 this.posterUrl = poster
                 this.backgroundPosterUrl = backdrop
+                this.logoUrl = logo
                 this.year = year
                 this.plot = overview
                 this.duration = runtime
@@ -389,6 +489,7 @@ class JustPlay : MainAPI() {
         return newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
             this.posterUrl = poster
             this.backgroundPosterUrl = backdrop
+            this.logoUrl = logo
             this.year = year
             this.plot = overview
             this.score = Score.from10(rating)
@@ -405,6 +506,15 @@ class JustPlay : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
+        val live = try {
+            parseJson<LiveLoadData>(data)
+        } catch (_: Exception) {
+            null
+        }
+        if (live?.slug != null) {
+            return LiveSports.resolveLinks(live, callback)
+        }
+
         val res = try {
             parseJson<PlayLinkData>(data)
         } catch (_: Exception) {

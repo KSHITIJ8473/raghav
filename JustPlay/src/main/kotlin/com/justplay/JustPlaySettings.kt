@@ -484,6 +484,9 @@ object JustPlaySettings {
         val perfRow = homeRow(ctx, "Performance", "Loading concurrency") { openPerformance(ctx) }
         root.addView(perfRow)
 
+        val liveRow = homeRow(ctx, "Live Sports", "Live matches on the home page") { openLiveSports(ctx) }
+        root.addView(liveRow)
+
         root.addView(View(ctx), LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f
         ))
@@ -510,6 +513,7 @@ object JustPlaySettings {
         sitesRow.alpha = 0f; sitesRow.translationX = 70f
         manageRow.alpha = 0f; manageRow.translationX = 70f
         perfRow.alpha = 0f; perfRow.translationX = 70f
+        liveRow.alpha = 0f; liveRow.translationX = 70f
         close.alpha = 0f
 
         dlg.setContentView(root)
@@ -525,6 +529,7 @@ object JustPlaySettings {
             slideIn(sitesRow, 1)
             slideIn(manageRow, 2)
             slideIn(perfRow, 3)
+            slideIn(liveRow, 4)
             close.animate().alpha(1f).setStartDelay(320).setDuration(350)
                 .setInterpolator(DecelerateInterpolator()).start()
         }
@@ -683,14 +688,14 @@ object JustPlaySettings {
                 }
 
             stepRow.addView(stepButton("-") {
-                if (value > 2) {
+                if (value > 6) {
                     value--
                     valueText.text = value.toString()
                 }
             })
             stepRow.addView(valueText)
             stepRow.addView(stepButton("+") {
-                if (value < 12) {
+                if (value < 40) {
                     value++
                     valueText.text = value.toString()
                 }
@@ -722,6 +727,74 @@ object JustPlaySettings {
                 text = "Applies the next time links are loaded, no restart needed"
                 textSize = 11f; setTextColor(SUBTEXT); gravity = Gravity.CENTER
                 setPadding(0, dp(ctx, 10), 0, 0)
+            })
+        }
+    }
+
+    private fun openLiveSports(ctx: Context) {
+        subWindow(ctx, "LIVE SPORTS") { body ->
+            body.addView(labelBlock(ctx, "Live sports",
+                "Live matches on the JustPlay home page"))
+
+            var enabled = JustPlay.liveSportsEnabled()
+            var onTop = JustPlay.liveSportsOnTop()
+
+            val (toggle, _) = toggleRow(
+                ctx, "Enable Live Sports",
+                null,
+                enabled
+            ) { enabled = it }
+            body.addView(toggle)
+
+            body.addView(labelBlock(ctx, "Row position",
+                "Where the live rows sit relative to the TMDB rows"))
+
+            val bottomChip = TextView(ctx)
+            val topChip = TextView(ctx)
+
+            fun renderChips() {
+                listOf(false to bottomChip, true to topChip).forEach { (isTop, chip) ->
+                    val active = isTop == onTop
+                    chip.text = if (isTop) "DISPLAY AT TOP" else "DISPLAY AT BOTTOM"
+                    chip.gravity = Gravity.CENTER
+                    chip.textSize = 11f
+                    chip.letterSpacing = 0.12f
+                    chip.setTypeface(chip.typeface, Typeface.BOLD)
+                    chip.setTextColor(if (active) Color.WHITE else SUBTEXT)
+                    chip.background = if (active) shape(RED_DEEP, 12, ctx, 1, RED_BRIGHT)
+                    else shape(SURFACE_2, 12, ctx, 1, BORDER)
+                    chip.setPadding(dp(ctx, 10), dp(ctx, 13), dp(ctx, 10), dp(ctx, 13))
+                }
+            }
+
+            bottomChip.setOnClickListener {
+                onTop = false; renderChips()
+                bottomChip.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+            }
+            topChip.setOnClickListener {
+                onTop = true; renderChips()
+                topChip.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+            }
+            renderChips()
+
+            val chipWrap = LinearLayout(ctx).apply {
+                orientation = LinearLayout.HORIZONTAL
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply { bottomMargin = dp(ctx, 8) }
+            }
+            chipWrap.addView(bottomChip, LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f
+            ))
+            chipWrap.addView(topChip, LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f
+            ).apply { leftMargin = dp(ctx, 8) })
+            body.addView(chipWrap)
+
+            body.addView(saveAndRestartButton(ctx) {
+                JustPlay.setLiveSports(enabled)
+                JustPlay.setLiveSportsTop(onTop)
+                confirmRestart(ctx, "Live sports saved. Restart CloudStream now to apply them?")
             })
         }
     }

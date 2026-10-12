@@ -50,6 +50,10 @@ class NetNaija : MainAPI() {
     private val apiUrl = "https://h5-api.aoneroom.com"
     private val bff = "$apiUrl/wefeed-h5api-bff"
 
+    private val tmdbApi = "https://api.themoviedb.org/3"
+    private val tmdbKey = "1865f43a0549ca50d341dd9ab8b29f49"
+    private val tmdbKeyAlt = "98ae14df2b8d8f8f8136499daf79f0e0"
+
     private val ua = "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
 
     private val baseHeaders = mapOf(
@@ -439,6 +443,7 @@ class NetNaija : MainAPI() {
             }.take(15)
             val trailer = subject.trailer?.videoAddress?.url?.takeIf { it.isNotBlank() }
             val recommendations = fetchRecommendations(subject.subjectId, detailPath)
+            val logo = tmdbLogoUrl(title, year)
 
             val tvType = when (subject.subjectType) {
                 1 -> TvType.Movie
@@ -467,6 +472,7 @@ class NetNaija : MainAPI() {
                 val movieData = NetNaijaEpisodeData(dubs = dubs, season = 0, episode = 0).toJson()
                 return newMovieLoadResponse(title, url, tvType, movieData) {
                     this.posterUrl = poster
+                    this.logoUrl = logo
                     this.plot = plot
                     this.tags = genres
                     this.year = year
@@ -492,6 +498,7 @@ class NetNaija : MainAPI() {
                 }
                 return newTvSeriesLoadResponse(title, url, tvType, episodes) {
                     this.posterUrl = poster
+                    this.logoUrl = logo
                     this.plot = plot
                     this.tags = genres
                     this.year = year
@@ -502,6 +509,79 @@ class NetNaija : MainAPI() {
                     if (trailer != null) addTrailer(trailer)
                 }
             }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    // the site has no title artwork of its own, pull the official clear logo
+    // from tmdb so the info page shows the real poster typography
+    private suspend fun tmdbGet(path: String, params: String): JsonNode? {
+        return try {
+            mapper.readTree(app.get("$tmdbApi$path?api_key=$tmdbKey$params").text)
+        } catch (e: Exception) {
+            try {
+                mapper.readTree(app.get("$tmdbApi$path?api_key=$tmdbKeyAlt$params").text)
+            } catch (_: Exception) {
+                null
+            }
+        }
+    }
+
+    private fun pickClearLogo(logos: JsonNode?): String? {
+        if (logos == null || !logos.isArray || logos.size() == 0) return null
+        fun urlOf(node: JsonNode): String =
+            "https://image.tmdb.org/t/p/w500" + node.path("file_path").asText()
+
+        var svgFallback: JsonNode? = null
+        for (node in logos) {
+            val filePath = node.path("file_path").asText("")
+            if (filePath.isBlank()) continue
+            if (node.path("iso_639_1").asText("").equals("en", ignoreCase = true)) {
+                if (!filePath.endsWith(".svg", true)) return urlOf(node)
+                if (svgFallback == null) svgFallback = node
+            }
+        }
+
+        // no english artwork, take the best voted one from any language
+        var best: JsonNode? = null
+        var bestVotes = -1.0
+        for (node in logos) {
+            val filePath = node.path("file_path").asText("")
+            if (filePath.isBlank() || filePath.endsWith(".svg", true)) continue
+            val votes = node.path("vote_average").asDouble(0.0)
+            if (votes > bestVotes) {
+                bestVotes = votes
+                best = node
+            }
+        }
+        best?.let { return urlOf(it) }
+        svgFallback?.let { return urlOf(it) }
+        return null
+    }
+
+    private suspend fun tmdbLogoUrl(title: String, year: Int?): String? {
+        return try {
+            val query = URLEncoder.encode(title, "UTF-8")
+            val yearParam = year?.let { "&year=$it" } ?: ""
+            val search = tmdbGet("/search/multi", "&query=$query&include_adult=false$yearParam") ?: return null
+            val results = search.path("results")
+            if (!results.isArray) return null
+
+            var matchType: String? = null
+            var matchId = 0
+            for (node in results) {
+                val type = node.path("media_type").asText("")
+                if (type == "movie" || type == "tv") {
+                    matchType = type
+                    matchId = node.path("id").asInt()
+                    break
+                }
+            }
+            if (matchType == null || matchId == 0) return null
+
+            val detail = tmdbGet("/$matchType/$matchId", "&append_to_response=images") ?: return null
+            pickClearLogo(detail.path("images").path("logos"))
         } catch (_: Exception) {
             null
         }

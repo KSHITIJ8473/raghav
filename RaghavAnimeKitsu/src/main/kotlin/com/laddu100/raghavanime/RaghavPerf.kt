@@ -2,6 +2,8 @@ package com.laddu100.raghavanime
 
 import android.app.ActivityManager
 import android.content.Context
+import com.lagradost.cloudstream3.CloudStreamApp.Companion.getKey
+import com.lagradost.cloudstream3.CloudStreamApp.Companion.setKey
 import com.lagradost.cloudstream3.CommonActivity
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -41,7 +43,25 @@ object RaghavPerf {
         return p
     }
 
-    fun sourceConcurrency(): Int = when (profile()) {
+    private const val USER_CONCURRENCY_KEY = "raghavanime_source_concurrency"
+
+    // 0 follows the device profile, anything in 6..40 is a manual override
+    fun setUserConcurrency(value: Int) {
+        try {
+            setKey(USER_CONCURRENCY_KEY, value.coerceIn(0, 40))
+        } catch (_: Exception) {}
+    }
+
+    fun userConcurrency(): Int? {
+        val saved = try {
+            getKey<Int>(USER_CONCURRENCY_KEY) ?: 0
+        } catch (_: Exception) {
+            0
+        }
+        return if (saved in 6..40) saved else null
+    }
+
+    fun sourceConcurrency(): Int = userConcurrency() ?: when (profile()) {
         DeviceProfile.LOW_END -> 6
         DeviceProfile.MID_RANGE -> 12
         DeviceProfile.HIGH_END -> 16

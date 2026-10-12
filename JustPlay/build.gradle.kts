@@ -1,4 +1,4 @@
-version = 16
+version = 18
 
 android {
     buildFeatures {
@@ -11,7 +11,7 @@ dependencies {
 }
 
 cloudstream {
-    description = "Movies and series from multiple sources with a Manage Sources screen that filters download and stream links"
+    description = "Movies, series and live sports from multiple sources with a Manage Sources screen that filters download and stream links"
     authors = listOf("KSHITIJ8473")
     status = 1
     tvTypes = listOf("Movie", "TvSeries")

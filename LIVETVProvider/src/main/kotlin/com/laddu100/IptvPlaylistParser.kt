@@ -2,30 +2,8 @@ package com.laddu100
 
 import android.util.Base64
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
-import org.json.JSONObject
 import java.io.InputStream
-
-data class Playlist(
-    val items: List<PlaylistItem> = emptyList(),
-)
-
-data class PlaylistItem(
-    val title: String? = null,
-    val attributes: Map<String, String> = emptyMap(),
-    val headers: Map<String, String> = emptyMap(),
-    val url: String? = null,
-    val userAgent: String? = null,
-    val key: String? = null,
-    val keyid: String? = null,
-    val cookie: String? = null,
-    val licenseUrl: String? = null,
-    val drmKeys: Map<String, String> = emptyMap(),
-)
-
-sealed class PlaylistParserException(message: String) : Exception(message) {
-    class InvalidHeader :
-        PlaylistParserException("Invalid file header. Header doesn't start with #EXTM3U")
-}
+import org.json.JSONObject
 
 class IptvPlaylistParser {
 
@@ -156,9 +134,7 @@ class IptvPlaylistParser {
                         bufferedAttributes = line.getAttributes()
 
                         val keyFromAttr = bufferedAttributes["key"] ?: bufferedAttributes["drm-key"]
-                        val keyidFromAttr = bufferedAttributes["keyid"]
-                            ?: bufferedAttributes["drm-keyid"]
-                            ?: bufferedAttributes["kid"]
+                        val keyidFromAttr = bufferedAttributes["keyid"] ?: bufferedAttributes["drm-keyid"] ?: bufferedAttributes["kid"]
 
                         if (bufferedKey == null) bufferedKey = keyFromAttr
                         if (bufferedKeyId == null) bufferedKeyId = keyidFromAttr
@@ -173,12 +149,12 @@ class IptvPlaylistParser {
                             if (map.containsKey("user-agent")) {
                                 bufferedUserAgent = map["user-agent"]
                             }
-                        } catch (_: Exception) {}
+                        } catch (_: Exception) {
+                        }
                     }
                     line.startsWith(LIVETV.EXT_VLC_OPT) -> {
                         val userAgent = line.getTagValue("http-user-agent")
-                        val referrer = line.getTagValue("http-referrer")
-                            ?: line.getTagValue("http-referer")
+                        val referrer = line.getTagValue("http-referrer") ?: line.getTagValue("http-referer")
 
                         if (userAgent != null) bufferedUserAgent = userAgent
                         if (referrer != null) {
@@ -186,9 +162,7 @@ class IptvPlaylistParser {
                         }
                     }
                     line.startsWith("#KODIPROP:inputstream.adaptive.license_key=") -> {
-                        val licenseKey = line
-                            .removePrefix("#KODIPROP:inputstream.adaptive.license_key=")
-                            .trim()
+                        val licenseKey = line.removePrefix("#KODIPROP:inputstream.adaptive.license_key=").trim()
 
                         if (licenseKey.startsWith("http://") || licenseKey.startsWith("https://")) {
                             bufferedLicenseUrl = licenseKey
@@ -236,7 +210,7 @@ class IptvPlaylistParser {
                                 val drmKidBase64 = if (drmKidBytes != null && drmKidBytes.isNotEmpty()) {
                                     Base64.encodeToString(
                                         drmKidBytes,
-                                        Base64.URL_SAFE or Base64.NO_PADDING or Base64.NO_WRAP
+                                        Base64.URL_SAFE or Base64.NO_PADDING or Base64.NO_WRAP,
                                     )
                                 } else {
                                     null
@@ -245,7 +219,7 @@ class IptvPlaylistParser {
                                 val drmKeyBase64 = if (drmKeyBytes != null && drmKeyBytes.isNotEmpty()) {
                                     Base64.encodeToString(
                                         drmKeyBytes,
-                                        Base64.URL_SAFE or Base64.NO_PADDING or Base64.NO_WRAP
+                                        Base64.URL_SAFE or Base64.NO_PADDING or Base64.NO_WRAP,
                                     )
                                 } else {
                                     null
@@ -261,8 +235,9 @@ class IptvPlaylistParser {
                         var j = i + 1
 
                         while (j < allLines.size &&
-                               !allLines[j].trim().startsWith("#") &&
-                               allLines[j].trim().isNotEmpty()) {
+                            !allLines[j].trim().startsWith("#") &&
+                            allLines[j].trim().isNotEmpty()
+                        ) {
                             fullLine += allLines[j].trim()
                             j++
                         }
@@ -298,7 +273,7 @@ class IptvPlaylistParser {
                             key = urlKey ?: bufferedKey,
                             keyid = urlKeyid ?: bufferedKeyId,
                             licenseUrl = urlLicenseUrl ?: bufferedLicenseUrl,
-                            drmKeys = bufferedDrmKeys
+                            drmKeys = bufferedDrmKeys,
                         )
 
                         playlistItems.add(item)
@@ -394,10 +369,7 @@ class IptvPlaylistParser {
 
         val attributes = mutableMapOf<String, String>()
 
-        val attributeRegex = Regex(
-            """(\w[-\w]*)\s*=\s*(?:"([^"]*)"|([^\s,]+))""",
-            RegexOption.IGNORE_CASE
-        )
+        val attributeRegex = Regex("""(\w[-\w]*)\s*=\s*(?:"([^"]*)"|([^\s,]+))""", RegexOption.IGNORE_CASE)
 
         attributeRegex.findAll(attributesString).forEach { matchResult ->
             val key = matchResult.groups[1]?.value ?: ""
@@ -417,4 +389,10 @@ class IptvPlaylistParser {
         val keyRegex = Regex("$key=(.*)", RegexOption.IGNORE_CASE)
         return keyRegex.find(this)?.groups?.get(1)?.value?.replaceQuotesAndTrim()
     }
+}
+
+sealed class PlaylistParserException(message: String) : Exception(message) {
+
+    class InvalidHeader :
+        PlaylistParserException("Invalid file header. Header doesn't start with #EXTM3U")
 }

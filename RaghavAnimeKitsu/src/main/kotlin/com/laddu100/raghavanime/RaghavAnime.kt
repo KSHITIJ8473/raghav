@@ -352,6 +352,7 @@ class RaghavAnime : MainAPI() {
         return newAnimeLoadResponse(title, url, tvType) {
             this.posterUrl = posterUrl
             this.backgroundPosterUrl = bannerUrl
+            this.logoUrl = bannerUrl
             this.year = year
             this.plot = plot
             this.tags = tags

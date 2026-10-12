@@ -1,4 +1,4 @@
-version = 37
+version = 40
 
 android {
     namespace = "com.laddu100"
@@ -7,9 +7,9 @@ android {
         viewBinding = true
     }
     defaultConfig {
-        buildConfigField("String", "FB_API_KEY", "\"AIzaSyDKRqLlbaZBIpHzLBiQTUrJqr3gN-nDWWc\"")
-        buildConfigField("String", "FB_APP_ID", "\"1:516859456626:android:12a75869902c4f8a6826eb\"")
-        buildConfigField("String", "FB_PROJECT_NUMBER", "\"516859456626\"")
+        buildConfigField("String", "FB_API_KEY", "\"AIzaSyAh9jkEU0E_UYxH0m_BKAt-uUSTiTPqhb8\"")
+        buildConfigField("String", "FB_APP_ID", "\"1:963020218535:android:47ec53252c64fb3c9c7b82\"")
+        buildConfigField("String", "FB_PROJECT_NUMBER", "\"963020218535\"")
     }
 }
 dependencies {

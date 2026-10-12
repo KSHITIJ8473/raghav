@@ -7,6 +7,7 @@ import com.lagradost.cloudstream3.plugins.Plugin
 @CloudstreamPlugin
 class JustPlayPlugin : Plugin() {
     override fun load(context: Context) {
+        LiveSports.context = context
         registerMainAPI(JustPlay())
         registerExtractorAPI(PlayHubCloud())
         registerExtractorAPI(PlayVCloud())

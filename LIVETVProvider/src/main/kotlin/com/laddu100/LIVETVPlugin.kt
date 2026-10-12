@@ -10,7 +10,7 @@ import kotlinx.coroutines.runBlocking
 @CloudstreamPlugin
 class LIVETVPlugin : Plugin() {
 
-    private var sharedPref = activity?.getSharedPreferences("LIVETV", Context.MODE_PRIVATE)
+    private val sharedPref = activity?.getSharedPreferences("LIVETV", Context.MODE_PRIVATE)
 
     private var iptvProviders: List<Map<String, Any>> = emptyList()
 
@@ -18,48 +18,41 @@ class LIVETVPlugin : Plugin() {
         LIVETV.context = context
         LIVETVLiveEventsProvider.context = context
 
-        if (sharedPref == null) {
-            sharedPref = activity?.getSharedPreferences("LIVETV", Context.MODE_PRIVATE)
-        }
-
         registerMainAPI(LIVETVLiveEventsProvider())
 
-        iptvProviders = runBlocking { LIVETVProviderManager.fetchProviders() }
+        iptvProviders = runBlocking {
+            LIVETVProviderManager.fetchProviders()
+        }
 
-        val providerSettings = iptvProviders.mapNotNull { p ->
-            val title = p["title"] as? String ?: return@mapNotNull null
+        val providerSettings = iptvProviders.mapNotNull { provider ->
+            val title = provider["title"] as? String ?: return@mapNotNull null
             title to (sharedPref?.getBoolean(title, false) ?: false)
         }.toMap()
 
-        iptvProviders
-            .filter { p ->
-                val title = p["title"] as? String
-                title != null && providerSettings[title] == true
-            }
-            .forEach { p ->
-                val title = p["title"] as String
-                val catLink = p["catLink"] as String
-                val type = p["type"] as? String ?: "custom"
-                val displayTitle = title
-                if (type == "custom") {
-                    registerMainAPI(LIVETVLiveEventsProvider(displayTitle, catLink))
-                } else {
-                    registerMainAPI(LIVETV(displayTitle, catLink))
-                }
-            }
+        val selectedProviders = iptvProviders.filter {
+            val title = it["title"] as? String
+            title != null && providerSettings[title] == true
+        }
 
-        val act = context as AppCompatActivity
-        openSettings = { _ ->
-            val currentProviders = if (iptvProviders.isEmpty()) {
-                runBlocking { LIVETVProviderManager.fetchProviders() }.also { iptvProviders = it }
-            } else {
-                iptvProviders
+        selectedProviders.forEach { provider ->
+            val title = provider["title"] as String
+            val catLink = provider["catLink"] as String
+            var type = provider["type"] as? String
+            if (type == null) {
+                type = "m3u"
             }
-            LIVETVSettings(
-                this,
-                sharedPref,
-                currentProviders.mapNotNull { it["title"] as? String }
-            ).show(act.supportFragmentManager, "LIVETVSettings")
+            val displayTitle = title
+            if (type == "custom") {
+                registerMainAPI(LIVETVLiveEventsProvider(displayTitle, catLink))
+            } else {
+                registerMainAPI(LIVETV(displayTitle, catLink))
+            }
+        }
+
+        val activity = context as AppCompatActivity
+        openSettings = {
+            val frag = LIVETVSettings(this, sharedPref, iptvProviders.mapNotNull { it["title"] as? String })
+            frag.show(activity.supportFragmentManager, "LIVETVSettings")
         }
     }
 }

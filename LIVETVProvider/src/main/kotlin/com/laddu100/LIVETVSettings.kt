@@ -86,11 +86,11 @@ class LIVETVSettings(
             }
             AlertDialog.Builder(requireContext())
                 .setTitle("Restart Required")
-                .setMessage("Changes saved. Restart the app to apply them?")
+                .setMessage("Changes have been saved. Do you want to restart the app to apply them?")
                 .setPositiveButton("Yes") { _, _ -> dismiss(); restartApp() }
                 .setNegativeButton("No") { dlg, _ ->
                     dlg.dismiss()
-                    showToast("Settings saved. Restart to apply changes.")
+                    showToast("Settings saved. Restart app to apply changes.")
                 }
                 .show()
         }

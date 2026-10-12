@@ -309,7 +309,8 @@ class RaghavAnime : MainAPI() {
         }?.firstOrNull()
 
         val syncMetaData = try {
-            app.get("https://api.ani.zip/mappings?anilist_id=$anilistId").text
+            val idParam = if (anilistId != null) "anilist_id=$anilistId" else "kitsu_id=$kitsuId"
+            app.get("https://api.ani.zip/mappings?$idParam").text
         } catch (_: Exception) { null }
         val animeMetaData = syncMetaData?.let { parseAnimeData(it) }
 
@@ -349,10 +350,15 @@ class RaghavAnime : MainAPI() {
 
         prefetchSources(kitsuId, anilistId, title, jpTitle, year)
 
+        val clearLogo = TmdbArtwork.clearLogo(
+            animeMetaData?.mappings?.themoviedb_id,
+            subtype == "movie"
+        )
+
         return newAnimeLoadResponse(title, url, tvType) {
             this.posterUrl = posterUrl
             this.backgroundPosterUrl = bannerUrl
-            this.logoUrl = bannerUrl
+            this.logoUrl = clearLogo
             this.year = year
             this.plot = plot
             this.tags = tags

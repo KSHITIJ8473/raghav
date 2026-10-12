@@ -358,10 +358,15 @@ class RaghavAnime : MainAPI() {
 
         prefetchSources(anilistId, title, jpTitle, year)
 
+        val clearLogo = TmdbArtwork.clearLogo(
+            animeMetaData?.mappings?.themoviedb_id,
+            media.format == "MOVIE"
+        )
+
         return newAnimeLoadResponse(title, url, tvType) {
             this.posterUrl = posterUrl
             this.backgroundPosterUrl = bannerUrl
-            this.logoUrl = bannerUrl
+            this.logoUrl = clearLogo
             this.year = year
             this.plot = plot
             this.tags = tags

@@ -213,10 +213,15 @@ class Miruro : MainAPI() {
             }
         } catch (e: Exception) { e.message }
 
+        val clearLogo = try {
+            val meta = parseAnimeData(app.get("https://api.ani.zip/mappings?anilist_id=$anilistId").text)
+            TmdbArtwork.clearLogo(meta?.mappings?.themoviedb_id, media.format == "MOVIE")
+        } catch (_: Exception) { null }
+
         return newAnimeLoadResponse(title, url, tvType) {
             this.posterUrl = posterUrl
             this.backgroundPosterUrl = bannerUrl
-            this.logoUrl = bannerUrl
+            this.logoUrl = clearLogo
             this.year = year
             this.plot = plot
             this.tags = tags

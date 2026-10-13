@@ -23,6 +23,9 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -176,8 +179,10 @@ class RaghavAnime : MainAPI() {
             return try {
                 val list = RaghavAnimeFeatures.getRecommendationsList()
                 val home = list.map { item ->
-                    newAnimeSearchResponse(item.title, item.url, TvType.Anime) {
-                        this.posterUrl = item.posterUrl
+                    val anilistId = Regex("""/info/(\d+)""").find(item.url)?.groupValues?.get(1)?.toIntOrNull()
+                    val poster = CustomPosters.poster(anilistId, null, false, item.posterUrl)
+                    newAnimeSearchResponse(CustomPosters.cardTitle(item.title), item.url, TvType.Anime) {
+                        this.posterUrl = poster
                     }
                 }
                 newHomePageResponse(request.name, home)
@@ -220,27 +225,11 @@ class RaghavAnime : MainAPI() {
                 homePageCache[request.data] = mediaList
             }
 
-            mediaList.mapNotNull { media ->
-                val id = media.id ?: return@mapNotNull null
-                val title = media.title?.english ?: media.title?.romaji ?: return@mapNotNull null
-                val posterUrl = media.coverImage?.extraLarge ?: media.coverImage?.large
-                newAnimeSearchResponse(title, "$mainUrl/info/$id", TvType.Anime) {
-                    this.posterUrl = posterUrl
-                    addDubStatus(dubExist = true, subExist = true, dubEpisodes = media.episodes, subEpisodes = media.episodes)
-                }
-            }
+            buildRowItems(mediaList)
         } catch (e: Exception) {
             val cached = homePageCache[request.data]
             if (cached != null) {
-                cached.mapNotNull { media ->
-                    val id = media.id ?: return@mapNotNull null
-                    val title = media.title?.english ?: media.title?.romaji ?: return@mapNotNull null
-                    val posterUrl = media.coverImage?.extraLarge ?: media.coverImage?.large
-                    newAnimeSearchResponse(title, "$mainUrl/info/$id", TvType.Anime) {
-                        this.posterUrl = posterUrl
-                        addDubStatus(dubExist = true, subExist = true, dubEpisodes = media.episodes, subEpisodes = media.episodes)
-                    }
-                }
+                buildRowItems(cached)
             } else {
                 emptyList()
             }
@@ -248,6 +237,24 @@ class RaghavAnime : MainAPI() {
 
         return newHomePageResponse(request.name, home)
     }
+
+    // every custom poster costs one ani.zip lookup, resolve the row in
+    // parallel and keep the anilist cover when the feature is off or fails
+    private suspend fun buildRowItems(mediaList: List<AniListMedia>): List<SearchResponse> =
+        coroutineScope {
+            mediaList.map { media ->
+                async {
+                    val id = media.id ?: return@async null
+                    val title = media.title?.english ?: media.title?.romaji ?: return@async null
+                    val fallback = media.coverImage?.extraLarge ?: media.coverImage?.large
+                    val poster = CustomPosters.poster(id, null, media.format == "MOVIE", fallback)
+                    newAnimeSearchResponse(CustomPosters.cardTitle(title), "$mainUrl/info/$id", TvType.Anime) {
+                        this.posterUrl = poster
+                        addDubStatus(dubExist = true, subExist = true, dubEpisodes = media.episodes, subEpisodes = media.episodes)
+                    }
+                }
+            }.awaitAll().filterNotNull()
+        }
 
     override suspend fun search(query: String): List<SearchResponse> {
         isAniListDown()
@@ -260,9 +267,10 @@ class RaghavAnime : MainAPI() {
             mediaList.mapNotNull { media ->
                 val id = media.id ?: return@mapNotNull null
                 val title = media.title?.english ?: media.title?.romaji ?: return@mapNotNull null
-                val posterUrl = media.coverImage?.extraLarge ?: media.coverImage?.large
-                newAnimeSearchResponse(title, "$mainUrl/info/$id", TvType.Anime) {
-                    this.posterUrl = posterUrl
+                val fallback = media.coverImage?.extraLarge ?: media.coverImage?.large
+                val poster = CustomPosters.poster(id, null, media.format == "MOVIE", fallback)
+                newAnimeSearchResponse(CustomPosters.cardTitle(title), "$mainUrl/info/$id", TvType.Anime) {
+                    this.posterUrl = poster
                     addDubStatus(dubExist = true, subExist = true, dubEpisodes = media.episodes, subEpisodes = media.episodes)
                 }
             }
@@ -363,8 +371,10 @@ class RaghavAnime : MainAPI() {
             media.format == "MOVIE"
         )
 
+        val poster = CustomPosters.poster(anilistId, null, media.format == "MOVIE", posterUrl, animeMetaData?.mappings)
+
         return newAnimeLoadResponse(title, url, tvType) {
-            this.posterUrl = posterUrl
+            this.posterUrl = poster
             this.backgroundPosterUrl = bannerUrl
             this.logoUrl = clearLogo
             this.year = year

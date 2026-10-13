@@ -3,6 +3,8 @@ package com.laddu100.raghavanime
 import android.app.Dialog
 import android.content.Context
 import android.content.res.ColorStateList
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.LinearGradient
@@ -11,6 +13,7 @@ import android.graphics.Path
 import android.graphics.Shader
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.text.InputType
 import android.view.Gravity
 import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
@@ -21,13 +24,22 @@ import android.view.animation.DecelerateInterpolator
 import android.view.animation.OvershootInterpolator
 import android.widget.Button
 import android.widget.CompoundButton
+import android.widget.EditText
 import android.widget.FrameLayout
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.widget.SwitchCompat
+import com.lagradost.cloudstream3.app
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import okhttp3.Request
 
 object RaghavAnimeSettings {
 
@@ -417,6 +429,9 @@ object RaghavAnimeSettings {
         val featuresRow = homeRow(ctx, "Features", "Watch time and recommendations") { openFeatures(ctx) }
         root.addView(featuresRow)
 
+        val postersRow = homeRow(ctx, "Posters", "Custom poster template and labels") { openPosters(ctx) }
+        root.addView(postersRow)
+
         val perfRow = homeRow(ctx, "Performance", "Loading concurrency") { openPerformance(ctx) }
         root.addView(perfRow)
 
@@ -444,6 +459,7 @@ object RaghavAnimeSettings {
         hero.scaleX = 0.94f; hero.scaleY = 0.94f
         section.alpha = 0f; section.translationX = 70f
         featuresRow.alpha = 0f; featuresRow.translationX = 70f
+        postersRow.alpha = 0f; postersRow.translationX = 70f
         perfRow.alpha = 0f; perfRow.translationX = 70f
         close.alpha = 0f
 
@@ -458,7 +474,8 @@ object RaghavAnimeSettings {
                 .setDuration(460).setInterpolator(DecelerateInterpolator()).start()
             slideIn(section, 0)
             slideIn(featuresRow, 1)
-            slideIn(perfRow, 2)
+            slideIn(postersRow, 2)
+            slideIn(perfRow, 3)
             close.animate().alpha(1f).setStartDelay(320).setDuration(350)
                 .setInterpolator(DecelerateInterpolator()).start()
         }
@@ -534,6 +551,204 @@ object RaghavAnimeSettings {
                     .show()
             })
         }
+    }
+
+    private fun openPosters(ctx: Context) {
+        subWindow(ctx, "POSTERS") { body ->
+            body.addView(labelBlock(ctx, "Custom posters",
+                "Poster template and title labels"))
+
+            val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+
+            val templateField = EditText(ctx).apply {
+                hint = "https://…/{imdb_id}.jpg"
+                setText(CustomPosters.template)
+                textSize = 13.5f
+                setTextColor(TEXT)
+                setHintTextColor(SUBTEXT)
+                inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
+                background = null
+                setSingleLine(true)
+                setPadding(dp(ctx, 2), dp(ctx, 10), dp(ctx, 2), dp(ctx, 10))
+            }
+            val fieldCard = LinearLayout(ctx).apply {
+                background = shape(SURFACE, 14, ctx, 1, BORDER)
+                setPadding(dp(ctx, 14), dp(ctx, 4), dp(ctx, 14), dp(ctx, 4))
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply { bottomMargin = dp(ctx, 8) }
+            }
+            fieldCard.addView(templateField, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ))
+
+            class Sample(
+                val label: String, val anilistId: Int, val imdbId: String,
+                val tmdbId: Int, val isMovie: Boolean, val poster: String
+            )
+            val samples = listOf(
+                Sample("One Piece", 21, "tt0388629", 37854, false,
+                    "https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx21-ELSYx3yMPcKM.jpg"),
+                Sample("Your Name", 21519, "tt5311514", 372058, true,
+                    "https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx21519-SUo3ZQuCbYhJ.png"),
+            )
+
+            val images = samples.map {
+                ImageView(ctx).apply {
+                    scaleType = ImageView.ScaleType.CENTER_CROP
+                    background = shape(SURFACE_2, 12, ctx, 1, BORDER)
+                    clipToOutline = true
+                }
+            }
+            val names = samples.map { s ->
+                TextView(ctx).apply {
+                    text = s.label; setTextColor(TEXT); textSize = 13f
+                    setTypeface(typeface, Typeface.BOLD); gravity = Gravity.CENTER
+                }
+            }
+            val notes = samples.map {
+                TextView(ctx).apply {
+                    setTextColor(SUBTEXT); textSize = 10.5f; gravity = Gravity.CENTER
+                }
+            }
+            val previewRow = LinearLayout(ctx).apply {
+                orientation = LinearLayout.HORIZONTAL
+                weightSum = samples.size.toFloat()
+            }
+            samples.forEachIndexed { i, _ ->
+                previewRow.addView(LinearLayout(ctx).apply {
+                    orientation = LinearLayout.VERTICAL
+                    gravity = Gravity.CENTER_HORIZONTAL
+                    setPadding(dp(ctx, 6), 0, dp(ctx, 6), 0)
+                    addView(images[i], LinearLayout.LayoutParams(dp(ctx, 110), dp(ctx, 165)))
+                    addView(names[i], LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+                    ).apply { topMargin = dp(ctx, 7) })
+                    addView(notes[i], LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+                    ).apply { topMargin = dp(ctx, 2) })
+                }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            }
+
+            // guard against a slow load overwriting a newer preview
+            var generation = 0
+            fun reloadPreview() {
+                val gen = ++generation
+                val tpl = if (CustomPosters.enabled) templateField.text.toString().trim()
+                    .replace("%7B", "{", ignoreCase = true)
+                    .replace("%7D", "}", ignoreCase = true)
+                    .takeIf { it.startsWith("http://") || it.startsWith("https://") } else null
+                samples.forEachIndexed { i, s ->
+                    names[i].visibility = if (CustomPosters.hideLabels) View.GONE else View.VISIBLE
+                    images[i].setImageDrawable(null)
+                    notes[i].text = "Loading"
+                    scope.launch {
+                        val url = tpl?.let { t ->
+                            t.replace("{imdb_id}", s.imdbId)
+                                .replace("{tmdb_id}", s.tmdbId.toString())
+                                .replace("{anilist_id}", s.anilistId.toString())
+                                .replace("{type}", if (s.isMovie) "movie" else "series")
+                        } ?: s.poster
+                        val bmp = try {
+                            withContext(Dispatchers.IO) { downloadPoster(url) }
+                        } catch (_: Exception) { null }
+                        if (gen != generation) return@launch
+                        if (bmp != null) {
+                            images[i].setImageBitmap(bmp)
+                            notes[i].text = if (tpl != null) "Custom poster" else "Default poster"
+                        } else {
+                            notes[i].text = if (tpl != null) "Custom poster failed to load" else "Could not load poster"
+                        }
+                    }
+                }
+            }
+
+            val chips = LinearLayout(ctx).apply {
+                orientation = LinearLayout.HORIZONTAL
+                setPadding(0, dp(ctx, 2), 0, dp(ctx, 2))
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply { bottomMargin = dp(ctx, 8) }
+            }
+            CustomPosters.presets.forEach { (label, url) ->
+                chips.addView(TextView(ctx).apply {
+                    text = label; textSize = 12.5f; setTextColor(RED_BRIGHT)
+                    setTypeface(typeface, Typeface.BOLD)
+                    background = shape(SURFACE_2, 16, ctx, 1, BORDER_HI)
+                    setPadding(dp(ctx, 14), dp(ctx, 7), dp(ctx, 14), dp(ctx, 7))
+                    layoutParams = LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+                    ).apply { rightMargin = dp(ctx, 8) }
+                    isClickable = true; isFocusable = true
+                    setOnClickListener {
+                        templateField.setText(url)
+                        reloadPreview()
+                    }
+                })
+            }
+
+            val (posterRow, _) = toggleRow(
+                ctx, "Custom Poster",
+                "Use your own poster template",
+                CustomPosters.enabled
+            ) { checked ->
+                CustomPosters.enabled = checked
+                val v = if (checked) View.VISIBLE else View.GONE
+                fieldCard.visibility = v
+                chips.visibility = v
+                reloadPreview()
+            }
+            body.addView(posterRow)
+
+            val fieldVisible = if (CustomPosters.enabled) View.VISIBLE else View.GONE
+            fieldCard.visibility = fieldVisible
+            chips.visibility = fieldVisible
+            body.addView(fieldCard)
+            body.addView(chips)
+
+            val (hideRow, _) = toggleRow(
+                ctx, "Hide Labels",
+                "No titles under the posters",
+                CustomPosters.hideLabels
+            ) { checked ->
+                CustomPosters.hideLabels = checked
+                reloadPreview()
+            }
+            body.addView(hideRow)
+
+            body.addView(labelBlock(ctx, "Preview", null))
+            body.addView(previewRow)
+            reloadPreview()
+
+            body.addView(Button(ctx).apply {
+                text = "SAVE"; textSize = 15f
+                setTextColor(Color.WHITE); setTypeface(typeface, Typeface.BOLD)
+                letterSpacing = 0.03f
+                stateListAnimator = null
+                isAllCaps = false
+                background = GradientDrawable().apply {
+                    orientation = GradientDrawable.Orientation.LEFT_RIGHT
+                    colors = intArrayOf(RED_BRIGHT, RED_DEEP)
+                    cornerRadius = dp(ctx, 16).toFloat()
+                }
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply { topMargin = dp(ctx, 12) }
+                setPadding(0, dp(ctx, 15), 0, dp(ctx, 15))
+                setOnClickListener {
+                    CustomPosters.template = templateField.text.toString()
+                    Toast.makeText(ctx, "Template saved", Toast.LENGTH_SHORT).show()
+                }
+            })
+        }
+    }
+
+    private fun downloadPoster(url: String): Bitmap? = try {
+        app.baseClient.newCall(Request.Builder().url(url).build()).execute().use { r ->
+            if (!r.isSuccessful) null else r.body?.byteStream()?.let { BitmapFactory.decodeStream(it) }
+        }
+    } catch (_: Exception) {
+        null
     }
 
     private fun openPerformance(ctx: Context) {

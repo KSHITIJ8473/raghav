@@ -73,7 +73,7 @@ object EsFeeds {
         JioStatic("3278", "Star Sports 1 Telugu HD", "https://img.media.jio.com/tvpimages/19/57/302123_1749663029798_l_medium.jpg"),
         JioStatic("1651", "Star Sports 1 Telugu", "https://img.media.jio.com/tvpimages/26/67/302119_1749662981095_l_medium.jpg"),
         JioStatic("1650", "Star Sports 1 Kannada", "https://img.media.jio.com/tvpimages/13/91/302118_1749663894692_l_medium.jpg"),
-        JioStatic("3372", "Sony LIV Sports 1", "https://jiotv.catchup.cdn.jio.com/dare_images/images/SonyLIV_Sports_1.png"),
+        JioStatic("162", "Sony LIV Sports 1", "https://jiotv.catchup.cdn.jio.com/dare_images/images/SonyLIV_Sports_1.png"),
         JioStatic("3373", "Sony LIV Sports 2", "https://jiotv.catchup.cdn.jio.com/dare_images/images/SonyLIV_Sports_2.png"),
         JioStatic("3374", "Sony LIV Sports 3", "https://jiotv.catchup.cdn.jio.com/dare_images/images/SonyLIV_Sports_3.png"),
         JioStatic("3399", "Sony LIV Sports 5", "https://jiotv.catchup.cdn.jio.com/dare_images/images/SonyLIV_Sports_5.png"),
@@ -104,7 +104,7 @@ object EsFeeds {
         JioStatic("255", "NDTV 24x7", "https://jiotv.catchup.cdn.jio.com/dare_images/images/NDTV_24x7.png"),
         JioStatic("383", "Times NOW", "https://jiotv.catchup.cdn.jio.com/dare_images/images/Times_NOW.png"),
         JioStatic("412", "Wion", "https://jiotv.catchup.cdn.jio.com/dare_images/images/Wion.png"),
-        JioStatic("231", "News 18 India", "https://jiotv.catchup.cdn.jio.com/dare_images/images/IBN_7.png"),
+        JioStatic("1499", "News 18 India", "https://jiotv.catchup.cdn.jio.com/dare_images/images/IBN_7.png"),
         JioStatic("504", "Zee News", "https://jiotv.catchup.cdn.jio.com/dare_images/images/Zee_News.png"),
         JioStatic("1403", "Republic Bharat", "https://jiotv.catchup.cdn.jio.com/dare_images/images/Republic_Bharat.png"),
         JioStatic("463", "Discovery HD English", "https://jiotv.catchup.cdn.jio.com/dare_images/images/DiscoveryHDEng.png"),
@@ -237,6 +237,23 @@ object EsFeeds {
     private fun attr(line: String, name: String): String? =
         Regex("""$name="([^"]*)"""").find(line)?.groupValues?.get(1)
 
+    // the feeds and the jio api both hand out urls with doubled slashes in
+    // the path or a dangling empty query, the jio cdns reject those outright
+    private fun cleanUrl(raw: String): String {
+        var url = raw.trim()
+        val schemeAt = url.indexOf("://")
+        if (schemeAt >= 0 && schemeAt + 3 < url.length) {
+            val scheme = url.substring(0, schemeAt + 3)
+            val rest = url.substring(schemeAt + 3)
+            val queryAt = rest.indexOf('?')
+            val path = if (queryAt >= 0) rest.substring(0, queryAt) else rest
+            val query = if (queryAt >= 0) rest.substring(queryAt) else ""
+            url = scheme + path.replace(Regex("/{2,}"), "/") + query
+        }
+        while (url.endsWith("?") || url.endsWith("&")) url = url.dropLast(1)
+        return url
+    }
+
     private fun extinfTitle(line: String): String {
         var inside = false
         var lastComma = -1
@@ -315,7 +332,7 @@ object EsFeeds {
                     }
                 }
                 line.isNotEmpty() && !line.startsWith("#") -> {
-                    cur.url = line.substringBefore("|").trim()
+                    cur.url = cleanUrl(line.substringBefore("|"))
                     for (param in line.substringAfter("|", "").split("&")) {
                         val kv = param.split("=", limit = 2)
                         if (kv.size != 2) continue
@@ -531,6 +548,35 @@ object EsFeeds {
         )
     }
 
+    // the api reuses a few ids across two different channels and drops
+    // channels from time to time, the channel name sorts both cases out
+    private fun findJioEntry(jioId: String, name: String?): JioApiEntry? {
+        val byId = jioApiCache.entries.filter { it.id == jioId }
+        return when {
+            byId.size == 1 -> byId.first()
+            byId.size > 1 ->
+                byId.firstOrNull { name != null && sameChannelName(it.name, name) }
+                    ?: byId.first()
+            else -> name?.let { wanted ->
+                jioApiCache.entries.firstOrNull { sameChannelName(it.name, wanted) }
+            }
+        }
+    }
+
+    // api names drift a little from the curated list, "&" vs "and", word
+    // order and spacing, none of that should break the lookup
+    private fun sameChannelName(a: String?, b: String?): Boolean {
+        if (a.isNullOrBlank() || b.isNullOrBlank()) return false
+        if (a.trim().equals(b.trim(), ignoreCase = true)) return true
+        val one = a.trim().lowercase().replace("&", " and ")
+        val two = b.trim().lowercase().replace("&", " and ")
+        if (one == two) return true
+        if (one.replace(" ", "") == two.replace(" ", "")) return true
+        val oneWords = one.split(Regex("\\s+")).filter { it.isNotBlank() }.sorted()
+        val twoWords = two.split(Regex("\\s+")).filter { it.isNotBlank() }.sorted()
+        return oneWords == twoWords
+    }
+
     // resolves a static jio channel to a playable stream, the api hands out
     // fresh akamai cookies and clearkey pairs for every channel id
     suspend fun resolveJio(jioId: String, fallbackName: String? = null): StreamData? {
@@ -547,16 +593,31 @@ object EsFeeds {
             }
             jioApiCache.at = System.currentTimeMillis()
         }
-        val entry = jioApiCache.entries.firstOrNull { it.id == jioId }
+        val entry = findJioEntry(jioId, fallbackName) ?: return jioFallback(fallbackName)
+        val base = entry.url?.takeIf { it.startsWith("http") }?.let { cleanUrl(it) }
             ?: return jioFallback(fallbackName)
-        val base = entry.url?.takeIf { it.startsWith("http") } ?: return jioFallback(fallbackName)
 
         val headers = mutableMapOf(
             "User-Agent" to JIO_UA,
             "Referer" to "https://www.jiotv.com/"
         )
-        entry.cookie?.takeIf { it.isNotBlank() }?.let {
-            headers["Cookie"] = it
+        // some entries pack referer, origin and user-agent into the cookie
+        // field behind ampersands, only the first segment is the cookie
+        entry.cookie?.takeIf { it.isNotBlank() }?.let { raw ->
+            val parts = raw.split("&")
+            parts.firstOrNull()?.trim()?.takeIf { it.isNotEmpty() }?.let {
+                headers["Cookie"] = it
+            }
+            parts.drop(1).forEach { part ->
+                val name = part.substringBefore("=").trim().lowercase()
+                val value = part.substringAfter("=", "").trim()
+                if (value.isEmpty()) return@forEach
+                when (name) {
+                    "user-agent" -> headers["User-Agent"] = value
+                    "referer", "referrer" -> headers["Referer"] = value
+                    "origin" -> headers["Origin"] = value
+                }
+            }
         }
 
         // the api mixes two shapes: most entries keep a bare kid in keyId
@@ -609,7 +670,10 @@ object EsFeeds {
     // big pluglist feed carries the same channels with inline keys
     private suspend fun jioFallback(fallbackName: String?): StreamData? {
         if (fallbackName.isNullOrBlank()) return null
-        val hit = pluglist().firstOrNull { it.name == "$fallbackName (JioTV+ 3)" }
+        val channels = pluglist()
+        val wanted = "$fallbackName (JioTV+ 3)"
+        val hit = channels.firstOrNull { it.name == wanted }
+            ?: channels.firstOrNull { it.name.equals(wanted, ignoreCase = true) }
         return hit?.streams?.firstOrNull()
     }
 

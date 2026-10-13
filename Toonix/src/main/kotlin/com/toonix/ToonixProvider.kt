@@ -26,6 +26,8 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import java.net.URLEncoder
+import java.text.Normalizer
 
 class Toonix : MainAPI() {
     override var mainUrl = ToonixApi.BASE
@@ -86,6 +88,13 @@ class Toonix : MainAPI() {
 
     companion object {
         private val fetchLock = Mutex()
+
+        // the site search drops these words before matching, scoring mirrors that
+        private val STOP_WORDS = setOf(
+            "the", "a", "an", "of", "and", "in", "hindi", "dubbed", "dub", "movie",
+            "movies", "season", "episode", "episodes", "watch", "full", "series",
+            "show", "cartoon", "anime"
+        )
     }
 
     private fun cachedHome(): HomeData? =
@@ -150,21 +159,171 @@ class Toonix : MainAPI() {
         return newHomePageResponse(request.name, cards.mapNotNull { cardToSearch(it) }, hasNext = false)
     }
 
+    private class NameMatch(val text: String, val words: List<String>, val compact: String, val grams: Set<String>)
+
+    private fun normalizeName(raw: String): String {
+        val nfd = Normalizer.normalize(raw, Normalizer.Form.NFD)
+        return nfd.replace(Regex("\\p{Mn}+"), "")
+            .replace("&", " and ")
+            .replace("['’`]".toRegex(), "")
+            .lowercase()
+            .replace(Regex("[^a-z0-9]+"), " ")
+            .trim()
+    }
+
+    private fun buildNameMatch(text: String): NameMatch {
+        val compact = text.replace(" ", "")
+        return NameMatch(text, text.split(" ").filter { it.isNotEmpty() }, compact, trigrams(compact))
+    }
+
+    private fun cardNames(card: ToonixCard): List<NameMatch> {
+        return (listOf(card.title) + card.aka).mapNotNull { raw ->
+            val text = normalizeName(raw)
+            if (text.isEmpty()) null else buildNameMatch(text)
+        }
+    }
+
+    private fun trigrams(compact: String): Set<String> {
+        val padded = "  $compact "
+        val out = HashSet<String>()
+        for (i in 0..padded.length - 3) out.add(padded.substring(i, i + 3))
+        return out
+    }
+
+    private fun boundedDistance(a: String, b: String, max: Int): Int {
+        if (kotlin.math.abs(a.length - b.length) > max) return max + 1
+        var row2 = IntArray(0)
+        var row1 = IntArray(b.length + 1) { it }
+        for (i in 1..a.length) {
+            val row = IntArray(b.length + 1)
+            row[0] = i
+            var rowBest = i
+            for (j in 1..b.length) {
+                var v = minOf(row1[j] + 1, row[j - 1] + 1, row1[j - 1] + if (a[i - 1] == b[j - 1]) 0 else 1)
+                if (i > 1 && j > 1 && a[i - 1] == b[j - 2] && a[i - 2] == b[j - 1]) {
+                    v = minOf(v, row2[j - 2] + 1)
+                }
+                row[j] = v
+                if (v < rowBest) rowBest = v
+            }
+            if (rowBest > max) return max + 1
+            row2 = row1
+            row1 = row
+        }
+        return row1[b.length]
+    }
+
+    private fun wordScore(queryWord: String, nameWord: String): Double = when {
+        queryWord == nameWord -> 1.0
+        nameWord.startsWith(queryWord) -> if (queryWord.length >= 2) 0.9 else 0.6
+        else -> {
+            val max = when {
+                queryWord.length >= 8 -> 2
+                queryWord.length >= 4 -> 1
+                else -> 0
+            }
+            if (max == 0) 0.0
+            else if (boundedDistance(queryWord, nameWord, max) <= max) 0.75
+            else if (nameWord.length > queryWord.length &&
+                boundedDistance(queryWord, nameWord.substring(0, queryWord.length), max) <= max
+            ) 0.6
+            else 0.0
+        }
+    }
+
+    private fun nameScore(query: NameMatch, name: NameMatch): Double {
+        if (name.text.isEmpty()) return 0.0
+        if (name.text == query.text || name.compact == query.compact) return 100.0
+        val ratio = minOf(1.0, query.compact.length.toDouble() / maxOf(1, name.compact.length))
+        if (name.text.startsWith(query.text) || name.compact.startsWith(query.compact)) return 88.0 + 8.0 * ratio
+        if (query.compact.length < 2) return 0.0
+
+        var score = 0.0
+        if (query.compact.length >= 3 && name.compact.contains(query.compact)) {
+            score = 76.0 + 6.0 * ratio
+        }
+        val meaningful = query.words.filter { it !in STOP_WORDS }.ifEmpty { query.words }
+        if (meaningful.isNotEmpty()) {
+            var sum = 0.0
+            var matched = 0
+            for (queryWord in meaningful) {
+                var best = 0.0
+                for (nameWord in name.words) best = maxOf(best, wordScore(queryWord, nameWord))
+                if (best < 0.75 && queryWord.length >= 5 && name.compact.contains(queryWord)) best = 0.8
+                sum += best
+                if (best > 0) matched++
+            }
+            val nameWords = name.words.filter { it !in STOP_WORDS }
+            val coverage = minOf(1.0, meaningful.size.toDouble() / maxOf(1, nameWords.size))
+            score = when {
+                matched == meaningful.size -> maxOf(score, 48.0 + sum / meaningful.size * 24.0 + 6.0 * coverage)
+                meaningful.size >= 3 && matched.toDouble() / meaningful.size >= 0.66 ->
+                    maxOf(score, 25.0 + matched.toDouble() / meaningful.size * 20.0)
+                else -> score
+            }
+        }
+        if (query.compact.length >= 4) {
+            val overlap = query.grams.count { it in name.grams }.toDouble()
+            val jaccard = overlap / maxOf(1, minOf(query.grams.size, name.grams.size))
+            if (jaccard >= 0.5) score = maxOf(score, 30.0 + 36.0 * jaccard + 4.0 * ratio)
+        }
+        return score
+    }
+
     override suspend fun search(query: String): List<SearchResponse>? {
         if (query.isBlank()) return null
+        siteSearch(query)?.let { return it }
+
         var cards = searchCatalog.load()
         if (cards.isEmpty()) {
             cards = try {
                 home().cards
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (e: Exception) {
+                Log.d("Toonix", "home fallback for search failed: ${e.message}")
                 emptyList()
             }
         }
         if (cards.isEmpty()) return null
-        val q = query.trim().lowercase()
-        val matches = cards.filter { it.title.lowercase().contains(q) }
-        val chosen = matches.ifEmpty { cards }
-        return chosen.mapNotNull { cardToSearch(it) }
+
+        val needle = normalizeName(query)
+        if (needle.isEmpty()) return null
+        val queryMatch = buildNameMatch(needle)
+
+        val matches = cards.mapNotNull { card ->
+            var best = 0.0
+            for (name in cardNames(card)) best = maxOf(best, nameScore(queryMatch, name))
+            if (best < 40.0 && card.genres.any { g ->
+                    val genre = normalizeName(g)
+                    genre == needle || (needle.length >= 3 && genre.startsWith(needle))
+                }
+            ) {
+                best = 40.0
+            }
+            if (best >= 35.0) best to card else null
+        }.sortedWith(
+            compareByDescending<Pair<Double, ToonixCard>> { it.first }
+                .thenBy { if (it.second.type == "SHOW") 0 else 1 }
+                .thenByDescending { it.second.year ?: 0 }
+        ).map { it.second }
+
+        return matches.mapNotNull { cardToSearch(it) }
+    }
+
+    private suspend fun siteSearch(query: String): List<SearchResponse>? {
+        val encoded = URLEncoder.encode(query.trim(), "UTF-8")
+        return try {
+            val (html, _) = ToonixApi.fetchPage("${ToonixApi.BASE}/search?q=$encoded", checkTitle = false)
+            ToonixApi.parseSearchResults(html)
+                .mapNotNull { cardToSearch(it) }
+                .ifEmpty { null }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.d("Toonix", "site search unavailable: ${e.message}")
+            null
+        }
     }
 
     override suspend fun load(url: String): LoadResponse? {
@@ -219,6 +378,7 @@ class Toonix : MainAPI() {
                     } catch (e: kotlinx.coroutines.CancellationException) {
                         throw e
                     } catch (e: Exception) {
+                        Log.d("Toonix", "season $num page failed for $slug: ${e.message}")
                         num to emptyList<Triple<Int, Int, String>>()
                     }
                 }
@@ -258,7 +418,7 @@ class Toonix : MainAPI() {
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {
-                // season pages below still cover this
+                Log.d("Toonix", "episode rail unavailable for $slug: ${e.message}")
             }
         }
         if (episodes.isEmpty() && info.seasonHrefs.isNotEmpty()) {
@@ -325,7 +485,7 @@ class Toonix : MainAPI() {
         } catch (e: Exception) {
             throw ErrorLoadingException("Could not open the episode page: ${e.message}")
         }
-        val (fastRaw, legacyRaw) = ToonixApi.parseStreamSrcs(flight)
+        val player = ToonixApi.parsePlayer(flight)
 
         val seen = mutableSetOf<String>()
         var emitted = false
@@ -342,20 +502,25 @@ class Toonix : MainAPI() {
             emitted = true
         }
 
-        if (fastRaw != null) {
-            val fastUrl = ToonixApi.absolutize(fastRaw, url)
-            val master = ToonixApi.fetchMaster(fastUrl)
-            when {
-                master.isMaster -> master.variants.forEach { v ->
-                    val label = if (v.height != null) "Fast ${v.height}p" else "Fast (auto)"
-                    emit(label, v.url, ExtractorLinkType.M3U8, v.height)
+        for (server in player.servers) {
+            val versions = server.versions.ifEmpty { listOf(ToonixStreamVersion(src = server.src)) }
+            for (version in versions) {
+                if (version.src.isBlank()) continue
+                val srcUrl = ToonixApi.absolutize(version.src, url)
+                val tag = if (server.versions.size > 1 && !version.label.isNullOrBlank()) "${version.label} " else ""
+                val master = ToonixApi.fetchMaster(srcUrl)
+                when {
+                    master.isMaster -> master.variants.forEach { v ->
+                        val label = tag + if (v.height != null) "Fast ${v.height}p" else "Fast (auto)"
+                        emit(label, v.url, ExtractorLinkType.M3U8, v.height)
+                    }
+                    master.isMedia -> emit(tag + "Fast (auto)", srcUrl, ExtractorLinkType.M3U8)
+                    master.isBusy -> if (busyFallback == null) busyFallback = "Fast (busy, retry later)" to srcUrl
                 }
-                master.isMedia -> emit("Fast (auto)", fastUrl, ExtractorLinkType.M3U8)
-                master.isBusy -> busyFallback = "Fast (busy, retry later)" to fastUrl
             }
         }
 
-        if (legacyRaw != null) {
+        player.legacySrc?.let { legacyRaw ->
             if (legacyRaw.contains("archive.org") || legacyRaw.endsWith(".mp4")) {
                 emit("Archive", legacyRaw, ExtractorLinkType.VIDEO)
             } else {

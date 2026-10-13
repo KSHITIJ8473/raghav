@@ -1,5 +1,6 @@
 package com.toonix
 
+import android.util.Log
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.lagradost.cloudstream3.app
@@ -16,7 +17,9 @@ data class ToonixCard(
     val year: Int? = null,
     val type: String = "SHOW",
     val category: String = "CARTOON",
-    val meta: String? = null
+    val meta: String? = null,
+    val genres: List<String> = emptyList(),
+    val aka: List<String> = emptyList()
 )
 
 @JsonIgnoreProperties(ignoreUnknown = true)
@@ -32,6 +35,21 @@ data class ToonixRailSeason(
     val number: Int? = null,
     val title: String? = null,
     val episodes: List<ToonixRailEpisode> = emptyList()
+)
+
+@JsonIgnoreProperties(ignoreUnknown = true)
+data class ToonixStreamVersion(val label: String? = null, val src: String = "")
+
+@JsonIgnoreProperties(ignoreUnknown = true)
+data class ToonixServerStream(
+    val key: String? = null,
+    val src: String = "",
+    val versions: List<ToonixStreamVersion> = emptyList()
+)
+
+data class ToonixPlayer(
+    val servers: List<ToonixServerStream>,
+    val legacySrc: String?
 )
 
 data class ToonixShowInfo(
@@ -77,7 +95,6 @@ object ToonixApi {
     private val flightChunkRegex = Regex("""self\.__next_f\.push\(\[1,"((?:[^"\\]|\\.)*)"\]\)""")
     private val sectionRegex = Regex(""""title":"([^"]+)","viewAllHref"""")
     private val slugHrefRegex = Regex(""""slug":"([^"]+)","href":"([^"]+)"""")
-    private val fastSrcRegex = Regex(""""fastSrc":(?:"([^"]+)"|null)""")
     private val legacySrcRegex = Regex(""""legacySrc":(?:"([^"]+)"|null)""")
     private val yearShowRegex = Regex(""""children":\["\(",(\d{4}),"\)"\]""")
     private val yearMovieRegex = Regex(""""children":(\d{4})\}""")
@@ -189,7 +206,59 @@ object ToonixApi {
         return out.toString()
     }
 
+    private fun jsonArrayAfter(flight: String, bracketStart: Int): String? {
+        var depth = 0
+        var inString = false
+        var escaped = false
+        for (i in bracketStart until flight.length) {
+            val c = flight[i]
+            if (inString) {
+                when {
+                    escaped -> escaped = false
+                    c == '\\' -> escaped = true
+                    c == '"' -> inString = false
+                }
+            } else {
+                when (c) {
+                    '"' -> inString = true
+                    '[' -> depth++
+                    ']' -> {
+                        depth--
+                        if (depth == 0) return flight.substring(bracketStart, i + 1)
+                    }
+                }
+            }
+        }
+        return null
+    }
+
     fun parseCards(flight: String): List<ToonixCard> {
+        val out = LinkedHashMap<String, ToonixCard>()
+        val key = "\"cards\":["
+        var idx = flight.indexOf(key)
+        while (idx >= 0) {
+            val raw = jsonArrayAfter(flight, idx + key.length - 1)
+            if (raw != null) {
+                // RSC emits "$undefined" for absent values, Jackson cannot map that to Int
+                val json = raw.replace("\"\$undefined\"", "null")
+                val cards = runCatching { mapper.readValue(json, Array<ToonixCard>::class.java).toList() }.getOrNull()
+                if (cards != null) {
+                    for (card in cards) {
+                        if ((card.href.startsWith("/show/") || card.href.startsWith("/title/")) && card.title.isNotBlank()) {
+                            out.putIfAbsent(card.href, card)
+                        }
+                    }
+                    idx = flight.indexOf(key, idx + key.length - 1 + raw.length)
+                    continue
+                }
+            }
+            idx = flight.indexOf(key, idx + key.length)
+        }
+        if (out.isNotEmpty()) return out.values.toList()
+        return parseCardsLoose(flight)
+    }
+
+    private fun parseCardsLoose(flight: String): List<ToonixCard> {
         val out = mutableListOf<ToonixCard>()
         val seen = mutableSetOf<String>()
         for (m in slugHrefRegex.findAll(flight)) {
@@ -233,45 +302,69 @@ object ToonixApi {
         return parseCards(flight.substring(from, to))
     }
 
+    fun parseSearchResults(html: String): List<ToonixCard> {
+        val body = Jsoup.parse(html).body() ?: return emptyList()
+        val yearRegex = Regex("""(19|20)\d{2}""")
+        val out = LinkedHashMap<String, ToonixCard>()
+        for (el in body.getAllElements()) {
+            val tag = el.tagName()
+            if (tag == "h3" && el.ownText().equals("More like this", ignoreCase = true)) break
+            if (tag != "a") continue
+            val href = el.attr("href")
+            if (!href.startsWith("/show/") && !href.startsWith("/title/")) continue
+            if (out.containsKey(href)) continue
+            val img = el.selectFirst("img[src]")
+            val title = el.selectFirst("h3")?.text()?.takeIf { it.isNotBlank() }
+                ?: img?.attr("alt")?.takeIf { it.isNotBlank() }
+                ?: continue
+            out[href] = ToonixCard(
+                slug = href.substringAfterLast('/'),
+                href = href,
+                poster = img?.attr("src"),
+                title = title,
+                year = el.select("span")
+                    .firstOrNull { yearRegex.matches(it.text()) }
+                    ?.text()?.toIntOrNull(),
+                type = if (href.startsWith("/title/")) "MOVIE" else "SHOW",
+                category = el.select("span")
+                    .firstOrNull { it.text().equals("ANIME", ignoreCase = true) }
+                    ?.text()?.uppercase() ?: "CARTOON"
+            )
+        }
+        return out.values.toList()
+    }
+
+    fun parsePlayer(flight: String): ToonixPlayer {
+        val servers = mutableListOf<ToonixServerStream>()
+        val key = "\"servers\":["
+        var idx = flight.indexOf(key)
+        while (idx >= 0) {
+            val raw = jsonArrayAfter(flight, idx + key.length - 1)
+            if (raw != null) {
+                val parsed = runCatching { mapper.readValue(raw, Array<ToonixServerStream>::class.java).toList() }.getOrNull()
+                if (parsed != null) {
+                    servers.addAll(parsed.filter { it.src.isNotBlank() || it.versions.any { v -> v.src.isNotBlank() } })
+                    idx = flight.indexOf(key, idx + key.length - 1 + raw.length)
+                    continue
+                }
+            }
+            idx = flight.indexOf(key, idx + key.length)
+        }
+        val legacy = legacySrcRegex.find(flight)?.groupValues?.get(1)?.takeIf { it.isNotBlank() }
+        return ToonixPlayer(servers, legacy)
+    }
+
     fun parseSeasonsRail(flight: String): List<ToonixRailSeason> {
         val needle = "\"seasons\":["
         val start = flight.indexOf(needle)
         if (start < 0) return emptyList()
-        var i = start + needle.length - 1
-        var depth = 0
-        var inString = false
-        var escaped = false
-        val from = i
-        while (i < flight.length) {
-            val c = flight[i]
-            if (inString) {
-                when {
-                    escaped -> escaped = false
-                    c == '\\' -> escaped = true
-                    c == '"' -> inString = false
-                }
-            } else {
-                when (c) {
-                    '"' -> inString = true
-                    '[' -> depth++
-                    ']' -> {
-                        depth--
-                        if (depth == 0) {
-                            return try {
-                                mapper.readValue(
-                                    flight.substring(from, i + 1),
-                                    Array<ToonixRailSeason>::class.java
-                                ).toList()
-                            } catch (e: Exception) {
-                                emptyList()
-                            }
-                        }
-                    }
-                }
-            }
-            i++
+        val raw = jsonArrayAfter(flight, start + needle.length - 1) ?: return emptyList()
+        return try {
+            mapper.readValue(raw, Array<ToonixRailSeason>::class.java).toList()
+        } catch (e: Exception) {
+            Log.d("Toonix", "season rail parse failed: ${e.message}")
+            emptyList()
         }
-        return emptyList()
     }
 
     private fun htmlTitle(html: String, fallback: String): String {
@@ -294,7 +387,7 @@ object ToonixApi {
                 val s = r.groupValues[1].toIntOrNull()
                 val e = r.groupValues[2].toIntOrNull()
                 if (s != null && e != null) s to e else null
-            }?.toList() } ?: emptyList()
+            }.toList() } ?: emptyList()
         val seasonRegex = Regex(""""href":"(/show/${Regex.escape(slug)}/(\d+))".{0,900}?"alt":"([^"]+)\"""")
         val seasonHrefs = seasonRegex.findAll(flight).mapNotNull { m ->
             val num = m.groupValues[2].toIntOrNull() ?: return@mapNotNull null
@@ -311,12 +404,6 @@ object ToonixApi {
         val genres = genreRegex.findAll(flight).map { it.groupValues[1] }.distinct().take(8).toList()
         val runtime = runtimeRegex.find(flight)?.groupValues?.get(1)?.toIntOrNull()
         return ToonixMovieInfo(title, year, poster, synopsis, genres, runtime)
-    }
-
-    fun parseStreamSrcs(flight: String): Pair<String?, String?> {
-        val fast = fastSrcRegex.find(flight)?.groupValues?.get(1)?.takeIf { it.isNotBlank() }
-        val legacy = legacySrcRegex.find(flight)?.groupValues?.get(1)?.takeIf { it.isNotBlank() }
-        return fast to legacy
     }
 
     fun absolutize(url: String, base: String): String = when {
@@ -358,6 +445,7 @@ object ToonixApi {
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (e: Exception) {
+            Log.d("Toonix", "master probe failed for $url: ${e.message}")
             ToonixMaster(isMaster = false, isMedia = false, isBusy = true, isDead = false, variants = emptyList())
         }
     }

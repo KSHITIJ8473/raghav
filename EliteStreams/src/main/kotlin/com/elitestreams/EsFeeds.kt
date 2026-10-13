@@ -20,6 +20,7 @@ object EsFeeds {
         "https://raw.githubusercontent.com/drmlive/fancode-live-events/refs/heads/main/fancode.m3u"
     private const val BIGGBOSS = "https://biggbossstreamx.livenoww.workers.dev/playlist.m3u"
     private const val JIOTV_API = "https://jiotv-api.manishjaiswal.workers.dev/"
+    private const val JIO_STB = "https://premiumplugx.top/jiostb/mjelo.php?view=raw"
 
     private const val CACHE_TTL = 5 * 60 * 1000L
 
@@ -328,8 +329,7 @@ object EsFeeds {
                             }
                             cur.headers[proper] = v
                         }
-                    } catch (_: Exception) {
-                    }
+                    } catch (_: Exception) {}
                 }
                 line.isNotEmpty() && !line.startsWith("#") -> {
                     cur.url = cleanUrl(line.substringBefore("|"))
@@ -577,9 +577,23 @@ object EsFeeds {
         return oneWords == twoWords
     }
 
-    // resolves a static jio channel to a playable stream, the api hands out
-    // fresh akamai cookies and clearkey pairs for every channel id
+    // resolved at play time so the cookie is fresh, the stb feed regenerates
+    // on every request, the api covers the channels missing there
     suspend fun resolveJio(jioId: String, fallbackName: String? = null): StreamData? {
+        if (!fallbackName.isNullOrBlank()) {
+            stbChannels().firstOrNull {
+                sameChannelName(it.name.removeSuffix(" (JioTV+)"), fallbackName)
+            }?.streams?.firstOrNull()?.let { return it }
+        }
+        return resolveJioApi(jioId, fallbackName) ?: jioFallback(fallbackName)
+    }
+
+    private suspend fun stbChannels(): List<ChannelData> = loadFeed("jio-stb") {
+        val text = fetchText(JIO_STB) ?: return@loadFeed emptyList()
+        parseM3u(text).map { toChannel(it, "jio-stb", "JioTV+") }
+    }
+
+    private suspend fun resolveJioApi(jioId: String, fallbackName: String?): StreamData? {
         if (jioApiCache.at == 0L ||
             System.currentTimeMillis() - jioApiCache.at >= CACHE_TTL
         ) {
@@ -593,9 +607,9 @@ object EsFeeds {
             }
             jioApiCache.at = System.currentTimeMillis()
         }
-        val entry = findJioEntry(jioId, fallbackName) ?: return jioFallback(fallbackName)
+        val entry = findJioEntry(jioId, fallbackName) ?: return null
         val base = entry.url?.takeIf { it.startsWith("http") }?.let { cleanUrl(it) }
-            ?: return jioFallback(fallbackName)
+            ?: return null
 
         val headers = mutableMapOf(
             "User-Agent" to JIO_UA,
@@ -620,10 +634,10 @@ object EsFeeds {
             }
         }
 
-        // the api mixes two shapes: most entries keep a bare kid in keyId
-        // with the key beside it, a few pack kid:key pairs for every audio
-        // track into keyId instead
-        val pairs = HashMap<String, String>()
+        // keyId holds either kid:key pairs or a bare kid with the key beside
+        // it, and the bare shape turns up swapped on some entries, so both
+        // orientations ride in and the player keeps the pair that decrypts
+        val pairs = LinkedHashMap<String, String>()
         val keyIdRaw = entry.keyId.orEmpty().trim()
         val keyRaw = entry.key.orEmpty().trim()
         if (keyIdRaw.contains(":")) {
@@ -636,34 +650,17 @@ object EsFeeds {
             }
         } else if (keyIdRaw.length == 32 && keyRaw.length == 32) {
             pairs[keyIdRaw.lowercase()] = keyRaw.lowercase()
+            pairs[keyRaw.lowercase()] = keyIdRaw.lowercase()
         }
-        if (pairs.isEmpty()) {
-            return StreamData(url = base, headers = headers)
-        }
-
-        var kid = pairs.keys.firstOrNull()
-        var key = pairs[kid]
-        if (pairs.size > 1) {
-            // multi audio tracks ship several key pairs, the video track kid
-            // from the manifest picks the right one
-            val mpd = try {
-                app.get(base, headers = headers, timeout = 15L).text
-            } catch (_: Exception) {
-                null
-            }
-            val mpdKid = mpd?.let {
-                Regex("""cenc:default_KID=["']([0-9a-fA-F-]{36})["']""").find(it)
-                    ?.groupValues?.get(1)?.replace("-", "")?.lowercase()
-            }
-            if (mpdKid != null && pairs.containsKey(mpdKid)) {
-                kid = mpdKid
-                key = pairs[mpdKid]
-            }
-        }
-        if (kid == null || key == null) {
-            return StreamData(url = base, headers = headers)
-        }
-        return StreamData(url = base, headers = headers, kid = kid, key = key)
+        val kid = pairs.keys.firstOrNull()
+            ?: return StreamData(url = base, headers = headers)
+        return StreamData(
+            url = base,
+            headers = headers,
+            kid = kid,
+            key = pairs[kid],
+            kids = if (pairs.size > 1) pairs else null
+        )
     }
 
     // a few of the curated channels are missing from the api right now, the
@@ -672,9 +669,11 @@ object EsFeeds {
         if (fallbackName.isNullOrBlank()) return null
         val channels = pluglist()
         val wanted = "$fallbackName (JioTV+ 3)"
-        val hit = channels.firstOrNull { it.name == wanted }
-            ?: channels.firstOrNull { it.name.equals(wanted, ignoreCase = true) }
-        return hit?.streams?.firstOrNull()
+        return channels.firstOrNull { it.name == wanted }?.streams?.firstOrNull()
+            ?: channels.firstOrNull {
+                it.sourceId == "jio-tv-plus-3" &&
+                    sameChannelName(it.name.removeSuffix(" (JioTV+ 3)"), fallbackName)
+            }?.streams?.firstOrNull()
     }
 
     val sources = listOf(

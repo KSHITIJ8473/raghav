@@ -8,10 +8,5 @@ import com.lagradost.cloudstream3.plugins.Plugin
 class EliteStreamsPlugin : Plugin() {
     override fun load(context: Context) {
         registerMainAPI(EliteStreams())
-        openSettings = { ctx ->
-            try {
-                EsSettings.show(ctx)
-            } catch (_: Exception) {}
-        }
     }
 }

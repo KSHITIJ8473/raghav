@@ -1,8 +1,10 @@
 package com.elitestreams
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties
+import com.lagradost.cloudstream3.CloudStreamApp
 import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
+import com.lagradost.cloudstream3.utils.AppUtils.toJson
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
@@ -24,11 +26,30 @@ object EsFeeds {
 
     private const val CACHE_TTL = 5 * 60 * 1000L
 
+    // a 530 body parses to zero channels, holding that for the full ttl
+    // would keep a recovered server hidden, so failures retry sooner
+    private const val FAILED_TTL = 45 * 1000L
+    private const val HOTSTAR_WRITE_TTL = 10 * 60 * 1000L
+    private const val JIO_WARM_TTL = 30 * 60 * 1000L
+
+    // a cookie close to its expiry can die mid stream, only trust ones
+    // with some runway left
+    private const val EXPIRY_MARGIN_MS = 2 * 60 * 1000L
+
+    private const val KEY_JIO_STREAMS = "ES_JIO_STREAMS"
+    private const val KEY_HOTSTAR_FEED = "ES_HOTSTAR_FEED"
+
     // zee5 and dangal groups ride along inside the big jio feed, skip them
     private val EXCLUDED_GROUPS = setOf("ZEE5 India", "ZEE5 Worldwide", "Dangal Play")
     private val BIGGBOSS_KEEP = "BIGG BOSS LIVE 24/7"
 
     private const val JIO_UA = "plaYtv/7.1.5"
+
+    // the feeds call it star maa hd, the curated list kept the short form
+    private val FEED_NAME_ALIASES = mapOf("maa hd" to "star maa hd")
+
+    private val COOKIE_EXP_RE = Regex("""(?:^|[~=])exp=(\d{9,12})""")
+    private val COOKIE_ACL_RE = Regex("""acl=([^~]+)""")
 
     const val CAT_SPORTS = "sports"
     const val CAT_MOVIES = "movies"
@@ -207,13 +228,107 @@ object EsFeeds {
     private val caches = ConcurrentHashMap<String, FeedCache>()
     private val jioApiCache = JioApiCache()
 
-    private fun cached(cache: FeedCache): List<ChannelData>? =
-        if (cache.at > 0 && System.currentTimeMillis() - cache.at < CACHE_TTL) cache.channels else null
+    private fun cached(cache: FeedCache): List<ChannelData>? {
+        if (cache.at <= 0) return null
+        val ttl = if (cache.channels.isEmpty()) FAILED_TTL else CACHE_TTL
+        return if (System.currentTimeMillis() - cache.at < ttl) cache.channels else null
+    }
 
     private suspend fun fetchText(url: String): String? = try {
         app.get(url, timeout = 30L).text
     } catch (_: Exception) {
         null
+    }
+
+    private fun feedBaseName(name: String): String {
+        sources.forEach { source ->
+            val suffix = " (${source.label})"
+            if (name.endsWith(suffix)) return name.removeSuffix(suffix)
+        }
+        return name
+    }
+
+    private fun cookieExpiryMs(cookie: String): Long? =
+        COOKIE_EXP_RE.find(cookie)?.groupValues?.get(1)?.toLongOrNull()?.times(1000L)
+
+    private fun streamUsable(stream: StreamData): Boolean {
+        val cookie = stream.headers["Cookie"] ?: return true
+        val exp = cookieExpiryMs(cookie) ?: return true
+        if (exp - System.currentTimeMillis() > EXPIRY_MARGIN_MS) return true
+        // the token only gates the jio and hotstar cdns, mirrors on other
+        // hosts keep playing after it dies
+        return !stream.url.contains("cdn.jio.com") && !stream.url.contains("hotstar")
+    }
+
+    // the standalone app keeps its whole channel database on disk, these
+    // stores mirror that so a stream resolved hours ago still plays while
+    // every server is throwing 530s
+    private val jioStoreLock = Any()
+    private var jioStore: MutableMap<String, StreamData>? = null
+
+    @Volatile
+    private var hotstarWriteAt = 0L
+
+    @Volatile
+    private var jioWarmAt = 0L
+
+    private fun jioStreamStore(): MutableMap<String, StreamData> {
+        jioStore?.let { return it }
+        synchronized(jioStoreLock) {
+            jioStore?.let { return it }
+            val loaded = try {
+                CloudStreamApp.getKey<String>(KEY_JIO_STREAMS)
+                    ?.let { parseJson<Map<String, StreamData>>(it).toMutableMap() }
+            } catch (_: Exception) {
+                null
+            } ?: mutableMapOf()
+            jioStore = loaded
+            return loaded
+        }
+    }
+
+    private fun rememberJioStreams(entries: Map<String, StreamData>) {
+        if (entries.isEmpty()) return
+        synchronized(jioStoreLock) {
+            val store = jioStreamStore()
+            var changed = false
+            entries.forEach { (id, stream) ->
+                if (store[id] != stream) {
+                    store[id] = stream
+                    changed = true
+                }
+            }
+            if (changed) {
+                try {
+                    CloudStreamApp.setKey(KEY_JIO_STREAMS, store.toJson())
+                } catch (_: Exception) {
+                }
+            }
+        }
+    }
+
+    private fun cachedJioStream(jioId: String): StreamData? = try {
+        jioStreamStore()[jioId]?.takeIf { streamUsable(it) }
+    } catch (_: Exception) {
+        null
+    }
+
+    private fun cacheHotstarFeed(channels: List<ChannelData>) {
+        if (System.currentTimeMillis() - hotstarWriteAt < HOTSTAR_WRITE_TTL) return
+        hotstarWriteAt = System.currentTimeMillis()
+        try {
+            CloudStreamApp.setKey(KEY_HOTSTAR_FEED, channels.toJson())
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun cachedHotstarFeed(): List<ChannelData> = try {
+        val raw = CloudStreamApp.getKey<String>(KEY_HOTSTAR_FEED) ?: return emptyList()
+        val channels = parseJson<List<ChannelData>>(raw)
+        val alive = channels.firstOrNull()?.streams?.firstOrNull()?.let { streamUsable(it) } == true
+        if (alive) channels else emptyList()
+    } catch (_: Exception) {
+        emptyList()
     }
 
     private suspend fun loadFeed(
@@ -473,8 +588,22 @@ object EsFeeds {
     }
 
     suspend fun hotstar(): List<ChannelData> = loadFeed("hotstar") {
-        val text = fetchText(HOTSTAR) ?: return@loadFeed emptyList()
-        parseM3u(text).map { toChannel(it, "jio-hotstar", "Jio Hotstar") }
+        // hot.php answers with short 530 bursts, one more try right away
+        // clears most of them
+        var text = fetchText(HOTSTAR)
+        if (text.isNullOrBlank() || !text.contains("#EXTINF")) {
+            text = fetchText(HOTSTAR)
+        }
+        if (text.isNullOrBlank() || !text.contains("#EXTINF")) {
+            return@loadFeed cachedHotstarFeed()
+        }
+        val channels = parseM3u(text).map { toChannel(it, "jio-hotstar", "Jio Hotstar") }
+        if (channels.isNotEmpty()) {
+            cacheHotstarFeed(channels)
+            channels
+        } else {
+            cachedHotstarFeed()
+        }
     }
 
     suspend fun sony(): List<ChannelData> = loadFeed("sony") {
@@ -550,42 +679,77 @@ object EsFeeds {
 
     // the api reuses a few ids across two different channels and drops
     // channels from time to time, the channel name sorts both cases out
-    private fun findJioEntry(jioId: String, name: String?): JioApiEntry? {
+    private fun jioCandidates(jioId: String, name: String?): List<JioApiEntry> {
         val byId = jioApiCache.entries.filter { it.id == jioId }
-        return when {
-            byId.size == 1 -> byId.first()
-            byId.size > 1 ->
-                byId.firstOrNull { name != null && sameChannelName(it.name, name) }
-                    ?: byId.first()
-            else -> name?.let { wanted ->
-                jioApiCache.entries.firstOrNull { sameChannelName(it.name, wanted) }
-            }
+        val byName = if (name.isNullOrBlank()) {
+            emptyList()
+        } else {
+            jioApiCache.entries.filter { sameChannelName(it.name, name) }
         }
+        return byId + byName.filterNot { it in byId }
+    }
+
+    // a premium cdn url carrying the shared mobile cookie always answers
+    // 403, and a path scoped cookie on a different path means the url was
+    // refreshed ahead of the cookie, both pairs are dead on arrival
+    private fun entryUsable(url: String, rawCookie: String): Boolean {
+        if (rawCookie.isBlank()) return true
+        val cookie = rawCookie.split("&").first()
+        val exp = cookieExpiryMs(cookie)
+        if (exp != null && exp - System.currentTimeMillis() <= EXPIRY_MARGIN_MS &&
+            (url.contains("cdn.jio.com") || url.contains("hotstar"))
+        ) return false
+        val acl = COOKIE_ACL_RE.find(cookie)?.groupValues?.get(1)
+            ?.lowercase()?.replace("%2f", "/")
+        if (acl == null) return true
+        if (url.contains("jiotvpllive") && acl == "/*") return false
+        if (acl != "/*" && !url.contains(acl.trimEnd('*'), ignoreCase = true)) return false
+        return true
     }
 
     // api names drift a little from the curated list, "&" vs "and", word
     // order and spacing, none of that should break the lookup
     private fun sameChannelName(a: String?, b: String?): Boolean {
         if (a.isNullOrBlank() || b.isNullOrBlank()) return false
-        if (a.trim().equals(b.trim(), ignoreCase = true)) return true
-        val one = a.trim().lowercase().replace("&", " and ")
-        val two = b.trim().lowercase().replace("&", " and ")
+        val one = FEED_NAME_ALIASES[a.trim().lowercase()] ?: a.trim().lowercase()
+        val two = FEED_NAME_ALIASES[b.trim().lowercase()] ?: b.trim().lowercase()
         if (one == two) return true
-        if (one.replace(" ", "") == two.replace(" ", "")) return true
-        val oneWords = one.split(Regex("\\s+")).filter { it.isNotBlank() }.sorted()
-        val twoWords = two.split(Regex("\\s+")).filter { it.isNotBlank() }.sorted()
+        val oneAmp = one.replace("&", " and ")
+        val twoAmp = two.replace("&", " and ")
+        if (oneAmp == twoAmp) return true
+        if (oneAmp.replace(" ", "") == twoAmp.replace(" ", "")) return true
+        val oneWords = oneAmp.split(Regex("\\s+")).filter { it.isNotBlank() }.sorted()
+        val twoWords = twoAmp.split(Regex("\\s+")).filter { it.isNotBlank() }.sorted()
         return oneWords == twoWords
     }
 
-    // resolved at play time so the cookie is fresh, the stb feed regenerates
-    // on every request, the api covers the channels missing there
+    // resolved at play time so the cookie is fresh. the stb feed and the
+    // pluglist mint url and cookie together, the api mixes stale mobile
+    // cookies into premium urls while it refreshes, so it is validated and
+    // only tried after both feeds, and the stored copy is the last resort
+    // for when every server is down at once
     suspend fun resolveJio(jioId: String, fallbackName: String? = null): StreamData? {
         if (!fallbackName.isNullOrBlank()) {
             stbChannels().firstOrNull {
-                sameChannelName(it.name.removeSuffix(" (JioTV+)"), fallbackName)
-            }?.streams?.firstOrNull()?.let { return it }
+                sameChannelName(feedBaseName(it.name), fallbackName)
+            }?.streams?.firstOrNull()?.let {
+                if (streamUsable(it)) {
+                    rememberJioStreams(mapOf(jioId to it))
+                    return it
+                }
+            }
         }
-        return resolveJioApi(jioId, fallbackName) ?: jioFallback(fallbackName)
+        jioFallback(fallbackName)?.let {
+            if (streamUsable(it)) {
+                rememberJioStreams(mapOf(jioId to it))
+                return it
+            }
+        }
+        resolveJioApi(jioId, fallbackName)?.let {
+            rememberJioStreams(mapOf(jioId to it))
+            return it
+        }
+        return cachedJioStream(jioId)
     }
 
     private suspend fun stbChannels(): List<ChannelData> = loadFeed("jio-stb") {
@@ -607,7 +771,10 @@ object EsFeeds {
             }
             jioApiCache.at = System.currentTimeMillis()
         }
-        val entry = findJioEntry(jioId, fallbackName) ?: return null
+        val entry = jioCandidates(jioId, fallbackName).firstOrNull { e ->
+            val url = e.url?.takeIf { it.startsWith("http") }?.let { cleanUrl(it) }
+            url != null && entryUsable(url, e.cookie.orEmpty().trim())
+        } ?: return null
         val base = entry.url?.takeIf { it.startsWith("http") }?.let { cleanUrl(it) }
             ?: return null
 
@@ -663,17 +830,13 @@ object EsFeeds {
         )
     }
 
-    // a few of the curated channels are missing from the api right now, the
-    // big pluglist feed carries the same channels with inline keys
+    // the api drops curated channels from time to time, the big pluglist
+    // feed carries the same channels with inline keys and cookies
     private suspend fun jioFallback(fallbackName: String?): StreamData? {
         if (fallbackName.isNullOrBlank()) return null
-        val channels = pluglist()
-        val wanted = "$fallbackName (JioTV+ 3)"
-        return channels.firstOrNull { it.name == wanted }?.streams?.firstOrNull()
-            ?: channels.firstOrNull {
-                it.sourceId == "jio-tv-plus-3" &&
-                    sameChannelName(it.name.removeSuffix(" (JioTV+ 3)"), fallbackName)
-            }?.streams?.firstOrNull()
+        return pluglist().firstOrNull {
+            sameChannelName(feedBaseName(it.name), fallbackName)
+        }?.streams?.firstOrNull()
     }
 
     val sources = listOf(
@@ -701,6 +864,31 @@ object EsFeeds {
             { biggBoss() }
         )
         val deferred = loaders.map { async(Dispatchers.IO) { it() } }
-        deferred.flatMap { runCatching { it.await() }.getOrDefault(emptyList()) }
+        val channels = deferred.flatMap { runCatching { it.await() }.getOrDefault(emptyList()) }
+        warmJioStore(channels)
+        channels
+    }
+
+    // fills the stored streams for the whole curated list while the pluglist
+    // is healthy, a channel never played before then still resolves during
+    // a later outage
+    private fun warmJioStore(channels: List<ChannelData>) {
+        if (channels.isEmpty()) return
+        if (System.currentTimeMillis() - jioWarmAt < JIO_WARM_TTL) return
+        jioWarmAt = System.currentTimeMillis()
+        try {
+            val feedChannels = channels.filter { it.sourceId == "jio-tv-plus-3" }
+            if (feedChannels.isEmpty()) return
+            val found = LinkedHashMap<String, StreamData>()
+            (JIO_PLUS + JIO_PLUS_2).distinctBy { it.jioId }.forEach { curated ->
+                feedChannels.firstOrNull {
+                    sameChannelName(feedBaseName(it.name), curated.name)
+                }?.streams?.firstOrNull()?.let {
+                    if (streamUsable(it)) found[curated.jioId] = it
+                }
+            }
+            rememberJioStreams(found)
+        } catch (_: Exception) {
+        }
     }
 }

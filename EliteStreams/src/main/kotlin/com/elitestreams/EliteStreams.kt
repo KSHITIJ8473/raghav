@@ -20,28 +20,12 @@ class EliteStreams : MainAPI() {
     override val supportedTypes = setOf(TvType.Live)
     override var lang = "hi"
 
-    companion object {
-        private const val KEY_PREFIX_SRC = "ES_SRC_"
-
-        fun sourceEnabled(sourceId: String): Boolean = try {
-            CloudStreamApp.getKey<Boolean>(KEY_PREFIX_SRC + sourceId) ?: true
-        } catch (_: Exception) {
-            true
-        }
-
-        fun setSourceEnabled(sourceId: String, on: Boolean) {
-            try {
-                CloudStreamApp.setKey(KEY_PREFIX_SRC + sourceId, on)
-            } catch (_: Exception) {}
-        }
-    }
-
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         DonationManager.checkAndShow()
         if (page > 1) {
             return newHomePageResponse(request.name, emptyList<SearchResponse>(), hasNext = false)
         }
-        val channels = EsFeeds.allChannels().filter { sourceEnabled(it.sourceId) }
+        val channels = EsFeeds.allChannels()
         val lists = mutableListOf<HomePageList>()
         EsFeeds.sources.forEach { source ->
             val items = channels.filter { it.sourceId == source.id }.map { it.toSearchResponse() }
@@ -83,7 +67,6 @@ class EliteStreams : MainAPI() {
     override suspend fun search(query: String): List<SearchResponse> {
         if (query.isBlank()) return emptyList()
         return EsFeeds.allChannels()
-            .filter { sourceEnabled(it.sourceId) }
             .filter { it.name.contains(query, ignoreCase = true) }
             .take(60)
             .map { it.toSearchResponse() }

@@ -16,6 +16,7 @@ import android.widget.TextView
 import android.widget.Toast
 import com.google.android.material.bottomsheet.BottomSheetDialogFragment
 import com.lagradost.api.Log
+import com.lagradost.cloudstream3.MainActivity
 import com.lagradost.cloudstream3.plugins.Plugin
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -40,6 +41,7 @@ class NepuSettingsFragment(private val plugin: Plugin) : BottomSheetDialogFragme
     private var statusTitle: TextView? = null
     private var statusDetail: TextView? = null
     private var verifyButton: Button? = null
+    private var resetButton: Button? = null
 
     @SuppressLint("SetTextI18n")
     override fun onCreateView(
@@ -145,7 +147,7 @@ class NepuSettingsFragment(private val plugin: Plugin) : BottomSheetDialogFragme
         root.addView(verifyButton)
         root.addView(View(ctx), LinearLayout.LayoutParams(1, d(10)))
 
-        val resetButton = Button(ctx).apply {
+        resetButton = Button(ctx).apply {
             text = "Reset session"
             transformationMethod = null
             textSize = 14f
@@ -160,7 +162,7 @@ class NepuSettingsFragment(private val plugin: Plugin) : BottomSheetDialogFragme
                 NepuSession.clear()
                 wipeWebViewCookies("https://nepu.io")
                 renderStatus()
-                Toast.makeText(ctx, "Session cleared", Toast.LENGTH_SHORT).show()
+                runVerification(reloadOnSuccess = true)
             }
         }
         root.addView(resetButton)
@@ -201,22 +203,33 @@ class NepuSettingsFragment(private val plugin: Plugin) : BottomSheetDialogFragme
             isEnabled = true
             alpha = 1f
         }
+        resetButton?.isEnabled = true
     }
 
     @SuppressLint("SetTextI18n")
-    private fun runVerification() {
+    private fun runVerification(reloadOnSuccess: Boolean = false) {
         val button = verifyButton ?: return
         button.isEnabled = false
         button.alpha = 0.6f
         button.text = "Verifying"
+        resetButton?.isEnabled = false
         scope.launch {
             try {
                 NepuSession.clear()
                 wipeWebViewCookies("https://nepu.io")
                 val success = solveNepuCloudflare("https://nepu.io/")
-                if (!isAdded) return@launch
                 if (success && NepuSession.active()) {
-                    Toast.makeText(requireContext(), "Nepu is ready", Toast.LENGTH_SHORT).show()
+                    if (isAdded) {
+                        Toast.makeText(requireContext(), "Nepu is ready", Toast.LENGTH_SHORT).show()
+                        if (reloadOnSuccess) dismissAllowingStateLoss()
+                    }
+                    if (reloadOnSuccess) {
+                        try {
+                            MainActivity.reloadHomeEvent.invoke(true)
+                        } catch (e: Exception) {
+                            Log.e(TAG, "reload home: ${e.message}")
+                        }
+                    }
                 } else if (isAdded) {
                     Toast.makeText(requireContext(), "Verification incomplete", Toast.LENGTH_SHORT).show()
                 }

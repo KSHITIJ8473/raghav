@@ -462,14 +462,6 @@ class RaghavAnime : MainAPI() {
                     RaghavGoTaku().loadLinks(epData, false, subtitleCallback, callback)
                 }
             },
-            "Animo" to {
-                val epData = SourceCache.episodeData("Animo", animeKey, isDub, episode) {
-                    resolveAnimo(searchTitles, targetTitles, episode, isDub, linkData.year)
-                }
-                if (epData != null) {
-                    RaghavAnimo().loadLinks(epData, false, subtitleCallback, callback)
-                }
-            },
             "Anidap" to {
                 val anidap = RaghavAnidap()
                 anidap.loadLinksByAnilistId(aniId, episode, isDub, subtitleCallback, callback)
@@ -631,7 +623,6 @@ class RaghavAnime : MainAPI() {
                     { warmSource("2DHive", animeKey, isDub) { resolveTwoDHive(titles, targets, null, isDub, year)?.episodes } },
                     { warmSource("AniKoto", animeKey, isDub) { resolveAniKoto(titles, targets, null, isDub, year)?.episodes } },
                     { warmSource("GoTaku", animeKey, isDub) { resolveGoTaku(titles, targets, null, isDub, year)?.episodes } },
-                    { warmSource("Animo", animeKey, isDub) { resolveAnimo(titles, targets, null, isDub, year)?.episodes } },
                     { warmSource("AniNami", animeKey, isDub) { resolveAniNami(anilistId, null, isDub)?.episodes } },
                     { warmSource("Xanime", animeKey, isDub) { resolveXanime(titles, targets, null, isDub, year)?.episodes } },
                     { warmSource("Senshi", animeKey, isDub) { resolveSenshi(titles, targets, null, isDub, year)?.episodes } },
@@ -687,14 +678,6 @@ class RaghavAnime : MainAPI() {
             doSearch = { anikoto.search(it) },
             doLoad = { anikoto.load(it) as? com.lagradost.cloudstream3.AnimeLoadResponse },
             sourceTag = "AniKoto")
-    }
-
-    private suspend fun resolveAnimo(titles: List<String>, targets: List<String>, episode: Int?, isDub: Boolean, year: Int?): SourceCache.Match? {
-        val animo = RaghavAnimo()
-        return findEpisodeMap(titles, targets, episode, isDub, year,
-            doSearch = { animo.search(it) },
-            doLoad = { animo.load(it) as? com.lagradost.cloudstream3.AnimeLoadResponse },
-            sourceTag = "Animo")
     }
 
     private suspend fun resolveGoTaku(titles: List<String>, targets: List<String>, episode: Int?, isDub: Boolean, year: Int?): SourceCache.Match? {

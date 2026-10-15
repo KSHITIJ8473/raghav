@@ -13,10 +13,6 @@ import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
-import android.text.SpannableStringBuilder
-import android.text.Spanned
-import android.text.style.ForegroundColorSpan
-import android.text.style.StyleSpan
 import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.View
@@ -35,6 +31,7 @@ class DonationDialogFragment : DialogFragment() {
         private const val DONATE_URL = "https://buymeacoffee.com/raghav766"
         private const val DISCORD_URL = "https://discord.gg/V9VC8w29U"
         private const val REPO_URL = "https://github.com/KSHITIJ8473/raghav"
+        private const val UPI_DONATE_URL = "https://kshitij8473.github.io/donate/"
 
         private const val DISMISS_SECONDS = 9
 
@@ -47,11 +44,12 @@ class DonationDialogFragment : DialogFragment() {
         private const val DIVIDER = "#2A1A1D"
         private const val TEXT_DIM = "#A1A1AA"
         private const val TEXT_MID = "#D4D4D8"
-        private const val TEXT_BRIGHT = "#E4E4E7"
         private const val RED = "#F87171"
         private const val RED_SOFT = "#FCA5A5"
         private const val DISCORD = "#5865F2"
         private const val DISCORD_DARK = "#4752C4"
+        private const val BLUE = "#3B82F6"
+        private const val BLUE_DARK = "#2563EB"
     }
 
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -188,30 +186,6 @@ class DonationDialogFragment : DialogFragment() {
         statsRow.addView(fixChip)
         hero.addView(statsRow)
 
-        val upiRow = LinearLayout(ctx).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            layoutParams = LinearLayout.LayoutParams(-1, -2).also {
-                it.topMargin = dp(density, 12)
-            }
-        }
-        upiRow.addView(TextView(ctx).apply {
-            val sb = SpannableStringBuilder()
-            val headStart = sb.length
-            sb.append("UPI Coming Soon:")
-            sb.setSpan(StyleSpan(Typeface.BOLD), headStart, sb.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-            sb.setSpan(ForegroundColorSpan(Color.parseColor(TEXT_BRIGHT)), headStart, sb.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-            sb.append(" ")
-            val bodyStart = sb.length
-            sb.append("UPI donations will be added soon.")
-            sb.setSpan(ForegroundColorSpan(Color.parseColor(TEXT_DIM)), bodyStart, sb.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-            text = sb
-            textSize = 12f
-            setLineSpacing(0f, 1.25f)
-            layoutParams = LinearLayout.LayoutParams(0, -2, 1f)
-        })
-        hero.addView(upiRow)
-
         root.addView(hero)
 
         root.addView(View(ctx).apply {
@@ -245,6 +219,32 @@ class DonationDialogFragment : DialogFragment() {
                 dismissAllowingStateLoss()
             }
             layoutParams = LinearLayout.LayoutParams(-1, dp(density, 50)).also {
+                it.bottomMargin = dp(density, 10)
+            }
+        })
+
+        btnSection.addView(Button(ctx).apply {
+            text = "Donate via upi (India)"
+            textSize = 15f
+            setTextColor(Color.WHITE)
+            setAllCaps(false)
+            typeface = Typeface.DEFAULT_BOLD
+            isFocusable = true
+            setPadding(dp(density, 20), 0, dp(density, 20), 0)
+            val bg = GradientDrawable().apply {
+                setColors(intArrayOf(Color.parseColor(BLUE), Color.parseColor(BLUE_DARK)))
+                orientation = GradientDrawable.Orientation.LEFT_RIGHT
+                cornerRadius = dp(density, 14f)
+            }
+            background = bg
+            setOnFocusChangeListener { _, hasFocus -> bg.alpha = if (hasFocus) 200 else 255 }
+            setOnClickListener {
+                openUrl(ctx, UPI_DONATE_URL)
+                dismissAllowingStateLoss()
+            }
+            layoutParams = LinearLayout.LayoutParams(-1, dp(density, 50)).also {
+                it.marginStart = dp(density, 20)
+                it.marginEnd = dp(density, 20)
                 it.bottomMargin = dp(density, 10)
             }
         })

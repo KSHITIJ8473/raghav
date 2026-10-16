@@ -522,6 +522,12 @@ class RaghavAnime : MainAPI() {
                     reanime.loadLinksByAnilistId(aniId, episode, isDub, subtitleCallback, callback)
                 }
             },
+            "Anv" to {
+                if (aniId > 0) {
+                    val anv = RaghavAnv()
+                    anv.loadLinksByAnilistId(aniId, episode, isDub, subtitleCallback, callback)
+                }
+            },
         )
 
         val ordered = sources

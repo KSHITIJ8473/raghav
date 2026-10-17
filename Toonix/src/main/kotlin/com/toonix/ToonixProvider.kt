@@ -473,6 +473,13 @@ class Toonix : MainAPI() {
         }
     }
 
+    // a playlist can load fine while its segments are gone, the player would
+    // stall on those so every source gets a one kilobyte segment read first
+    private suspend fun streamAlive(playlistUrl: String, referer: String): Boolean {
+        val seg = ToonixApi.firstSegmentOf(playlistUrl, referer) ?: return false
+        return ToonixApi.probeRange(seg, referer) in 200..399
+    }
+
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -489,54 +496,106 @@ class Toonix : MainAPI() {
 
         val seen = mutableSetOf<String>()
         var emitted = false
-        var busyFallback: Pair<String, String>? = null
 
-        suspend fun emit(label: String, linkUrl: String, type: ExtractorLinkType, height: Int? = null) {
+        suspend fun emit(label: String, linkUrl: String, type: ExtractorLinkType, height: Int? = null, referer: String? = null) {
             if (!seen.add(linkUrl)) return
             callback(
                 newExtractorLink("Toonix", label, linkUrl, type) {
                     quality = qualityFromHeight(height)
-                    this.headers = mapOf("Referer" to "${ToonixApi.BASE}/")
+                    if (referer != null) this.headers = mapOf("Referer" to referer)
                 }
             )
             emitted = true
         }
 
-        for (server in player.servers) {
-            val versions = server.versions.ifEmpty { listOf(ToonixStreamVersion(src = server.src)) }
-            for (version in versions) {
-                if (version.src.isBlank()) continue
-                val srcUrl = ToonixApi.absolutize(version.src, url)
-                val tag = if (server.versions.size > 1 && !version.label.isNullOrBlank()) "${version.label} " else ""
-                val master = ToonixApi.fetchMaster(srcUrl)
-                when {
-                    master.isMaster -> master.variants.forEach { v ->
-                        val label = tag + if (v.height != null) "Fast ${v.height}p" else "Fast (auto)"
-                        emit(label, v.url, ExtractorLinkType.M3U8, v.height)
+        // the site numbers its servers by position, legacy is a separate field
+        player.servers.forEachIndexed { idx, server ->
+            val name = "Server ${idx + 1}"
+            if (server.embed || server.direct) {
+                val src = server.versions.firstOrNull()?.src?.takeIf { it.isNotBlank() } ?: server.src
+                if (src.isBlank()) return@forEachIndexed
+                val isHydrax = server.direct || src.contains("/api/hydrax/")
+                if (isHydrax) {
+                    val quals = ToonixApi.resolveHydrax(src)
+                    val probes = coroutineScope {
+                        quals.map { q -> async { ToonixApi.probeRange(q.src, "$ToonixApi.BASE/") } }.awaitAll()
                     }
-                    master.isMedia -> emit(tag + "Fast (auto)", srcUrl, ExtractorLinkType.M3U8)
-                    master.isBusy -> if (busyFallback == null) busyFallback = "Fast (busy, retry later)" to srcUrl
+                    quals.forEachIndexed { i, q ->
+                        if (q.src.isBlank() || probes[i] !in 200..399) return@forEachIndexed
+                        val height = q.label?.removeSuffix("p")?.takeIf { it.all(Char::isDigit) }?.toIntOrNull()
+                        emit(
+                            if (q.label.isNullOrBlank()) name else "$name ${q.label}",
+                            q.src,
+                            ExtractorLinkType.VIDEO,
+                            height,
+                            "$ToonixApi.BASE/"
+                        )
+                    }
+                    return@forEachIndexed
+                }
+                val sources = ToonixApi.resolveEmbedSources(src)
+                val probes = coroutineScope {
+                    sources.map { s -> async { ToonixApi.probeRange(s.url, "https://player.abyssplayer.com/") } }.awaitAll()
+                }
+                sources.forEachIndexed { i, s ->
+                    if (s.url.isBlank() || s.status == false) return@forEachIndexed
+                    if (probes[i] !in 200..399) return@forEachIndexed
+                    val height = s.type?.removeSuffix("p")?.takeIf { it.all(Char::isDigit) }?.toIntOrNull()
+                    emit(
+                        if (s.type.isNullOrBlank()) name else "$name ${s.type}",
+                        s.url,
+                        ExtractorLinkType.VIDEO,
+                        height,
+                        "https://player.abyssplayer.com/"
+                    )
+                }
+            } else {
+                val versions = server.versions.ifEmpty { listOf(ToonixStreamVersion(src = server.src)) }
+                for (version in versions) {
+                    if (version.src.isBlank()) continue
+                    val srcUrl = ToonixApi.absolutize(version.src, url) ?: continue
+                    val tag = if (server.versions.size > 1 && !version.label.isNullOrBlank()) "${version.label} " else ""
+                    val master = ToonixApi.fetchMaster(srcUrl)
+                    when {
+                        master.isMaster -> {
+                            val probeUrl = master.variants.firstOrNull()?.url ?: continue
+                            if (!streamAlive(probeUrl, "${ToonixApi.BASE}/")) continue
+                            master.variants.forEach { v ->
+                                val q = if (v.height != null) "${v.height}p" else "(auto)"
+                                emit("$tag$name $q", v.url, ExtractorLinkType.M3U8, v.height, "${ToonixApi.BASE}/")
+                            }
+                        }
+                        master.isMedia -> {
+                            if (!streamAlive(srcUrl, "${ToonixApi.BASE}/")) continue
+                            emit("$tag$name (auto)", srcUrl, ExtractorLinkType.M3U8, null, "${ToonixApi.BASE}/")
+                        }
+                        else -> {}
+                    }
                 }
             }
         }
 
         player.legacySrc?.let { legacyRaw ->
             if (legacyRaw.contains("archive.org") || legacyRaw.endsWith(".mp4")) {
-                emit("Archive", legacyRaw, ExtractorLinkType.VIDEO)
+                emit("Legacy", legacyRaw, ExtractorLinkType.VIDEO, null, "${ToonixApi.BASE}/")
             } else {
                 val master = ToonixApi.fetchMaster(legacyRaw)
                 when {
-                    master.isMaster -> master.variants.forEach { v ->
-                        val label = if (v.height != null) "Backup ${v.height}p" else "Backup (auto)"
-                        emit(label, v.url, ExtractorLinkType.M3U8, v.height)
+                    master.isMaster -> {
+                        val probeUrl = master.variants.firstOrNull()?.url ?: return@let
+                        if (!streamAlive(probeUrl, legacyRaw)) return@let
+                        master.variants.forEach { v ->
+                            val q = if (v.height != null) "${v.height}p" else "(auto)"
+                            emit("Legacy $q", v.url, ExtractorLinkType.M3U8, v.height, "${ToonixApi.BASE}/")
+                        }
                     }
-                    master.isMedia -> emit("Backup (auto)", legacyRaw, ExtractorLinkType.M3U8)
+                    master.isMedia -> {
+                        if (!streamAlive(legacyRaw, "${ToonixApi.BASE}/")) return@let
+                        emit("Legacy", legacyRaw, ExtractorLinkType.M3U8, null, "${ToonixApi.BASE}/")
+                    }
+                    else -> {}
                 }
             }
-        }
-
-        if (!emitted && busyFallback != null) {
-            emit(busyFallback.first, busyFallback.second, ExtractorLinkType.M3U8)
         }
 
         return emitted

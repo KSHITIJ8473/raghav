@@ -6,6 +6,8 @@ import com.fasterxml.jackson.databind.ObjectMapper
 import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.network.CloudflareKiller
 import com.lagradost.nicehttp.NiceResponse
+import okhttp3.MediaType.Companion.toMediaTypeOrNull
+import okhttp3.RequestBody.Companion.toRequestBody
 import org.jsoup.Jsoup
 
 @JsonIgnoreProperties(ignoreUnknown = true)
@@ -44,13 +46,36 @@ data class ToonixStreamVersion(val label: String? = null, val src: String = "")
 data class ToonixServerStream(
     val key: String? = null,
     val src: String = "",
-    val versions: List<ToonixStreamVersion> = emptyList()
+    val versions: List<ToonixStreamVersion> = emptyList(),
+    val embed: Boolean = false,
+    val direct: Boolean = false
 )
+
+@JsonIgnoreProperties(ignoreUnknown = true)
+data class ToonixHydraxQuality(val label: String? = null, val src: String = "")
 
 data class ToonixPlayer(
     val servers: List<ToonixServerStream>,
     val legacySrc: String?
 )
+
+@JsonIgnoreProperties(ignoreUnknown = true)
+data class ToonixAbyssSource(
+    val url: String = "",
+    val size: Long? = null,
+    val type: String? = null,
+    val codec: String? = null,
+    val status: Boolean? = null
+)
+
+@JsonIgnoreProperties(ignoreUnknown = true)
+data class ToonixAbyssResult(
+    val status: Int? = null,
+    val sources: List<ToonixAbyssSource> = emptyList()
+)
+
+@JsonIgnoreProperties(ignoreUnknown = true)
+data class ToonixHydraxResult(val qualities: List<ToonixHydraxQuality> = emptyList())
 
 data class ToonixShowInfo(
     val title: String,
@@ -352,6 +377,91 @@ object ToonixApi {
         }
         val legacy = legacySrcRegex.find(flight)?.groupValues?.get(1)?.takeIf { it.isNotBlank() }
         return ToonixPlayer(servers, legacy)
+    }
+
+    private val datasRegex = Regex("""const\s+datas\s*=\s*"([^"]+)"""")
+
+    // the embed page carries an encrypted media blob, the resolver turns it
+    // into ready stream urls so the plugin never needs the cipher itself
+    suspend fun resolveEmbedSources(src: String): List<ToonixAbyssSource> {
+        val url = if (src.startsWith("http")) src else BASE + src
+        val page = try {
+            httpGet(url).text
+        } catch (e: Exception) {
+            Log.d("Toonix", "embed page unavailable: ${e.message}")
+            return emptyList()
+        }
+        val payload = datasRegex.find(page)?.groupValues?.get(1) ?: return emptyList()
+        return try {
+            val res = app.post(
+                "https://enc-dec.app/api/dec-abyss",
+                headers = mapOf(
+                    "User-Agent" to UA,
+                    "Accept" to "application/json",
+                    "Content-Type" to "application/json",
+                    "Origin" to "https://enc-dec.app",
+                    "Referer" to "https://enc-dec.app/"
+                ),
+                requestBody = """{"text":"$payload"}""".toRequestBody(
+                    "application/json".toMediaTypeOrNull()
+                )
+            )
+            val tree = mapper.readTree(res.text)
+            if (tree.path("status").asInt(-1) == 200) {
+                mapper.readValue(tree.path("result").toString(), ToonixAbyssResult::class.java).sources
+            } else {
+                emptyList()
+            }
+        } catch (e: Exception) {
+            Log.d("Toonix", "abyss resolver failed: ${e.message}")
+            emptyList()
+        }
+    }
+
+    // the hydrax slot hands out ready qualities, the worker wraps the real
+    // stream so the urls play as they are
+    suspend fun resolveHydrax(src: String): List<ToonixHydraxQuality> {
+        val url = if (src.startsWith("http")) src else BASE + src
+        return try {
+            val res = httpGet(url)
+            mapper.readValue(res.text, ToonixHydraxResult::class.java).qualities
+        } catch (e: Exception) {
+            Log.d("Toonix", "hydrax unavailable: ${e.message}")
+            emptyList()
+        }
+    }
+
+    // a cheap liveness check, the segment hosts answer 403 when a source is
+    // down so a ranged read tells real links apart from dead playlists
+    suspend fun probeRange(url: String, referer: String): Int {
+        return try {
+            val res = app.get(
+                url,
+                headers = mapOf(
+                    "User-Agent" to UA,
+                    "Referer" to referer,
+                    "Range" to "bytes=0-1023"
+                )
+            )
+            res.code
+        } catch (e: Exception) {
+            -1
+        }
+    }
+
+    suspend fun firstSegmentOf(playlistUrl: String, referer: String): String? {
+        return try {
+            val res = app.get(playlistUrl, headers = mapOf("User-Agent" to UA, "Referer" to referer))
+            if (res.code != 200) return null
+            val body = res.text
+            if (!body.startsWith("#EXTM3U")) return null
+            body.lineSequence()
+                .map { it.trim() }
+                .firstOrNull { it.isNotEmpty() && !it.startsWith("#") }
+                ?.let { absolutize(it, playlistUrl) }
+        } catch (e: Exception) {
+            null
+        }
     }
 
     fun parseSeasonsRail(flight: String): List<ToonixRailSeason> {

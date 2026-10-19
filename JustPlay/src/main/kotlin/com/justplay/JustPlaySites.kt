@@ -863,7 +863,14 @@ internal object TmfSite {
 }
 
 internal object MultimoviesSite {
-    private const val DEFAULT_DOMAIN = "https://multimovies.garden"
+    private const val DEFAULT_DOMAIN = "https://m1.multimovies.courses"
+    private const val DOMAIN_CHECK_TTL_MS = 5L * 60 * 1000
+
+    // garden is kept last because it is challenge walled today
+    private val domainFallbacks = listOf(
+        "https://m1.multimovies.courses",
+        "https://multimovies.garden",
+    )
 
     private data class MmCard(
         val title: String,
@@ -872,31 +879,40 @@ internal object MultimoviesSite {
         val isTv: Boolean
     )
 
-    @Volatile private var checkedRemote: String? = null
+    @Volatile private var domainCheckAt = 0L
     @Volatile private var resolvedDomain: String? = null
 
+    // every catalog page renders poster-card rows, the old player.js probe hit a
+    // script that only detail pages load and blocked every domain switch
     private suspend fun currentDomain(): String {
+        val now = System.currentTimeMillis()
+        if (now - domainCheckAt < DOMAIN_CHECK_TTL_MS) {
+            resolvedDomain?.let { return it }
+        }
+        domainCheckAt = now
+
         val remote = FirebaseDomainHelper.getDomain("justplay_multimovies")
             ?: FirebaseDomainHelper.getDomain("multimovies")
-        val target = remote?.trimEnd('/')
-        if (target != null && target != checkedRemote) {
-            checkedRemote = target
-            resolvedDomain = null
+        val remoteDomain = remote?.takeIf { it.startsWith("http") }?.trimEnd('/')
+        val candidates = buildList {
+            remoteDomain?.let { add(it) }
+            domainFallbacks.filter { it != remoteDomain }.forEach { add(it) }
         }
-        resolvedDomain?.let { return it }
-
-        var domain = DEFAULT_DOMAIN
-        if (target != null && target != DEFAULT_DOMAIN) {
+        for (candidate in candidates) {
             val ok = try {
-                val res = PlayNet.fetchWithCf(target)
-                res != null && res.isSuccessful && res.text.contains("/assets/js/player.js")
+                val res = PlayNet.fetchWithCf("$candidate/")
+                res != null && res.isSuccessful && res.text.contains("poster-card")
             } catch (_: Exception) {
                 false
             }
-            if (ok) domain = target
+            if (ok) {
+                resolvedDomain = candidate
+                MmSite.baseUrl = candidate
+                return candidate
+            }
         }
-        resolvedDomain = domain
-        return domain
+        resolvedDomain?.let { return it }
+        return DEFAULT_DOMAIN
     }
 
     private fun cardOf(el: Element, domain: String): MmCard? {
@@ -1101,6 +1117,9 @@ internal object MultimoviesSite {
             host.contains("filesforever.link") ->
                 MmGdMirror.resolveFilesforever(server.url, server.name, callback)
 
+            host.contains("vidrift.net") ->
+                MmVidrift.resolve(server.url, server.name, callback)
+
             host.contains("vidout.pages.dev") -> {
                 val tmdb = ids.tmdbId ?: return false
                 MmVidout.resolve(tmdb, isTv, season, episode, server.name, subtitleCallback, callback)
@@ -1128,7 +1147,7 @@ internal object MultimoviesSite {
             }
 
             else -> {
-                val html = MmNet.get(server.url, referer = "https://multimovies.garden/")
+                val html = MmNet.get(server.url, referer = MmSite.referer)
                 if (html != null) {
                     val urls = Regex("https?://[^\"'\\s\\\\]+\\.m3u8[^\"'\\s\\\\]*")
                         .findAll(html)

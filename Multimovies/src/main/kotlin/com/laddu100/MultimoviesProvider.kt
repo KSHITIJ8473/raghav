@@ -26,12 +26,16 @@ import kotlinx.coroutines.coroutineScope
 import org.json.JSONObject
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
+import java.net.URI
 import java.util.concurrent.ConcurrentHashMap
 
 private const val TAG = "Multimovies"
 
+// how often the live domain is re-validated, the check is one homepage fetch
+private const val DOMAIN_CHECK_TTL_MS = 5L * 60 * 1000
+
 class MultimoviesProvider : MainAPI() {
-    override var mainUrl = "https://multimovies.garden"
+    override var mainUrl = "https://m1.multimovies.courses"
     override var name = "Multimovies"
     override var lang = "en"
     override val hasMainPage = true
@@ -57,27 +61,77 @@ class MultimoviesProvider : MainAPI() {
         "Accept-Language" to "en-US,en;q=0.9",
     )
 
+    // the live domain first, then whatever the firebase registry says, then the
+    // historical ones; garden is kept last because it is challenge walled today
+    private val domainFallbacks = listOf(
+        "https://m1.multimovies.courses",
+        "https://multimovies.garden",
+    )
+
+    // hosts the site lived on before, watchlist entries still carry them
+    private val legacyHosts = setOf(
+        "multimovies.garden", "www.multimovies.garden",
+        "multimovies.wtf", "www.multimovies.wtf",
+        "multimovies.courses", "www.multimovies.courses",
+    )
+
     private var validatedDomain: String? = null
 
-    // the firebase list can lag behind migrations, only switch when the reply
-    // really looks like the current app shell
-    private suspend fun refreshDomain() {
+    @Volatile private var domainCheckAt = 0L
+
+    // every catalog page renders poster-card rows, the old player.js probe hit a
+    // script that only detail pages load and blocked every domain switch
+    private suspend fun refreshDomain(force: Boolean = false) {
+        val now = System.currentTimeMillis()
+        if (!force && now - domainCheckAt < DOMAIN_CHECK_TTL_MS) return
+        domainCheckAt = now
         try {
-            val remote = FirebaseDomainHelper.getDomain("multimovies") ?: return
-            if (remote == mainUrl || remote == validatedDomain) return
-            val ok = try {
-                val resp = mmGet("$remote/", headers = headers)
-                resp.isSuccessful && resp.text.contains("/assets/js/player.js")
-            } catch (e: Exception) {
-                Log.d(TAG, "domain check $remote: ${e.message}")
-                false
+            val remote = FirebaseDomainHelper.getDomain("multimovies")
+                ?.takeIf { it.startsWith("http") }
+                ?.removeSuffix("/")
+            val candidates = buildList {
+                if (remote != null) add(remote)
+                domainFallbacks.filter { it != remote }.forEach { add(it) }
             }
-            validatedDomain = remote
-            if (ok) mainUrl = remote
+            for (candidate in candidates) {
+                val ok = try {
+                    val resp = mmGet("$candidate/", headers = headers)
+                    resp.isSuccessful && resp.text.contains("poster-card")
+                } catch (e: Exception) {
+                    Log.d(TAG, "domain check $candidate: ${e.message}")
+                    false
+                }
+                if (ok) {
+                    validatedDomain = candidate
+                    if (candidate != mainUrl) {
+                        mainUrl = candidate
+                        MMSite.baseUrl = candidate
+                    }
+                    return
+                }
+            }
         } catch (e: Exception) {
             Log.e(TAG, "refreshDomain: ${e.message}")
             validatedDomain = null
         }
+    }
+
+    // watchlist and sync entries keep whatever host they were saved with; if
+    // that host is a dead mirror of the site, replay the same path on the live
+    // domain instead of walking into the cloudflare wall
+    private fun normalizeUrl(url: String): String = try {
+        val uri = URI(url)
+        val host = (uri.host ?: "").lowercase()
+        val live = MMNet.hostOf(mainUrl)
+        if (host != live && (host in legacyHosts || host.endsWith(".multimovies.courses"))) {
+            val path = uri.rawPath.orEmpty().ifBlank { "/" }
+            val query = uri.rawQuery?.let { "?$it" } ?: ""
+            mainUrl.trimEnd('/') + path + query
+        } else {
+            url
+        }
+    } catch (e: Exception) {
+        url
     }
 
     private fun cardJson(el: org.jsoup.nodes.Element): JSONObject? {
@@ -283,16 +337,17 @@ class MultimoviesProvider : MainAPI() {
 
     override suspend fun load(url: String): LoadResponse? {
         refreshDomain()
+        val target = normalizeUrl(url)
         return try {
-            val resp = mmGet(url, headers = headers)
+            val resp = mmGet(target, headers = headers)
             val doc = resp.document
             val (title, plot, image) = parseMeta(doc)
             if (title.isBlank()) return null
             val genres = parseGenres(doc)
             val (year, duration, score) = parsePills(doc)
 
-            if (url.contains("/series/")) {
-                val seriesBase = url.substringBefore('?')
+            if (target.contains("/series/")) {
+                val seriesBase = target.substringBefore('?')
                 val seasons = parseSeasons(doc)
                 val current = watchSeason(resp.text) ?: seasons.firstOrNull() ?: 1
                 val episodes = mutableListOf<Episode>()
@@ -337,13 +392,13 @@ class MultimoviesProvider : MainAPI() {
                     }
                 }
 
-                val tvType = if (genres.any { it.contains("anime", true) } || url.contains("anime")) {
+                val tvType = if (genres.any { it.contains("anime", true) } || target.contains("anime")) {
                     TvType.Anime
                 } else {
                     TvType.TvSeries
                 }
                 if (episodes.isEmpty()) return null
-                newTvSeriesLoadResponse(title, url, tvType, episodes) {
+                newTvSeriesLoadResponse(title, target, tvType, episodes) {
                     this.posterUrl = image
                     this.backgroundPosterUrl = image
                     this.plot = plot
@@ -354,9 +409,9 @@ class MultimoviesProvider : MainAPI() {
             } else {
                 newMovieLoadResponse(
                     title,
-                    url,
-                    if (url.contains("anime")) TvType.Anime else TvType.Movie,
-                    url,
+                    target,
+                    if (target.contains("anime")) TvType.Anime else TvType.Movie,
+                    target,
                 ) {
                     this.posterUrl = image
                     this.backgroundPosterUrl = image
@@ -399,7 +454,7 @@ class MultimoviesProvider : MainAPI() {
         refreshDomain()
         var any = false
         try {
-            val html = mmGet(data, headers = headers).text
+            val html = mmGet(normalizeUrl(data), headers = headers).text
             val servers = parseWatchConfig(html)
             if (servers.isEmpty()) return false
 
@@ -463,6 +518,9 @@ class MultimoviesProvider : MainAPI() {
             host.contains("filesforever.link") ->
                 MMIqsmart.resolveFilesforever(server.url, server.name, callback)
 
+            host.contains("vidrift.net") ->
+                MMVidrift.resolve(server.url, server.name, callback)
+
             host.contains("vidout.pages.dev") -> {
                 val tmdb = ids.tmdbId ?: return false
                 MMVidout.resolve(tmdb, isTv, season, episode, server.name, subtitleCallback, callback)
@@ -490,7 +548,7 @@ class MultimoviesProvider : MainAPI() {
             }
 
             else -> {
-                val html = MMNet.get(server.url, referer = "https://multimovies.garden/")
+                val html = MMNet.get(server.url, referer = MMSite.referer)
                 if (html != null) {
                     val urls = Regex("https?://[^\"'\\s\\\\]+\\.m3u8[^\"'\\s\\\\]*")
                         .findAll(html)

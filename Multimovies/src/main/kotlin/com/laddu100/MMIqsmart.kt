@@ -32,7 +32,7 @@ object MMIqsmart {
     }
 
     private suspend fun fetchFiles(embedUrl: String): List<FileEntry> {
-        val html = MMNet.get(embedUrl, referer = "https://multimovies.garden/") ?: return emptyList()
+        val html = MMNet.get(embedUrl, referer = MMSite.referer) ?: return emptyList()
 
         val varValue = { name: String ->
             Regex("let\\s+$name\\s*=\\s*\"([^\"]*)\"").find(html)?.groupValues?.get(1).orEmpty()
@@ -166,7 +166,7 @@ object MMIqsmart {
         val code = embedUrl.trimEnd('/').substringAfterLast('/')
         if (code.isBlank()) return false
 
-        val page = MMNet.get(embedUrl, referer = "https://multimovies.garden/")
+        val page = MMNet.get(embedUrl, referer = MMSite.referer)
         val sid = if (page != null) {
             Regex("id=\"gdmrfid\"\\s+value=\"([^\"]+)\"").find(page)?.groupValues?.get(1)
                 ?: Regex("let\\s+FinalID\\s*=\\s*\"([^\"]+)\"").find(page)?.groupValues?.get(1)
@@ -202,6 +202,7 @@ object MMXvidStyle {
         "morencius.com",
         "vibuxer.com",
         "n1mwq.org",
+        "minochinos.com",
     )
 
     fun isXvidStyle(host: String): Boolean = host in knownHosts

@@ -12,6 +12,13 @@ import okhttp3.RequestBody.Companion.toRequestBody
 
 private const val TAG = "MM_Net"
 
+// the site migrates domains every few months and the embed origins check the
+// referer, so every hardcoded origin had to become the current live one
+object MMSite {
+    @Volatile var baseUrl: String = "https://m1.multimovies.courses"
+    val referer: String get() = "$baseUrl/"
+}
+
 object MMNet {
     const val UA =
         "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"

@@ -154,8 +154,8 @@ class RareAnimesProvider : MainAPI() {
         DonationManager.checkAndShow()
         mainUrl = FirebaseDomainHelper.getDomain("rareanimes") ?: mainUrl
         return try {
-            val url = if (page <= 1) "$mainUrl/hindi/category/${request.data}/"
-            else "$mainUrl/hindi/category/${request.data}/page/$page/"
+            val url = if (page <= 1) "$mainUrl/category/${request.data}/"
+            else "$mainUrl/category/${request.data}/page/$page/"
             val response = raiGet(url)
             val entries = parseListings(response.text)
             val items = entries.map {

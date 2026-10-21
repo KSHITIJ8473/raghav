@@ -1,6 +1,7 @@
 package com.csksy.nepu
 
 import android.annotation.SuppressLint
+import android.app.AlertDialog
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
@@ -159,17 +160,24 @@ class NepuSettingsFragment(private val plugin: Plugin) : BottomSheetDialogFragme
             }
             layoutParams = LinearLayout.LayoutParams(-1, d(48))
             setOnClickListener {
-                NepuSession.clear()
-                wipeWebViewCookies("https://nepu.io")
-                renderStatus()
-                runVerification(reloadOnSuccess = true)
+                val act = activity
+                if (act == null) {
+                    runVerification()
+                    return@setOnClickListener
+                }
+                AlertDialog.Builder(act)
+                    .setTitle("Reset session?")
+                    .setMessage("All saved Cloudflare cookies are removed and the verification runs again from scratch.")
+                    .setPositiveButton("Reset") { _, _ -> runVerification() }
+                    .setNegativeButton("Cancel", null)
+                    .show()
             }
         }
         root.addView(resetButton)
         root.addView(View(ctx), LinearLayout.LayoutParams(1, d(12)))
 
         root.addView(TextView(ctx).apply {
-            text = "Verification opens a short browser check and keeps Nepu working for about 12 hours. It runs on its own when a request is blocked."
+            text = "Verification opens a short browser check and the session is kept until the site asks for it again. It runs on its own when a request is blocked."
             textSize = 11.5f
             setTextColor(TEXT_FAINT)
             setLineSpacing(d(2).toFloat(), 1f)
@@ -179,13 +187,19 @@ class NepuSettingsFragment(private val plugin: Plugin) : BottomSheetDialogFragme
         return root
     }
 
-    private fun remainingText(): String {
-        val elapsed = System.currentTimeMillis() - NepuSession.savedAtMillis()
-        val left = SESSION_TTL_MS - elapsed
-        if (left <= 0) return "expired"
-        val hours = TimeUnit.MILLISECONDS.toHours(left)
-        val minutes = TimeUnit.MILLISECONDS.toMinutes(left) % 60
-        return if (hours > 0) "about ${hours}h ${minutes}m left" else "about ${minutes}m left"
+    private fun savedAgoText(): String {
+        val savedAt = NepuSession.savedAtMillis()
+        if (savedAt <= 0L) return ""
+        val age = System.currentTimeMillis() - savedAt
+        if (age < TimeUnit.MILLISECONDS.toMinutes(1)) return "saved just now"
+        val hours = TimeUnit.MILLISECONDS.toHours(age)
+        val minutes = TimeUnit.MILLISECONDS.toMinutes(age) % 60
+        val days = hours / 24
+        return when {
+            days > 0 -> "saved ${days}d ${hours % 24}h ago"
+            hours > 0 -> "saved ${hours}h ${minutes}m ago"
+            else -> "saved ${minutes}m ago"
+        }
     }
 
     @SuppressLint("SetTextI18n")
@@ -194,9 +208,9 @@ class NepuSettingsFragment(private val plugin: Plugin) : BottomSheetDialogFragme
         (statusDot?.background as? GradientDrawable)?.setColor(if (active) ACCENT else ACCENT_DIM)
         statusTitle?.text = if (active) "Access active" else "Verification required"
         statusDetail?.text = when {
-            active -> "Session saved, ${remainingText()}"
+            active -> savedAgoText().ifBlank { "Session saved" }
             NepuSession.savedAtMillis() == 0L -> "Verify once so Nepu can load content"
-            else -> "Previous session expired"
+            else -> "No active session"
         }
         verifyButton?.apply {
             text = if (active) "Verify again" else "Verify Cloudflare"
@@ -207,7 +221,7 @@ class NepuSettingsFragment(private val plugin: Plugin) : BottomSheetDialogFragme
     }
 
     @SuppressLint("SetTextI18n")
-    private fun runVerification(reloadOnSuccess: Boolean = false) {
+    private fun runVerification() {
         val button = verifyButton ?: return
         button.isEnabled = false
         button.alpha = 0.6f
@@ -215,20 +229,20 @@ class NepuSettingsFragment(private val plugin: Plugin) : BottomSheetDialogFragme
         resetButton?.isEnabled = false
         scope.launch {
             try {
-                NepuSession.clear()
-                wipeWebViewCookies("https://nepu.io")
+                // the full wipe is what brings the challenge back, without it
+                // the webview store keeps handing cloudflare the old clearance
+                wipeNepuBrowserState()
+                if (isAdded) renderStatus()
                 val success = solveNepuCloudflare("https://nepu.io/")
                 if (success && NepuSession.active()) {
                     if (isAdded) {
                         Toast.makeText(requireContext(), "Nepu is ready", Toast.LENGTH_SHORT).show()
-                        if (reloadOnSuccess) dismissAllowingStateLoss()
+                        dismissAllowingStateLoss()
                     }
-                    if (reloadOnSuccess) {
-                        try {
-                            MainActivity.reloadHomeEvent.invoke(true)
-                        } catch (e: Exception) {
-                            Log.e(TAG, "reload home: ${e.message}")
-                        }
+                    try {
+                        MainActivity.reloadHomeEvent.invoke(true)
+                    } catch (e: Exception) {
+                        Log.e(TAG, "reload home: ${e.message}")
                     }
                 } else if (isAdded) {
                     Toast.makeText(requireContext(), "Verification incomplete", Toast.LENGTH_SHORT).show()

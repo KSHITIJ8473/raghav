@@ -26,7 +26,8 @@ data class AniPMLatestItem(
     @JsonProperty("title") val title: String? = null,
     @JsonProperty("poster") val poster: String? = null,
     @JsonProperty("sub") val sub: Boolean? = null,
-    @JsonProperty("dub") val dub: Boolean? = null
+    @JsonProperty("dub") val dub: Boolean? = null,
+    @JsonProperty("anilistId") val anilistId: String? = null
 )
 
 @JsonIgnoreProperties(ignoreUnknown = true)

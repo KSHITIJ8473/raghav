@@ -79,7 +79,7 @@ class AniPMProvider : MainAPI() {
     private suspend fun latestPage(page: Int, sectionName: String): HomePageResponse {
         val res = AniPMApi.latestEpisodes(page)
         val list = res?.items.orEmpty().mapNotNull { item ->
-            val id = item.id ?: return@mapNotNull null
+            val id = usableId(item.id, item.anilistId) ?: return@mapNotNull null
             val title = item.title?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
             newAnimeSearchResponse(title, "$mainUrl|$id", TvType.Anime) {
                 posterUrl = AniPMApi.absolute(item.poster)
@@ -89,8 +89,16 @@ class AniPMProvider : MainAPI() {
         return newHomePageResponse(sectionName, list, hasNext = res?.hasNextPage == true)
     }
 
+    // fresh releases that the site has not claimed yet carry a 1_000_000 + anilist id
+    // offset, and the series endpoint only answers to the anilist id itself
+    private fun usableId(id: Int?, anilistId: String?): Int? {
+        if (id == null) return null
+        if (id >= 1_000_000) return anilistId?.toIntOrNull() ?: id
+        return id
+    }
+
     private fun titleResponse(item: AniPMTitle): SearchResponse? {
-        val id = item.id ?: return null
+        val id = usableId(item.id, item.anilistId) ?: return null
         val title = item.title?.takeIf { it.isNotBlank() } ?: return null
         return newAnimeSearchResponse(title, "$mainUrl|$id", TvType.Anime) {
             posterUrl = AniPMApi.absolute(item.poster)
@@ -132,7 +140,9 @@ class AniPMProvider : MainAPI() {
         AniPMApi.refreshDomain()
         mainUrl = AniPMApi.url()
         val id = url.substringAfterLast("|").trim().toIntOrNull() ?: return null
-        val series = AniPMApi.series(id) ?: return null
+        val series = AniPMApi.series(id)
+            ?: (id.takeIf { it >= 1_000_000 }?.let { AniPMApi.series(it - 1_000_000) })
+            ?: return null
         val title = series.title?.takeIf { it.isNotBlank() } ?: return null
 
         val filler = AniPMApi.filler(series.anilistId, title)
@@ -140,11 +150,15 @@ class AniPMProvider : MainAPI() {
         val mixedNumbers = expandRanges(filler?.mixed)
         val packages = AniPMApi.packages(series.anilistId)
 
+        // playback bootstrap wants the id the series response identifies as, which
+        // differs from the url id when an offset id had to be retried
+        val seriesId = series.id ?: id
+
         fun episodeData(number: Int, dub: Boolean): String {
             val channel = if (dub) "dub" else "sub"
             val hard = packages?.episodes?.get(number.toString())
                 ?.let { if (dub) it.dubhard == true else it.subhard == true } == true
-            return "$mainUrl|$id|$number|$channel|${if (hard) "hs" else ""}" +
+            return "$mainUrl|$seriesId|$number|$channel|${if (hard) "hs" else ""}" +
                 "|${series.anilistId.orEmpty()}|${series.malId.orEmpty()}"
         }
 

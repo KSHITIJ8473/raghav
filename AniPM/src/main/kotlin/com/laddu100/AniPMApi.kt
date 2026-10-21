@@ -106,8 +106,10 @@ object AniPMApi {
     }
 
     suspend fun bootstrap(id: Int, episode: Int, lang: String): AniPMBootstrap? {
-        val url = "${url()}/api/anime/playback-bootstrap/settlar/$id?ep=$episode&lang=$lang&backup=1"
-        val text = getJson(url) ?: return null
+        // anilist sourced titles only answer to the anilist provider, claimed ones to settlar
+        val text = getJson("${url()}/api/anime/playback-bootstrap/settlar/$id?ep=$episode&lang=$lang&backup=1")
+            ?: getJson("${url()}/api/anime/playback-bootstrap/anilist/$id?ep=$episode&lang=$lang&backup=1")
+            ?: return null
         return try {
             parseJson<AniPMBootstrap>(text)
         } catch (_: Exception) {

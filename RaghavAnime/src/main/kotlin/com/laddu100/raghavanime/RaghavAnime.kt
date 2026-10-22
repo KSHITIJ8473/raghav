@@ -12,8 +12,11 @@ import android.widget.TextView
 import android.widget.Button
 import android.widget.ScrollView
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties
+import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.LoadResponse.Companion.addAniListId
+import com.lagradost.cloudstream3.LoadResponse.Companion.addMalId
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.AppUtils.toJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
@@ -33,6 +36,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.RequestBody.Companion.toRequestBody
 import com.raghav.donation.DonationManager
+import java.net.URLEncoder
 
 class RaghavAnime : MainAPI() {
     override var mainUrl = "https://graphql.anilist.co"
@@ -231,7 +235,7 @@ class RaghavAnime : MainAPI() {
             if (cached != null) {
                 buildRowItems(cached)
             } else {
-                emptyList()
+                kitsuRow(request.data, page)
             }
         }
 
@@ -275,12 +279,15 @@ class RaghavAnime : MainAPI() {
                 }
             }
         } catch (e: Exception) {
-            emptyList()
+            kitsuSearch(query)
         }
         return results
     }
 
     override suspend fun load(url: String): LoadResponse? {
+        val kitsuId = Regex("""/anime/(\d+)""").find(url)?.groupValues?.get(1)?.toIntOrNull()
+        if (kitsuId != null) return kitsuLoad(kitsuId, url, null)
+
         val anilistId = Regex("""/info/(\d+)""").find(url)?.groupValues?.get(1)?.toIntOrNull() ?: return null
 
         isAniListDown()
@@ -290,10 +297,8 @@ class RaghavAnime : MainAPI() {
             val infoResponse = parseJson<AniListResponse>(infoText)
             infoResponse.data?.Media
         } catch (e: Exception) {
-            return null
-        } ?: run {
-            return null
-        }
+            null
+        } ?: return kitsuLoadByAnilistId(anilistId, url)
 
         val title = media.title?.english ?: media.title?.romaji ?: "Unknown"
         val jpTitle = media.title?.romaji
@@ -364,7 +369,7 @@ class RaghavAnime : MainAPI() {
             })
         }
 
-        prefetchSources(anilistId, title, jpTitle, year)
+        prefetchSources(anilistId, anilistId, title, jpTitle, year)
 
         val clearLogo = TmdbArtwork.clearLogo(
             animeMetaData?.mappings?.themoviedb_id,
@@ -388,6 +393,193 @@ class RaghavAnime : MainAPI() {
         }
     }
 
+    private suspend fun kitsuRow(request: String, page: Int): List<SearchResponse> {
+        val offset = (page - 1) * 20
+        val url = when (request) {
+            "TRENDING" -> "$KITSU_API/trending/anime?page[limit]=20&page[offset]=$offset"
+            "POPULAR" -> "$KITSU_API/anime?sort=popularityRank&page[limit]=20&page[offset]=$offset"
+            "TOP_RATED" -> "$KITSU_API/anime?sort=ratingRank&page[limit]=20&page[offset]=$offset"
+            "RECENT" -> "$KITSU_API/anime?filter[status]=current&sort=-startDate&page[limit]=20&page[offset]=$offset"
+            else -> "$KITSU_API/trending/anime?page[limit]=20&page[offset]=$offset"
+        }
+
+        val mediaList = try {
+            val responseText = app.get(url, headers = KITSU_HEADERS, timeout = 15L).text
+            parseJson<KitsuResponse>(responseText).data ?: emptyList()
+        } catch (e: Exception) {
+            emptyList()
+        }
+
+        return coroutineScope {
+            mediaList.map { item ->
+                async {
+                    val id = item.id?.toIntOrNull() ?: return@async null
+                    val attrs = item.attributes ?: return@async null
+                    val title = attrs.canonicalTitle ?: return@async null
+                    val fallback = attrs.posterImage?.large ?: attrs.posterImage?.original
+                    val poster = CustomPosters.poster(null, id, attrs.subtype == "movie", fallback)
+                    newAnimeSearchResponse(CustomPosters.cardTitle(title), "https://kitsu.io/anime/$id", TvType.Anime) {
+                        this.posterUrl = poster
+                        addDubStatus(dubExist = true, subExist = true, dubEpisodes = attrs.episodeCount, subEpisodes = attrs.episodeCount)
+                    }
+                }
+            }.awaitAll().filterNotNull()
+        }
+    }
+
+    private suspend fun kitsuSearch(query: String): List<SearchResponse> {
+        val encoded = URLEncoder.encode(query, "UTF-8")
+        val mediaList = try {
+            val responseText = app.get("$KITSU_API/anime?filter[text]=$encoded&page[limit]=20", headers = KITSU_HEADERS, timeout = 15L).text
+            parseJson<KitsuResponse>(responseText).data ?: emptyList()
+        } catch (e: Exception) {
+            emptyList()
+        }
+        return mediaList.mapNotNull { item ->
+            val id = item.id?.toIntOrNull() ?: return@mapNotNull null
+            val attrs = item.attributes ?: return@mapNotNull null
+            val title = attrs.canonicalTitle ?: return@mapNotNull null
+            val fallback = attrs.posterImage?.large ?: attrs.posterImage?.original
+            val poster = CustomPosters.poster(null, id, attrs.subtype == "movie", fallback)
+            newAnimeSearchResponse(CustomPosters.cardTitle(title), "https://kitsu.io/anime/$id", TvType.Anime) {
+                this.posterUrl = poster
+                addDubStatus(dubExist = true, subExist = true, dubEpisodes = attrs.episodeCount, subEpisodes = attrs.episodeCount)
+            }
+        }
+    }
+
+    private suspend fun kitsuLoadByAnilistId(anilistId: Int, url: String): LoadResponse? {
+        val meta = try {
+            parseAnimeData(app.get("https://api.ani.zip/mappings?anilist_id=$anilistId").text)
+        } catch (_: Exception) { null } ?: return null
+        val kitsuId = meta.mappings?.kitsu_id ?: return null
+        return kitsuLoad(kitsuId, url, anilistId, meta)
+    }
+
+    private suspend fun kitsuLoad(kitsuId: Int, url: String, anilistId: Int?, aniZip: MetaAnimeData? = null): LoadResponse? {
+        val media = try {
+            val infoText = app.get("$KITSU_API/anime/$kitsuId?include=mappings", headers = KITSU_HEADERS, timeout = 15L).text
+            parseJson<KitsuSingleResponse>(infoText)
+        } catch (e: Exception) {
+            return null
+        }
+
+        val data = media.data ?: return null
+        val attrs = data.attributes ?: return null
+        val title = attrs.canonicalTitle ?: attrs.titles?.en ?: attrs.titles?.en_jp ?: "Unknown"
+        val jpTitle = attrs.titles?.ja_jp ?: attrs.titles?.en_jp
+        val posterUrl = attrs.posterImage?.large ?: attrs.posterImage?.original
+        val bannerUrl = attrs.coverImage?.large ?: attrs.coverImage?.original
+        val plot = attrs.synopsis
+        val year = attrs.startDate?.substring(0, 4)?.toIntOrNull()
+        val animeScore = attrs.averageRating?.toFloatOrNull()?.let { (it / 10).toInt() }
+        val epCount = attrs.episodeCount ?: 0
+        val subtype = attrs.subtype
+        val status = attrs.status
+
+        val tags = try { fetchCategories(kitsuId) } catch (_: Exception) { emptyList() }
+
+        val tvType = when (subtype) {
+            "ova", "ona", "special" -> TvType.OVA
+            else -> TvType.Anime
+        }
+        val showStatus = when (status) {
+            "current" -> ShowStatus.Ongoing
+            "finished" -> ShowStatus.Completed
+            else -> null
+        }
+
+        val malId = media.included?.mapNotNull { inc ->
+            val incAttrs = inc.attributes ?: return@mapNotNull null
+            if (incAttrs.externalSite == "myanimelist/anime") {
+                incAttrs.externalId?.toIntOrNull()
+            } else null
+        }?.firstOrNull()
+
+        val kitsuAnilistId = media.included?.mapNotNull { inc ->
+            val incAttrs = inc.attributes ?: return@mapNotNull null
+            if (incAttrs.externalSite == "anilist/anime") {
+                incAttrs.externalId?.toIntOrNull()
+            } else null
+        }?.firstOrNull()
+
+        val resolvedAnilistId = anilistId ?: kitsuAnilistId
+
+        val animeMetaData = aniZip ?: try {
+            val idParam = if (resolvedAnilistId != null) "anilist_id=$resolvedAnilistId" else "kitsu_id=$kitsuId"
+            parseAnimeData(app.get("https://api.ani.zip/mappings?$idParam").text)
+        } catch (_: Exception) { null }
+
+        val anizipNumericCount = animeMetaData?.episodes?.keys
+            ?.filterNotNull()
+            ?.filter { it.toIntOrNull() != null }
+            ?.size ?: 0
+
+        var totalEps = epCount.takeIf { it > 0 } ?: anizipNumericCount ?: 0
+        if (totalEps == 0) totalEps = 1
+
+        val subEpisodes = mutableListOf<Episode>()
+        val dubEpisodes = mutableListOf<Episode>()
+
+        for (i in 1..totalEps) {
+            val epData = animeMetaData?.episodes?.get(i.toString())
+            val epTitle = epData?.title?.get("en") ?: epData?.title?.get("ja") ?: epData?.title?.get("x-jat") ?: "Episode $i"
+            val epDesc = epData?.overview ?: "No summary available"
+            val epPoster = epData?.image ?: posterUrl
+
+            val subLinkData = LinkData(animeId = resolvedAnilistId ?: 0, kitsuId = kitsuId, malId = malId, title = title, jpTitle = jpTitle, episode = i, isDub = false, year = year).toJson()
+            val dubLinkData = LinkData(animeId = resolvedAnilistId ?: 0, kitsuId = kitsuId, malId = malId, title = title, jpTitle = jpTitle, episode = i, isDub = true, year = year).toJson()
+
+            subEpisodes.add(newEpisode(subLinkData) {
+                this.episode = i
+                this.name = epTitle
+                this.description = epDesc
+                this.posterUrl = epPoster
+            })
+            dubEpisodes.add(newEpisode(dubLinkData) {
+                this.episode = i
+                this.name = epTitle
+                this.description = epDesc
+                this.posterUrl = epPoster
+            })
+        }
+
+        prefetchSources(kitsuId, resolvedAnilistId ?: 0, title, jpTitle, year)
+
+        val clearLogo = TmdbArtwork.clearLogo(
+            animeMetaData?.mappings?.themoviedb_id,
+            subtype == "movie"
+        )
+
+        val poster = CustomPosters.poster(resolvedAnilistId, kitsuId, subtype == "movie", posterUrl, animeMetaData?.mappings)
+
+        return newAnimeLoadResponse(title, url, tvType) {
+            this.posterUrl = poster
+            this.backgroundPosterUrl = bannerUrl
+            this.logoUrl = clearLogo
+            this.year = year
+            this.plot = plot
+            this.tags = tags
+            if (animeScore != null) this.score = Score.from10(animeScore.toString())
+            this.showStatus = showStatus
+            if (resolvedAnilistId != null) addAniListId(resolvedAnilistId)
+            if (malId != null) addMalId(malId)
+            if (subEpisodes.isNotEmpty()) addEpisodes(DubStatus.Subbed, subEpisodes)
+            if (dubEpisodes.isNotEmpty()) addEpisodes(DubStatus.Dubbed, dubEpisodes)
+        }
+    }
+
+    private suspend fun fetchCategories(kitsuId: Int): List<String> {
+        return try {
+            val url = "$KITSU_API/anime/$kitsuId/categories"
+            val responseText = app.get(url, headers = KITSU_HEADERS, timeout = 10L).text
+            val response = parseJson<KitsuResponse>(responseText)
+            response.data?.mapNotNull { it.attributes?.title }.orEmpty()
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -401,21 +593,23 @@ class RaghavAnime : MainAPI() {
         val episode = linkData.episode
         val isDub = linkData.isDub
 
-        if (RaghavAnimeFeatures.isEnabled("watch_time")) {
+        if (aniId > 0 && RaghavAnimeFeatures.isEnabled("watch_time")) {
             try { RaghavAnimeFeatures.recordWatchTime(aniId, title, null, 24 * 60 * 1000L) } catch (_: Exception) {}
         }
 
-        val animeKey = aniId.toString()
+        val animeKey = (linkData.kitsuId.takeIf { it > 0 } ?: aniId).toString()
         val searchTitles = listOfNotNull(title, jpTitle).filter { it.isNotBlank() }
         val targetTitles = listOfNotNull(title, jpTitle)
 
         val sources = listOf<Pair<String, suspend () -> Unit>>(
             "Miruro" to {
-                val epData = SourceCache.episodeData("Miruro", animeKey, isDub, episode) {
-                    resolveMiruro(aniId, episode, isDub)
-                }
-                if (epData != null) {
-                    Miruro().loadLinks(epData, false, subtitleCallback, callback)
+                if (aniId > 0) {
+                    val epData = SourceCache.episodeData("Miruro", animeKey, isDub, episode) {
+                        resolveMiruro(aniId, episode, isDub)
+                    }
+                    if (epData != null) {
+                        Miruro().loadLinks(epData, false, subtitleCallback, callback)
+                    }
                 }
             },
             "AniSuge" to {
@@ -435,8 +629,10 @@ class RaghavAnime : MainAPI() {
                 }
             },
             "AniKage" to {
-                val anikage = RaghavAniKage()
-                anikage.loadLinksByAnilistId(aniId, title, jpTitle, episode, isDub, subtitleCallback, callback)
+                if (aniId > 0) {
+                    val anikage = RaghavAniKage()
+                    anikage.loadLinksByAnilistId(aniId, title, jpTitle, episode, isDub, subtitleCallback, callback)
+                }
             },
             "2DHive" to {
                 val epData = SourceCache.episodeData("2DHive", animeKey, isDub, episode) {
@@ -463,8 +659,10 @@ class RaghavAnime : MainAPI() {
                 }
             },
             "Anidap" to {
-                val anidap = RaghavAnidap()
-                anidap.loadLinksByAnilistId(aniId, episode, isDub, subtitleCallback, callback)
+                if (aniId > 0) {
+                    val anidap = RaghavAnidap()
+                    anidap.loadLinksByAnilistId(aniId, episode, isDub, subtitleCallback, callback)
+                }
             },
             "AniPM" to {
                 val anipm = RaghavAniPM()
@@ -479,16 +677,20 @@ class RaghavAnime : MainAPI() {
                 }
             },
             "AniNami" to {
-                val epData = SourceCache.episodeData("AniNami", animeKey, isDub, episode) {
-                    resolveAniNami(aniId, episode, isDub)
-                }
-                if (epData != null) {
-                    RaghavAniNami().loadLinks(epData, false, subtitleCallback, callback)
+                if (aniId > 0) {
+                    val epData = SourceCache.episodeData("AniNami", animeKey, isDub, episode) {
+                        resolveAniNami(aniId, episode, isDub)
+                    }
+                    if (epData != null) {
+                        RaghavAniNami().loadLinks(epData, false, subtitleCallback, callback)
+                    }
                 }
             },
             "AniChan" to {
-                val anichan = RaghavAniChan()
-                anichan.loadLinksByAnilistId(aniId, episode, isDub, subtitleCallback, callback)
+                if (aniId > 0) {
+                    val anichan = RaghavAniChan()
+                    anichan.loadLinksByAnilistId(aniId, episode, isDub, subtitleCallback, callback)
+                }
             },
             "Xanime" to {
                 val epData = SourceCache.episodeData("Xanime", animeKey, isDub, episode) {
@@ -499,16 +701,22 @@ class RaghavAnime : MainAPI() {
                 }
             },
             "Kyren" to {
-                val kyren = RaghavKyren()
-                kyren.loadLinksByAnilistId(aniId, title, episode, isDub, subtitleCallback, callback)
+                if (aniId > 0) {
+                    val kyren = RaghavKyren()
+                    kyren.loadLinksByAnilistId(aniId, title, episode, isDub, subtitleCallback, callback)
+                }
             },
             "ReAnime" to {
-                val reanime = RaghavReAnime()
-                reanime.loadLinksByAnilistId(aniId, episode, isDub, subtitleCallback, callback)
+                if (aniId > 0) {
+                    val reanime = RaghavReAnime()
+                    reanime.loadLinksByAnilistId(aniId, episode, isDub, subtitleCallback, callback)
+                }
             },
             "Anv" to {
-                val anv = RaghavAnv()
-                anv.loadLinksByAnilistId(aniId, episode, isDub, subtitleCallback, callback)
+                if (aniId > 0) {
+                    val anv = RaghavAnv()
+                    anv.loadLinksByAnilistId(aniId, episode, isDub, subtitleCallback, callback)
+                }
             },
         )
 
@@ -608,9 +816,9 @@ class RaghavAnime : MainAPI() {
         } catch (_: Exception) {}
     }
 
-    private fun prefetchSources(anilistId: Int, title: String, jpTitle: String?, year: Int?) {
-        if (anilistId <= 0 || title.isBlank()) return
-        val animeKey = anilistId.toString()
+    private fun prefetchSources(animeKey: Int, aniId: Int, title: String, jpTitle: String?, year: Int?) {
+        if (animeKey <= 0 || title.isBlank()) return
+        val key = animeKey.toString()
         val titles = listOfNotNull(title, jpTitle).filter { it.isNotBlank() }
         val targets = listOfNotNull(title, jpTitle)
 
@@ -623,14 +831,14 @@ class RaghavAnime : MainAPI() {
             for (isDub in listOf(false, true)) {
                 if (!isActive) return@launch
                 RaghavPerf.runLimitedAsync(RaghavPerf.prefetchConcurrency(), listOf(
-                    { warmSource("AniWaves", animeKey, isDub) { resolveAniWaves(titles, targets, null, isDub)?.episodes } },
-                    { warmSource("2DHive", animeKey, isDub) { resolveTwoDHive(titles, targets, null, isDub, year)?.episodes } },
-                    { warmSource("AniKoto", animeKey, isDub) { resolveAniKoto(titles, targets, null, isDub, year)?.episodes } },
-                    { warmSource("GoTaku", animeKey, isDub) { resolveGoTaku(titles, targets, null, isDub, year)?.episodes } },
-                    { warmSource("AniNami", animeKey, isDub) { resolveAniNami(anilistId, null, isDub)?.episodes } },
-                    { warmSource("Xanime", animeKey, isDub) { resolveXanime(titles, targets, null, isDub, year)?.episodes } },
-                    { warmSource("Senshi", animeKey, isDub) { resolveSenshi(titles, targets, null, isDub, year)?.episodes } },
-                    { RaghavAniChan().warm() }
+                    { warmSource("AniWaves", key, isDub) { resolveAniWaves(titles, targets, null, isDub)?.episodes } },
+                    { warmSource("2DHive", key, isDub) { resolveTwoDHive(titles, targets, null, isDub, year)?.episodes } },
+                    { warmSource("AniKoto", key, isDub) { resolveAniKoto(titles, targets, null, isDub, year)?.episodes } },
+                    { warmSource("GoTaku", key, isDub) { resolveGoTaku(titles, targets, null, isDub, year)?.episodes } },
+                    { if (aniId > 0) warmSource("AniNami", key, isDub) { resolveAniNami(aniId, null, isDub)?.episodes } },
+                    { warmSource("Xanime", key, isDub) { resolveXanime(titles, targets, null, isDub, year)?.episodes } },
+                    { warmSource("Senshi", key, isDub) { resolveSenshi(titles, targets, null, isDub, year)?.episodes } },
+                    { if (aniId > 0) RaghavAniChan().warm() }
                 ))
             }
         }
@@ -815,7 +1023,9 @@ class RaghavAnime : MainAPI() {
     }
 
     data class LinkData(
-        val animeId: Int,
+        val animeId: Int = 0,
+        val kitsuId: Int = 0,
+        val malId: Int? = null,
         val title: String,
         val jpTitle: String?,
         val episode: Int,
@@ -848,3 +1058,81 @@ val HOMEPAGE_QUERY = """
         }
     }
 """.trimIndent()
+
+const val KITSU_API = "https://kitsu.io/api/edge"
+val KITSU_HEADERS = mapOf(
+    "Accept" to "application/vnd.api+json",
+    "Content-Type" to "application/vnd.api+json"
+)
+
+@JsonIgnoreProperties(ignoreUnknown = true)
+data class KitsuResponse(
+    @JsonProperty("data") val data: List<KitsuMedia>? = null,
+    @JsonProperty("included") val included: List<KitsuMedia>? = null,
+    @JsonProperty("meta") val meta: KitsuMeta? = null
+)
+
+@JsonIgnoreProperties(ignoreUnknown = true)
+data class KitsuSingleResponse(
+    @JsonProperty("data") val data: KitsuMedia? = null,
+    @JsonProperty("included") val included: List<KitsuMedia>? = null
+)
+
+@JsonIgnoreProperties(ignoreUnknown = true)
+data class KitsuMeta(
+    @JsonProperty("count") val count: Int? = null
+)
+
+@JsonIgnoreProperties(ignoreUnknown = true)
+data class KitsuMedia(
+    @JsonProperty("id") val id: String? = null,
+    @JsonProperty("type") val type: String? = null,
+    @JsonProperty("attributes") val attributes: KitsuAttributes? = null
+)
+
+@JsonIgnoreProperties(ignoreUnknown = true)
+data class KitsuAttributes(
+    @JsonProperty("canonicalTitle") val canonicalTitle: String? = null,
+    @JsonProperty("titles") val titles: KitsuTitles? = null,
+    @JsonProperty("synopsis") val synopsis: String? = null,
+    @JsonProperty("subtype") val subtype: String? = null,
+    @JsonProperty("status") val status: String? = null,
+    @JsonProperty("episodeCount") val episodeCount: Int? = null,
+    @JsonProperty("episodeLength") val episodeLength: Int? = null,
+    @JsonProperty("startDate") val startDate: String? = null,
+    @JsonProperty("endDate") val endDate: String? = null,
+    @JsonProperty("averageRating") val averageRating: String? = null,
+    @JsonProperty("popularityRank") val popularityRank: Int? = null,
+    @JsonProperty("ratingRank") val ratingRank: Int? = null,
+    @JsonProperty("posterImage") val posterImage: KitsuImage? = null,
+    @JsonProperty("coverImage") val coverImage: KitsuImage? = null,
+    @JsonProperty("externalSite") val externalSite: String? = null,
+    @JsonProperty("externalId") val externalId: String? = null,
+    @JsonProperty("title") val title: String? = null
+)
+
+@JsonIgnoreProperties(ignoreUnknown = true)
+data class KitsuTitles(
+    @JsonProperty("en") val en: String? = null,
+    @JsonProperty("en_jp") val en_jp: String? = null,
+    @JsonProperty("ja_jp") val ja_jp: String? = null
+)
+
+@JsonIgnoreProperties(ignoreUnknown = true)
+data class KitsuImage(
+    @JsonProperty("large") val large: String? = null,
+    @JsonProperty("original") val original: String? = null,
+    @JsonProperty("medium") val medium: String? = null,
+    @JsonProperty("small") val small: String? = null
+)
+
+@JsonIgnoreProperties(ignoreUnknown = true)
+data class KitsuCategory(
+    @JsonProperty("attributes") val attributes: KitsuCategoryAttrs? = null
+)
+
+@JsonIgnoreProperties(ignoreUnknown = true)
+data class KitsuCategoryAttrs(
+    @JsonProperty("title") val title: String? = null,
+    @JsonProperty("slug") val slug: String? = null
+)

@@ -36,7 +36,9 @@ data class MetaEpisode(
 @JsonIgnoreProperties(ignoreUnknown = true)
 data class MetaMappings(
     val themoviedb_id: Int? = null,
-    val imdb_id: String? = null
+    val imdb_id: String? = null,
+    val anilist_id: Int? = null,
+    val kitsu_id: Int? = null
 )
 
 @JsonIgnoreProperties(ignoreUnknown = true)

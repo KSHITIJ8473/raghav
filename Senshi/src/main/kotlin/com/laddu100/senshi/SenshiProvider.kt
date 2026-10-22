@@ -325,6 +325,27 @@ class SenshiProvider : MainAPI() {
             if (masterText != null) break
         }
 
+        // A plain master plays as it is: its child playlists and segments are plain HLS that only
+        // need the Referer, and the master's token wants the same User-Agent the source was
+        // fetched with. No Origin: with it the CDN ignores byte ranges. Both audio tracks stay in
+        // the master (Japanese is the default), so the player's audio menu picks sub or dub.
+        if (masterText != null && masterText.trimStart().startsWith("#EXTM3U")) {
+            val height = resolutionTag.findAll(masterText)
+                .mapNotNull { it.groupValues[2].toIntOrNull() }
+                .maxOrNull()
+            callback.invoke(
+                newExtractorLink(source = name, name = "Senshi $modeLabel", url = master, type = ExtractorLinkType.M3U8) {
+                    height?.let { this.quality = it }
+                    this.headers = mapOf(
+                        "User-Agent" to SenshiVhost.browserUa(),
+                        "Referer" to "$mainUrl/"
+                    )
+                }
+            )
+            return true
+        }
+
+        // Only an encrypted master (EM3U8v1) still needs the local proxy to decrypt it
         var playlist = masterText
         if (playlist != null && SenshiCrypt.isEncrypted(playlist)) {
             playlist = SenshiCrypt.decrypt(playlist)

@@ -882,8 +882,7 @@ internal object MultimoviesSite {
     @Volatile private var domainCheckAt = 0L
     @Volatile private var resolvedDomain: String? = null
 
-    // every catalog page renders poster-card rows, the old player.js probe hit a
-    // script that only detail pages load and blocked every domain switch
+    // probe a page every catalog renders, the old player.js hit only loaded on detail pages
     private suspend fun currentDomain(): String {
         val now = System.currentTimeMillis()
         if (now - domainCheckAt < DOMAIN_CHECK_TTL_MS) {

@@ -1,6 +1,5 @@
 package com.justplay
 
-import android.net.Uri
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
@@ -54,10 +53,6 @@ class JustPlay : MainAPI() {
     override var lang = "en"
 
     companion object {
-        private const val TMDB = "https://api.themoviedb.org/3"
-        private const val TMDB_KEY = "1865f43a0549ca50d341dd9ab8b29f49"
-        private const val TMDB_KEY_ALT = "98ae14df2b8d8f8f8136499daf79f0e0"
-
         private const val KEY_DL_ONLY = "JUSTPLAY_DL_ONLY"
         private const val KEY_STREAM_ONLY = "JUSTPLAY_STREAM_ONLY"
         private const val KEY_CONCURRENCY = "JUSTPLAY_CONCURRENCY"
@@ -77,11 +72,6 @@ class JustPlay : MainAPI() {
                 if (dispatcher.maxRequests < 200) dispatcher.maxRequests = 200
             } catch (_: Exception) {
             }
-        }
-
-        fun tmdbImageUrl(path: String?): String? {
-            if (path.isNullOrBlank()) return null
-            return if (path.startsWith("http")) path else "https://image.tmdb.org/t/p/original$path"
         }
 
         fun siteEnabled(id: String): Boolean = try {
@@ -167,19 +157,6 @@ class JustPlay : MainAPI() {
         }
     }
 
-    private suspend fun tmdbGet(path: String, params: Map<String, String> = emptyMap()): JSONObject? {
-        val query = params.entries.joinToString("&") { "${it.key}=${Uri.encode(it.value)}" }
-        return try {
-            JSONObject(app.get("$TMDB$path?api_key=$TMDB_KEY&$query", timeout = 12000L).text)
-        } catch (e: Exception) {
-            try {
-                JSONObject(app.get("$TMDB$path?api_key=$TMDB_KEY_ALT&$query", timeout = 12000L).text)
-            } catch (_: Exception) {
-                null
-            }
-        }
-    }
-
     private val tmdbRows = listOf(
         Pair("/trending/all/day", "Trending Now"),
         Pair("/movie/popular", "Popular Movies"),
@@ -195,31 +172,33 @@ class JustPlay : MainAPI() {
         Pair("/discover/tv&with_genres=16&with_original_language=ja&sort_by=popularity.desc", "Anime Series")
     )
 
-    // the live rows follow the position picked in settings, read on every
-    // access so a restart is all it takes to move them
-    override val mainPage: List<MainPageData>
-        get() = when {
-            !liveSportsEnabled() -> mainPageOf(*tmdbRows.toTypedArray())
-            liveSportsOnTop() -> mainPageOf(*(listOf(Pair(LIVE_ROW, "Live Sports")) + tmdbRows).toTypedArray())
-            else -> mainPageOf(*(tmdbRows + Pair(LIVE_ROW, "Live Sports")).toTypedArray())
-        }
+    // rows load one after another so low end devices don't stall on the burst
+    override var sequentialMainPage = true
+    override var sequentialMainPageDelay = 150L
+    override var sequentialMainPageScrollDelay = 250L
 
-    private fun toSearchResponse(item: JSONObject, fallbackType: String): SearchResponse? {
-        val id = item.optInt("id", 0)
-        if (id == 0) return null
-        val mediaType = item.optString("media_type").ifBlank { fallbackType }
-        if (mediaType != "movie" && mediaType != "tv") return null
-        val title = item.optString("title").ifBlank { item.optString("name") }
-        if (title.isBlank()) return null
-        val poster = tmdbImageUrl(item.optString("poster_path"))
-        val year = item.optString("release_date").ifBlank { item.optString("first_air_date") }.take(4).toIntOrNull()
-        val type = if (mediaType == "movie") TvType.Movie else TvType.TvSeries
-        return newMovieSearchResponse(title, PlayTmdbData(id, mediaType).toJson(), type) {
-            this.posterUrl = poster
-            this.year = year
-            score = Score.from10(item.optDouble("vote_average", 0.0))
+    // rows are rebuilt on every access so settings changes only need a restart
+    override val mainPage: List<MainPageData>
+        get() {
+            val rows = ArrayList<MainPageData>(48)
+            if (liveSportsEnabled() && liveSportsOnTop()) {
+                rows.add(MainPageData("Live Sports", LIVE_ROW))
+            }
+            rows.add(MainPageData(tmdbRows[0].second, tmdbRows[0].first))
+            rows.add(MainPageData("Surprise Me", PlayDiscovery.ROW_SURPRISE))
+            rows.add(MainPageData(PlayDiscovery.recommendedRowName(), PlayDiscovery.ROW_RECOMMENDED))
+            tmdbRows.drop(1).forEach { rows.add(MainPageData(it.second, it.first)) }
+            PlayDiscovery.genreRows.forEach { (id, label) ->
+                rows.add(MainPageData(label, PlayDiscovery.genreData(id)))
+            }
+            PlayDiscovery.languageRows.forEach { langRow ->
+                rows.add(MainPageData(langRow.label, PlayDiscovery.languageData(langRow)))
+            }
+            if (liveSportsEnabled() && !liveSportsOnTop()) {
+                rows.add(MainPageData("Live Sports", LIVE_ROW))
+            }
+            return rows
         }
-    }
 
     private val prefetchScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -227,27 +206,37 @@ class JustPlay : MainAPI() {
         DonationManager.checkAndShow()
         // netmirror needs a ~1 min cookie solve on cold start, get it going before the user opens anything
         prefetchScope.launch { NetMirrorSite.prefetch() }
-        if (request.data == LIVE_ROW) {
+        val data = request.data
+        if (data == LIVE_ROW) {
             if (!liveSportsEnabled()) {
                 return newHomePageResponse(request.name, emptyList<SearchResponse>(), hasNext = false)
             }
             return LiveSports.homePage(this)
         }
-        val parts = request.data.split("&", limit = 2)
+        if (data == PlayDiscovery.ROW_SURPRISE) {
+            return PlayDiscovery.surprisePage(this, request.name)
+        }
+        if (data == PlayDiscovery.ROW_RECOMMENDED) {
+            return PlayDiscovery.recommendedPage(this, page, request.name)
+        }
+        if (data.startsWith(PlayDiscovery.ROW_GENRE)) {
+            return PlayDiscovery.genrePage(this, page, data, request.name)
+        }
+        val parts = data.split("&", limit = 2)
         val path = parts[0]
         val extra = parts.getOrNull(1)?.split("&")?.mapNotNull {
             val kv = it.split("=", limit = 2)
             if (kv.size == 2) kv[0] to kv[1] else null
         } ?: emptyList()
-        val type = if (request.data.contains("/movie")) "movie" else "tv"
+        val type = if (data.contains("/movie")) "movie" else "tv"
         val params = (extra + listOf("language" to "en-US", "page" to "$page")).toMap()
-        val json = tmdbGet(path, params)
+        val json = PlayTmdb.get(path, params)
         val results = json?.optJSONArray("results")
         val home = mutableListOf<SearchResponse>()
         if (results != null) {
             for (i in 0 until results.length()) {
                 val item = results.optJSONObject(i) ?: continue
-                toSearchResponse(item, if (path.contains("trending")) "" else type)?.let { home.add(it) }
+                PlayTmdb.toSearchResponse(this, item, if (path.contains("trending")) "" else type)?.let { home.add(it) }
             }
         }
         val hasNext = (json?.optInt("page", 1) ?: 1) < (json?.optInt("total_pages", 1) ?: 1)
@@ -257,7 +246,7 @@ class JustPlay : MainAPI() {
     override suspend fun search(query: String): List<SearchResponse>? {
         if (query.isBlank()) return null
         prefetchScope.launch { NetMirrorSite.prefetch() }
-        val json = tmdbGet(
+        val json = PlayTmdb.get(
             "/search/multi",
             mapOf("query" to query, "include_adult" to "false", "page" to "1", "language" to "en-US")
         )
@@ -265,14 +254,12 @@ class JustPlay : MainAPI() {
         val items = mutableListOf<SearchResponse>()
         for (i in 0 until results.length()) {
             val item = results.optJSONObject(i) ?: continue
-            toSearchResponse(item, "")?.let { items.add(it) }
+            PlayTmdb.toSearchResponse(this, item, "")?.let { items.add(it) }
         }
         return items
     }
 
-    // official title artwork from the tmdb images endpoint, the app draws it
-    // instead of the plain text name on the info page, svg only as a last
-    // resort because the image loader cannot render it
+    // svg logos are a last resort, the app's image loader cannot render them
     private fun pickTmdbLogo(logos: org.json.JSONArray?): String? {
         if (logos == null || logos.length() == 0) return null
         fun urlOf(logo: org.json.JSONObject) =
@@ -313,8 +300,7 @@ class JustPlay : MainAPI() {
 
     override suspend fun load(url: String): LoadResponse? {
         prefetchScope.launch { NetMirrorSite.prefetch() }
-        // live events and tmdb titles share this entry point, live payloads
-        // always carry a slug so they are told apart first
+        // live payloads always carry a slug, they are told apart from tmdb titles first
         val live = try {
             parseJson<LiveLoadData>(url)
         } catch (_: Exception) {
@@ -332,7 +318,7 @@ class JustPlay : MainAPI() {
         val type = data.type ?: return null
         val isMovie = type == "movie"
 
-        val detail = tmdbGet(
+        val detail = PlayTmdb.get(
             "/$type/$id",
             mapOf(
                 "language" to "en-US",
@@ -342,11 +328,13 @@ class JustPlay : MainAPI() {
 
         val title = detail.optString("title").ifBlank { detail.optString("name") }
         if (title.isBlank()) return null
+        // feeds the recommended row, recorded in the background so it never slows this page down
+        prefetchScope.launch { PlayHistory.record(detail, type) }
         val orgTitle = detail.optString("original_title").ifBlank { detail.optString("original_name") }
         val releaseDate = detail.optString("release_date").ifBlank { detail.optString("first_air_date") }
         val year = releaseDate.take(4).toIntOrNull()
-        val poster = tmdbImageUrl(detail.optString("poster_path"))
-        val backdrop = tmdbImageUrl(detail.optString("backdrop_path"))
+        val poster = PlayTmdb.imageUrl(detail.optString("poster_path"))
+        val backdrop = PlayTmdb.imageUrl(detail.optString("backdrop_path"))
         val overview = detail.optString("overview")
         val runtime = detail.optInt("runtime", 0).takeIf { it > 0 }
         val imdbId = detail.optJSONObject("external_ids")?.optString("imdb_id")?.takeIf { it.isNotBlank() }
@@ -368,7 +356,7 @@ class JustPlay : MainAPI() {
             for (i in 0 until minOf(arr.length(), 12)) {
                 val c = arr.optJSONObject(i) ?: continue
                 val name = c.optString("name").takeIf { it.isNotBlank() } ?: continue
-                actors.add(ActorData(Actor(name, tmdbImageUrl(c.optString("profile_path")))))
+                actors.add(ActorData(Actor(name, PlayTmdb.imageUrl(c.optString("profile_path")))))
             }
         }
 
@@ -386,7 +374,7 @@ class JustPlay : MainAPI() {
         detail.optJSONObject("recommendations")?.optJSONArray("results")?.let { arr ->
             for (i in 0 until minOf(arr.length(), 12)) {
                 val item = arr.optJSONObject(i) ?: continue
-                toSearchResponse(item, type)?.let { recommendations.add(it) }
+                PlayTmdb.toSearchResponse(this, item, type)?.let { recommendations.add(it) }
             }
         }
 
@@ -436,7 +424,7 @@ class JustPlay : MainAPI() {
                 async(Dispatchers.IO) {
                     semaphore.withPermit {
                         try {
-                            val seasonJson = tmdbGet(
+                            val seasonJson = PlayTmdb.get(
                                 "/tv/$id/season/$seasonNum",
                                 mapOf("language" to "en-US")
                             ) ?: return@withPermit emptyList()
@@ -463,7 +451,7 @@ class JustPlay : MainAPI() {
                                         this.name = ep.optString("name").ifBlank { "Episode $epNum" }
                                         this.season = seasonNum
                                         this.episode = epNum
-                                        this.posterUrl = tmdbImageUrl(ep.optString("still_path"))
+                                        this.posterUrl = PlayTmdb.imageUrl(ep.optString("still_path"))
                                         this.description = ep.optString("overview")
                                         score = Score.from10(ep.optDouble("vote_average", 0.0))
                                         if (airDate.length >= 8 && airDate[0].isDigit()) {

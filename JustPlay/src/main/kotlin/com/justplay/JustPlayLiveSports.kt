@@ -124,8 +124,7 @@ private object LiveCrypto {
         }
     }
 
-    // the event and channel lists arrive AES encrypted, text that does not
-    // come out as json means the wrong key was tried
+    // text that does not come out as json means the wrong aes key was tried
     fun decrypt(payload: String): String? {
         return try {
             val ciphertext = base64DecodeArray(
@@ -161,9 +160,7 @@ private object LiveCrypto {
     }
 }
 
-// the backend host rotates whenever the current one gets blocked, so the live
-// one is read from remote config and cached here instead of hitting firebase
-// on every home page load
+// the host rotates whenever it gets blocked, the live one is read from remote config and cached
 private class RemoteDomain(
     private val ttlMs: Long = 1_800_000L,
     private val fallbackTtlMs: Long = 120_000L,
@@ -205,8 +202,7 @@ private class RemoteDomain(
                 expiresAt = now + ttlMs
                 return@withLock fetched
             }
-            // keep serving the stale host for a short while rather than
-            // hammering firebase with a broken network
+            // keep serving the stale host rather than hammering firebase with a broken network
             if (current == null) {
                 val result = fallback()
                 value = result
@@ -218,8 +214,7 @@ private class RemoteDomain(
     }
 }
 
-// a dead mirror answers 4xx or drops the connection, invalidating the cached
-// host here makes the next call re-read remote config
+// a dead mirror invalidates the cached host so the next call re-reads remote config
 private class StaleDomainInterceptor(private val domain: RemoteDomain) : okhttp3.Interceptor {
     override fun intercept(chain: okhttp3.Interceptor.Chain): okhttp3.Response {
         val host = chain.request().url.host
@@ -362,8 +357,7 @@ object LiveSports {
         return if (a == b) a else "$a vs $b"
     }
 
-    // wide match card with both crests, start time and state, same card
-    // service the live tv plugin renders its rows with
+    // wide match card with both crests and state, same style the live tv plugin uses
     private fun matchCardUrl(event: LiveEvent): String {
         val info = event.eventInfo
         val title = java.net.URLEncoder.encode(info?.eventName ?: event.title ?: "", "UTF-8")
@@ -533,8 +527,7 @@ object LiveSports {
         return true
     }
 
-    // type 7 servers hand out clearkey protected dash, the kid and key ride
-    // along in the api field as hex kid:hex key
+    // type 7 servers hand out clearkey dash, the kid and key ride along as hex kid:hex key
     private suspend fun emitDrmLink(
         serverName: String,
         url: String,
@@ -593,8 +586,7 @@ object LiveSports {
         return loadInWebView(url)
     }
 
-    // some servers only expose the stream from inside their player page, run
-    // it in a throwaway webview and grab the first media request it fires
+    // some servers only expose the stream inside their player page, a throwaway webview catches it
     private suspend fun loadInWebView(embedUrl: String): String? {
         return withContext(Dispatchers.Main) {
             suspendCoroutine { continuation ->
@@ -606,8 +598,7 @@ object LiveSports {
                 var captured = false
                 var resumed = false
 
-                // the link load can be cancelled while the page is still
-                // loading, a late resume is dropped instead of thrown
+                // a late resume after the load was cancelled is dropped instead of thrown
                 fun finishOnce(result: String?) {
                     if (resumed) return
                     resumed = true

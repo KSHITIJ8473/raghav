@@ -27,8 +27,7 @@ import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
-// multimovies migrates domains every few months and the embed origins check
-// the referer, so the hardcoded origin had to become the current live one
+// multimovies migrates domains every few months and the embeds check the referer
 internal object MmSite {
     @Volatile var baseUrl: String = "https://m1.multimovies.courses"
     val referer: String get() = "$baseUrl/"
@@ -477,8 +476,7 @@ internal object MmCineverse {
         label: String,
         callback: (ExtractorLink) -> Unit,
     ): Boolean {
-        // the info endpoint primes the session, only the video payload carries
-        // the release name the quality is read from
+        // the info endpoint primes the session, only the video payload carries the release name
         MmNet.get(
             "https://$host/api/v1/info?id=$code",
             referer = "https://$host/",
@@ -584,8 +582,7 @@ internal object MmCineverse {
         return resolveProxyHtml(resp.text, "$labelPrefix $displayName", callback)
     }
 
-    // the hub relay player either hands a var src playlist (relative to the hub)
-    // or proxies the target page over with direct links in it
+    // the hub relay player hands a var src playlist or proxies the page over with direct links
     private suspend fun resolveProxyHtml(html: String, label: String, callback: (ExtractorLink) -> Unit): Boolean {
         val src = Regex("var\\s+src=\"([^\"]+)\"").find(html)?.groupValues?.get(1)
         if (src != null) {
@@ -654,8 +651,7 @@ internal object MmCineverse {
         return any
     }
 
-    // a full url goes straight to the resolver that owns the host, everything
-    // else falls back to the hub proxy which still knows every platform
+    // a full url goes to the resolver that owns the host, the rest falls back to the hub proxy
     private suspend fun resolveMirror(
         server: SubServer,
         labelPrefix: String,
@@ -1297,8 +1293,7 @@ internal object MmVidsync {
     }
 }
 
-// vidrift embeds carry the whole source list inline, the orion playlist origin
-// answers 403 without the embed referer
+// vidrift embeds carry the source list inline, the orion origin answers 403 without the embed referer
 internal object MmVidrift {
 
     private const val ORIGIN = "https://embed.vidrift.net"
@@ -1344,8 +1339,7 @@ internal object MmVidrift {
         labelPrefix: String,
         callback: (ExtractorLink) -> Unit,
     ): Boolean {
-        // the origin sits behind a cloudflare wall, fetchWithCf solves it when
-        // plain requests get challenged
+        // the origin sits behind cloudflare, fetchWithCf solves it when plain requests get challenged
         val resp = try {
             PlayNet.fetchWithCf(embedUrl, referer = MmSite.referer)
         } catch (_: Exception) {
@@ -1681,8 +1675,7 @@ internal object MmVidbolt {
     ): Boolean {
         var any = false
 
-        // the site player now resolves everything through one json endpoint per
-        // media type, it answers with a ready made source list
+        // the site player resolves everything through one json endpoint per media type
         val resolveUrl = if (isTv) {
             if (season == null || episode == null) null
             else "$HOST/api/resolve?type=tv&id=$tmdbId&season=$season&episode=$episode"

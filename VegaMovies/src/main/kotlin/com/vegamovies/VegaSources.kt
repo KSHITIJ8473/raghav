@@ -16,7 +16,8 @@ internal object VegaSources {
 
     private val buttonJunk = Regex(
         """(?i)vglist|t\.me|telegram|imdb\.com|google\.com/search|whatsapp|share|facebook|""" +
-            """twitter|pinterest|report|hubcloud\.(foo|cx)|/admin|login|signup|\bidm\b|\bida\b"""
+            """twitter|pinterest|report|hubcloud\.(foo|cx)|/admin|login|signup|\bidm\b|\bida\b|""" +
+            """category|/tag/|/author/|/page/"""
     )
 
     fun isServerLink(href: String): Boolean {
@@ -110,7 +111,8 @@ internal object VegaSources {
                 host.contains("filebee") || host.contains("filepress") || host.contains("fpgo") ->
                     filepressDirect(href)?.let { listOf(Server("Filepress", it)) } ?: emptyList()
                 host.contains("gofile") -> gofileDirect(href)?.let { listOf(Server("GoFile", it)) } ?: emptyList()
-                host.contains("hubcloud") && !host.contains("gpdl") -> hubcloudServers(href)
+                host.contains("gpdl") -> gpdlDirect(href)?.let { listOf(Server("10Gbps", it)) } ?: emptyList()
+                host.contains("hubcloud") -> hubcloudServers(href)
                 else -> directServer(href)
             }
         } catch (_: Exception) {

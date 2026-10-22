@@ -194,27 +194,11 @@ class VegaMovies : MainAPI() {
     private fun langTagOf(label: String): String =
         if (Regex("""(?i)english with subtitles""").containsMatchIn(label)) "English" else ""
 
-    // dolby vision encodes break on most phone decoders so they only keep a tier when nothing else exists
-    private fun variantPenalty(label: String): Int {
-        var penalty = 0
-        if (dvEncode(label)) penalty += 4
-        if (Regex("""(?i)10\s*bit|10bit""").containsMatchIn(label)) penalty += 1
-        return penalty
-    }
-
+    // dolby vision encodes get their own slot, most phone decoders choke on them
     private fun dvEncode(label: String): Boolean =
         Regex("""(?i)\bDV\b|dolby|hybrid""").containsMatchIn(label)
 
-    private class Candidate(
-        val server: String,
-        val tier: Int,
-        val lang: String,
-        val penalty: Int,
-        val dv: Boolean,
-        val url: String
-    )
-
-    // one link per server name, quality and language, so the picker shows every real option exactly once
+    // one link per server, quality, language and encode, so the picker shows every real option exactly once
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -230,7 +214,7 @@ class VegaMovies : MainAPI() {
         if (groups.isEmpty()) return false
         VegaSources.resetSession()
 
-        val candidates = mutableListOf<Candidate>()
+        val claimed = ConcurrentHashMap.newKeySet<String>()
         val seenUrls = ConcurrentHashMap.newKeySet<String>()
 
         fun targetsOf(page: VegaSources.DrivePage): List<Pair<String, String>> {
@@ -242,12 +226,33 @@ class VegaMovies : MainAPI() {
             }.orEmpty()
         }
 
-        // a server button resolves to every server the page behind it offers
-        suspend fun collect(href: String, tier: Int, lang: String, penalty: Int, dv: Boolean) {
-            for (server in VegaSources.resolve(href)) {
-                if (seenUrls.add(server.url)) {
-                    candidates.add(Candidate(server.name, tier, lang, penalty, dv, server.url))
+        // a mirror that answers goes straight to the picker, a dead one leaves the slot open
+        // for the next mirror of the same server
+        suspend fun offer(server: VegaSources.Server, tier: Int, lang: String, dv: Boolean) {
+            if (!seenUrls.add(server.url)) return
+            val key = "${server.name}|$tier|$lang|${if (dv) "dv" else ""}"
+            if (key in claimed) return
+            if (!VegaSources.alive(server.url)) return
+            if (claimed.add(key)) {
+                val extras = buildString {
+                    if (lang.isNotBlank()) append(" [").append(lang).append("]")
+                    if (dv) append(" [DV]")
                 }
+                val linkName = if (tier > 0) {
+                    "${server.name} ${tier}p$extras"
+                } else {
+                    server.name + extras
+                }
+                callback(
+                    newExtractorLink(
+                        source = name,
+                        name = linkName,
+                        url = server.url,
+                        type = ExtractorLinkType.VIDEO
+                    ) {
+                        this.quality = tier
+                    }
+                )
             }
         }
 
@@ -258,7 +263,6 @@ class VegaMovies : MainAPI() {
                     gate.withPermit {
                         val tier = VegaNet.qualityOf(group.label)
                         val lang = langTagOf(group.label)
-                        val penalty = variantPenalty(group.label)
                         val dv = dvEncode(group.label)
                         for (url in group.urls.distinct()) {
                             val page = try {
@@ -274,58 +278,20 @@ class VegaMovies : MainAPI() {
                                         null
                                     } ?: continue
                                     for ((_innerLabel, innerHref) in targetsOf(nested)) {
-                                        collect(innerHref, tier, lang, penalty, dv)
+                                        for (server in VegaSources.resolve(innerHref)) {
+                                            offer(server, tier, lang, dv)
+                                        }
                                     }
                                 } else {
-                                    collect(href, tier, lang, penalty, dv)
+                                    for (server in VegaSources.resolve(href)) {
+                                        offer(server, tier, lang, dv)
+                                    }
                                 }
                             }
                         }
                     }
                 }
             }
-        }
-        if (candidates.isEmpty()) return true
-
-        // a dead mirror must never shadow a live one of the same server, so links are checked before the pick
-        val alive = coroutineScope {
-            val gate = Semaphore(8)
-            candidates.map { candidate ->
-                async(Dispatchers.IO) {
-                    gate.withPermit {
-                        if (VegaSources.alive(candidate.url)) candidate else null
-                    }
-                }
-            }.mapNotNull { runCatching { it.await() }.getOrNull() }
-        }
-
-        val picked = LinkedHashMap<String, Candidate>()
-        for (candidate in alive) {
-            picked.compute("$candidate.server|${candidate.tier}|${candidate.lang}") { _, old ->
-                if (old == null || candidate.penalty < old.penalty) candidate else old
-            }
-        }
-
-        for (candidate in picked.values) {
-            val extras = buildString {
-                if (candidate.lang.isNotBlank()) append(" [").append(candidate.lang).append("]")
-                if (candidate.dv) append(" [DV]")
-            }
-            val linkName = if (candidate.tier > 0) {
-                "${candidate.server} ${candidate.tier}p$extras"
-            } else {
-                candidate.server + extras
-            }
-            callback(
-                newExtractorLink(
-                    source = name,
-                    name = linkName,
-                    url = candidate.url,
-                    type = ExtractorLinkType.VIDEO
-                ) {
-                    this.quality = candidate.tier
-                }
-            )
         }
         return true
     }

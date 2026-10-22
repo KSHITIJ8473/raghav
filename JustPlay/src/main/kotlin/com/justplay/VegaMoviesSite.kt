@@ -28,7 +28,8 @@ internal object VegaMoviesSite {
 
     private val junk = Regex(
         """(?i)vglist|t\.me|telegram|imdb\.com|google\.com/search|whatsapp|share|facebook|""" +
-            """twitter|pinterest|report|hubcloud\.(foo|cx)|/admin|login|signup|\bidm\b|\bida\b"""
+            """twitter|pinterest|report|hubcloud\.(foo|cx)|/admin|login|signup|\bidm\b|\bida\b|""" +
+            """category|/tag/|/author/|/page/"""
     )
 
     private val buttonHosts = Regex(
@@ -44,7 +45,8 @@ internal object VegaMoviesSite {
     data class VegaDoc(
         val post_title: String? = null,
         val permalink: String? = null,
-        val post_thumbnail: String? = null
+        val post_thumbnail: String? = null,
+        val domain: String = ""
     )
 
     // the typesense proxy throws 5xx under load, retries keep it usable
@@ -52,7 +54,7 @@ internal object VegaMoviesSite {
         val url = "$domain/ts-search.php?q=${Uri.encode(query)}&page=1"
         val text = PlayNet.retry {
             try {
-                val res = app.get(url, headers = PlayNet.headers("$domain/"), timeout = 15L)
+                val res = app.get(url, headers = PlayNet.browserHeaders("$domain/"), timeout = 15L)
                 if (res.code == 200) res.text else null
             } catch (_: Exception) {
                 null
@@ -65,7 +67,7 @@ internal object VegaMoviesSite {
                         val title = d.optString("post_title")
                         val link = d.optString("permalink")
                         if (title.isBlank() || link.isBlank()) null
-                        else VegaDoc(title, link, d.optString("post_thumbnail"))
+                        else VegaDoc(title, link, d.optString("post_thumbnail"), domain)
                     }
                 }
             } ?: emptyList()
@@ -249,7 +251,8 @@ internal object VegaMoviesSite {
                 host.contains("filebee") || host.contains("filepress") || host.contains("fpgo") ->
                     filepressDirect(href)?.let { listOf(Server("Filepress", it)) } ?: emptyList()
                 host.contains("gofile") -> gofileDirect(href)?.let { listOf(Server("GoFile", it)) } ?: emptyList()
-                host.contains("hubcloud") && !host.contains("gpdl") -> emptyList()
+                host.contains("gpdl") -> gpdlDirect(href)?.let { listOf(Server("10Gbps", it)) } ?: emptyList()
+                host.contains("hubcloud") -> hubcloudServers(href)
                 else -> directServer(href)
             }
         } catch (_: Exception) {
@@ -369,6 +372,38 @@ internal object VegaMoviesSite {
             "PixelDrain" -> out.add(Server(name, pixelApi(href)))
             else -> out.add(Server(name, href))
         }
+    }
+
+    // a hubcloud share page only names the real servers on its generate page
+    private suspend fun hubcloudServers(url: String): List<Server> {
+        val res = try {
+            app.get(url, headers = PlayNet.browserHeaders(), timeout = 20L)
+        } catch (_: Exception) {
+            return emptyList()
+        }
+        val doc = Jsoup.parse(res.text)
+        val header = doc.selectFirst("div.card-header")?.text()?.trim().orEmpty()
+        if (Regex("""(?i)\.(zip|rar|7z)\s*$""").containsMatchIn(header)) return emptyList()
+        val generate = doc.select("a.btn, a[download]")
+            .firstOrNull { it.text().contains("generate", true) }
+            ?.attr("href")?.trim() ?: return emptyList()
+        val genUrl = if (generate.startsWith("http")) generate else PlayNet.getBaseUrl(res.url) + generate
+        val genRes = try {
+            app.get(genUrl, headers = PlayNet.browserHeaders(res.url), timeout = 25L)
+        } catch (_: Exception) {
+            return emptyList()
+        }
+        val out = mutableListOf<Server>()
+        for (a in Jsoup.parse(genRes.text).select("a[href]")) {
+            val href = a.attr("href").trim()
+            if (!href.startsWith("http")) continue
+            if (junk.containsMatchIn(href)) continue
+            val label = a.text().replace(Regex("""\s+"""), " ").trim()
+            if (label.isBlank()) continue
+            val name = serverNameOf(label, href) ?: continue
+            addServer(out, name, href)
+        }
+        return out.distinctBy { it.url }
     }
 
     // vegadrive only answers skydrop on the json api and mints the google mirror asynchronously
@@ -593,6 +628,14 @@ internal object VegaMoviesSite {
         return null
     }
 
+    // the post buttons all read download now, the quality headline above them is the real label
+    private fun infoFrom(groupLabel: String): String =
+        groupLabel.replace(Regex("""(?i)\bdownload\s+now\b|\bdownload\b"""), "")
+            .replace(Regex("""\s+"""), " ").trim()
+
+    private fun isDvEncode(label: String): Boolean =
+        Regex("""(?i)\bDV\b|dolby|hybrid""").containsMatchIn(label)
+
     suspend fun invoke(
         res: PlayLinkData,
         subtitleCallback: (SubtitleFile) -> Unit,
@@ -601,12 +644,22 @@ internal object VegaMoviesSite {
         try {
             val title = res.title ?: return
             val query = res.orgTitle?.takeIf { it.isNotBlank() && it != title } ?: title
-            val posts = domains.flatMap { searchPosts(it, query) }.ifEmpty { domains.flatMap { searchPosts(it, title) } }
+
+            // both catalogs are searched side by side, the second round only runs when the first finds nothing
+            suspend fun searchRound(q: String): List<VegaDoc> = coroutineScope {
+                domains.map { domain ->
+                    async(Dispatchers.IO) { searchPosts(domain, q) }
+                }.flatMap { it.await() }
+            }
+            val posts = searchRound(query).ifEmpty { searchRound(title) }
             if (posts.isEmpty()) return
             val post = pickPost(posts, res) ?: return
             val permalink = post.permalink?.takeIf { it.isNotBlank() } ?: return
-            val domain = domains.firstOrNull { permalink.contains(it.removePrefix("https://"), true) }
-                ?: domains.first()
+            // permalinks come back relative, the domain the search ran on is the only reliable origin
+            val domain = post.domain.ifBlank {
+                domains.firstOrNull { permalink.contains(it.removePrefix("https://"), true) }
+                    ?: domains.first()
+            }
             val postUrl = PlayNet.absolute(permalink, domain)
             val html = try {
                 app.get(postUrl, headers = PlayNet.browserHeaders("$domain/"), timeout = 20L).text
@@ -624,13 +677,30 @@ internal object VegaMoviesSite {
             }
             if (groups.isEmpty()) return
 
-            data class Row(val server: Server, val label: String, val tier: Int)
+            val claimed = ConcurrentHashMap.newKeySet<String>()
+            val seenUrls = ConcurrentHashMap.newKeySet<String>()
 
-            val rows = mutableListOf<Row>()
-            val seen = ConcurrentHashMap.newKeySet<String>()
+            // the picker fills up as servers come in, one slot per server, quality and encode
+            suspend fun offer(server: Server, tier: Int, info: String, dv: Boolean) {
+                if (!seenUrls.add(server.url)) return
+                val key = "${server.name}|$tier|${if (dv) "dv" else ""}"
+                if (key in claimed) return
+                if (!PlayNet.alive(server.url, ExtractorLinkType.VIDEO)) return
+                if (claimed.add(key)) {
+                    callback(
+                        newExtractorLink(
+                            "[VegaMovies]",
+                            PlayLabels.buildLabel("vegamovies", server.name, info),
+                            server.url,
+                            ExtractorLinkType.VIDEO
+                        ) {
+                            this.quality = tier
+                        }
+                    )
+                }
+            }
 
-            // a server can sit behind a second nexdrive hop, both levels are walked here
-            suspend fun walkTargets(targets: List<Pair<String, String>>, label: String, tier: Int) {
+            suspend fun walkTargets(targets: List<Pair<String, String>>, tier: Int, info: String, dv: Boolean) {
                 for ((_btn, href) in targets) {
                     val next = if (href.contains("nexdrive", true)) {
                         val nested = fetchDrivePage(href) ?: continue
@@ -644,20 +714,20 @@ internal object VegaMoviesSite {
                     }
                     for ((_btn2, href2) in next) {
                         for (server in resolve(href2)) {
-                            if (seen.add("${server.name}|${tier}|${server.url}")) {
-                                rows.add(Row(server, label, tier))
-                            }
+                            offer(server, tier, info, dv)
                         }
                     }
                 }
             }
 
             coroutineScope {
-                val gate = Semaphore(4)
+                val gate = Semaphore(6)
                 groups.forEach { group ->
                     async(Dispatchers.IO) {
                         gate.withPermit {
                             val tier = PlayNet.getIndexQuality(group.label)
+                            val info = infoFrom(group.label)
+                            val dv = isDvEncode(group.label)
                             for ((label, url) in group.links.distinctBy { it.second }) {
                                 val page = fetchDrivePage(url) ?: continue
                                 val targets = if (res.episode != null) {
@@ -665,41 +735,11 @@ internal object VegaMoviesSite {
                                 } else {
                                     page.servers
                                 }.orEmpty()
-                                walkTargets(targets, label, tier)
+                                walkTargets(targets, tier, info, dv)
                             }
                         }
                     }
                 }
-            }
-
-            if (rows.isEmpty()) return
-            // a dead mirror must never shadow a live one of the same server, so links are checked before the pick
-            val alive = coroutineScope {
-                val gate = Semaphore(6)
-                rows.map { row ->
-                    async(Dispatchers.IO) {
-                        gate.withPermit {
-                            if (PlayNet.alive(row.server.url, ExtractorLinkType.VIDEO)) row else null
-                        }
-                    }
-                }.mapNotNull { runCatching { it.await() }.getOrNull() }
-            }
-
-            val picked = LinkedHashMap<String, Row>()
-            for (row in alive) {
-                picked.compute("${row.server.name}|${row.tier}") { _, old -> old ?: row }
-            }
-            for (row in picked.values) {
-                callback(
-                    newExtractorLink(
-                        "[VegaMovies]",
-                        PlayLabels.buildLabel("vegamovies", row.server.name, row.label),
-                        row.server.url,
-                        ExtractorLinkType.VIDEO
-                    ) {
-                        this.quality = row.tier
-                    }
-                )
             }
         } catch (_: Exception) {
         }

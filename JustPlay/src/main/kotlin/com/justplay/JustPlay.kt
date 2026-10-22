@@ -59,7 +59,8 @@ class JustPlay : MainAPI() {
         private const val KEY_LIVE_SPORTS = "JUSTPLAY_LIVE_SPORTS"
         private const val KEY_LIVE_SPORTS_TOP = "JUSTPLAY_LIVE_SPORTS_TOP"
         private const val LIVE_ROW = "live_sports"
-        private const val LINKS_PER_SOURCE = 12
+        // vegamovies alone offers one link per server, quality and encode, the cap only stops junk floods
+        private const val LINKS_PER_SOURCE = 40
 
         // the app cancels loadLinks after 120s, every site gets cut off before that
         private const val SITE_BUDGET_MS = 90_000L

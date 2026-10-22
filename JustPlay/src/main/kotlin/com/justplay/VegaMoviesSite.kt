@@ -52,7 +52,7 @@ internal object VegaMoviesSite {
     // the typesense proxy throws 5xx under load, retries keep it usable
     private suspend fun searchPosts(domain: String, query: String): List<VegaDoc> {
         val url = "$domain/ts-search.php?q=${Uri.encode(query)}&page=1"
-        val text = PlayNet.retry {
+        val text = PlayNet.retry(attempts = 3, gapMs = 800L) {
             try {
                 val res = app.get(url, headers = PlayNet.browserHeaders("$domain/"), timeout = 15L)
                 if (res.code == 200) res.text else null
@@ -81,7 +81,10 @@ internal object VegaMoviesSite {
         val matched = posts.filter { PlayNet.titleMatches(it.post_title, title) }
         if (matched.isEmpty()) return null
         return if (res.season != null) {
-            val seasonPosts = matched.filter { PlayNet.seasonsOf(it.post_title ?: "")?.contains(res.season) == true }
+            val seasonPosts = matched.filter {
+                PlayNet.seasonsOf(it.post_title ?: "")?.contains(res.season) == true &&
+                    sameShow(it.post_title ?: "", title)
+            }
             if (seasonPosts.isNotEmpty()) {
                 seasonPosts.firstOrNull { PlayNet.yearMatches(it.post_title ?: "", res.matchYear) } ?: seasonPosts.first()
             }
@@ -90,6 +93,20 @@ internal object VegaMoviesSite {
             matched.firstOrNull { PlayNet.yearMatches(it.post_title ?: "", res.matchYear) }
                 ?: matched.firstOrNull()
         }
+    }
+
+    // a spin off keeps its own words between the show name and the season tag, a post
+    // of the base show only ever continues with a season word, a part, a year or nothing
+    private fun sameShow(postTitle: String, title: String): Boolean {
+        var stripped = PlayNet.normalizeTitle(postTitle)
+        for (prefix in listOf("download", "watch")) {
+            if (stripped.startsWith(prefix)) stripped = stripped.substring(prefix.length)
+        }
+        val base = PlayNet.normalizeTitle(title)
+        if (base.isBlank() || !stripped.startsWith(base)) return false
+        val rest = stripped.substring(base.length)
+        return rest.isEmpty() ||
+            Regex("""^(season|part|chapter|s\d|vol(ume)?|19\d\d|20\d\d)""").containsMatchIn(rest)
     }
 
     class QualityGroup(
@@ -643,7 +660,11 @@ internal object VegaMoviesSite {
     ) {
         try {
             val title = res.title ?: return
-            val query = res.orgTitle?.takeIf { it.isNotBlank() && it != title } ?: title
+            // original titles written in another script find nothing on these catalogs,
+            // the latin spelling is the only thing the sites carry
+            val query = res.orgTitle
+                ?.takeIf { it.isNotBlank() && it != title && PlayNet.normalizeTitle(it).isNotBlank() }
+                ?: title
 
             // both catalogs are searched side by side, the second round only runs when the first finds nothing
             suspend fun searchRound(q: String): List<VegaDoc> = coroutineScope {
@@ -670,8 +691,15 @@ internal object VegaMoviesSite {
 
             val groups: List<QualityGroup> = if (res.season != null) {
                 val inSeason = detail.seasons.filter { it.number == res.season }.flatMap { it.groups }
-                if (inSeason.isNotEmpty()) inSeason
-                else detail.seasons.filter { s -> PlayNet.seasonsOf(s.title) == null }.flatMap { it.groups }
+                when {
+                    inSeason.isNotEmpty() -> inSeason
+                    detail.seasons.isNotEmpty() ->
+                        detail.seasons.filter { s -> PlayNet.seasonsOf(s.title) == null }.flatMap { it.groups }
+                    // a one season post keeps every quality block under the post title and
+                    // the title names the season, so the blocks are that season's files
+                    PlayNet.seasonsOf(post.post_title ?: "")?.contains(res.season) == true -> detail.movieGroups
+                    else -> emptyList()
+                }
             } else {
                 detail.movieGroups
             }

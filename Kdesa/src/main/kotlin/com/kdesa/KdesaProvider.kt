@@ -1,157 +1,169 @@
 package com.kdesa
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties
 import com.fasterxml.jackson.annotation.JsonProperty
+import com.lagradost.api.Log
 import com.lagradost.cloudstream3.*
-import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
-import com.lagradost.cloudstream3.utils.ExtractorLinkType
-import java.net.URLEncoder
 import com.raghav.donation.DonationManager
+import java.net.URLEncoder
 
-class KdesaProvider : MainAPI() {
-    override var mainUrl = "https://kdesa.stream"
-    override var name = "KDesa"
-    override val hasMainPage = true
-    override val hasQuickSearch = false
-    override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries, TvType.Anime)
+private const val TAG = "Kdesa"
 
-    // kdesa.stream is a TMDB front-end, so the catalog comes straight from
-    // the TMDB api. Bearer token from the site's config.js, public v3 key as fallback.
-    private val tmdbApi = "https://api.themoviedb.org/3"
-    private val tmdbBearer =
-        "eyJhbGciOiJIUzI1NiJ9.eyJhdWQiOiJjYTg3NmZkYmVhMjNhMzI3ODY0ZjRjN2U5MzMwZTYxNiIsIm5iZiI6MTc4MjIwOTQ0NC45OTksInN1YiI6IjZhM2E1YmE0ZmMzZGFiNGNmYzMzNjIxMCIsInNjb3BlcyI6WyJhcGlfcmVhZCJdLCJ2ZXJzaW9uIjoxfQ.WlSOswQDdxdbKu0jARJoruV6PlteoTXB1Oj4gRaibBI"
-    private val tmdbApiKey = "1865f43a0549ca50d341dd9ab8b29f49"
-    private val tmdbImg = "https://image.tmdb.org/t/p/w500"
-    private val tmdbBack = "https://image.tmdb.org/t/p/original"
+private const val EMBED_URL = "https://embed.vidrift.net"
+private const val UA =
+    "Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Mobile Safari/537.36"
+private const val TMDB_IMG = "https://image.tmdb.org/t/p/w500"
+private const val TMDB_BACK = "https://image.tmdb.org/t/p/original"
 
-    private val ua =
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-
-    override val mainPage = mainPageOf(
-        "tmdb_trending" to "Trending",
-        "tmdb_popular_movies" to "Popular Movies",
-        "tmdb_popular_tv" to "Popular TV Shows",
-        "tmdb_top_movies" to "Top Rated Movies",
-        "tmdb_top_tv" to "Top Rated TV Shows",
-        "tmdb_anime_movies" to "Anime Movies",
-        "tmdb_anime_tv" to "Anime Series",
-        "tmdb_airing_tv" to "Airing Now",
-        "tmdb_now_playing" to "In Theaters",
+private fun siteHeaders(accept: String, referer: String? = null): Map<String, String> {
+    val headers = mutableMapOf(
+        "Accept" to accept,
+        "User-Agent" to UA
     )
+    if (referer != null) headers["Referer"] = referer
+    return headers
+}
 
-    private suspend fun tmdbGet(path: String, language: String = "en-US"): String {
-        val sep = if (path.contains("?")) "&" else "?"
-        val bearer = app.get(
-            "$tmdbApi$path${sep}language=$language",
-            headers = mapOf(
-                "Authorization" to "Bearer $tmdbBearer",
-                "Accept" to "application/json",
-                "User-Agent" to ua
-            ), timeout = 30_000L
-        )
-        if (bearer.code == 200 && !bearer.text.contains("Invalid API key")) {
-            return bearer.text
-        }
-        return app.get(
-            "$tmdbApi$path${sep}api_key=$tmdbApiKey&language=$language",
-            headers = mapOf("Accept" to "application/json", "User-Agent" to ua),
-            timeout = 30_000L
-        ).text
-    }
+@JsonIgnoreProperties(ignoreUnknown = true)
+private data class DiscoverItem(
+    @JsonProperty("id") val id: Int? = null,
+    @JsonProperty("title") val title: String? = null,
+    @JsonProperty("year") val year: String? = null,
+    @JsonProperty("rating") val rating: Double? = null,
+    @JsonProperty("mediaType") val mediaType: String? = null,
+    @JsonProperty("poster") val poster: String? = null,
+    @JsonProperty("description") val description: String? = null
+)
 
-    data class TmdbItem(
-        val id: Int?,
-        val title: String?,
-        val name: String?,
-        @JsonProperty("media_type") val mediaType: String?,
-        @JsonProperty("poster_path") val posterPath: String?,
-        @JsonProperty("release_date") val releaseDate: String?,
-        @JsonProperty("first_air_date") val firstAirDate: String?,
-        @JsonProperty("genre_ids") val genreIds: List<Int>?
-    )
+@JsonIgnoreProperties(ignoreUnknown = true)
+private data class DiscoverResp(val items: List<DiscoverItem>? = null)
 
-    data class TmdbResp(val page: Int?, val results: List<TmdbItem>?, @JsonProperty("total_pages") val totalPages: Int?)
+@JsonIgnoreProperties(ignoreUnknown = true)
+private data class SearchResp(val results: List<DiscoverItem>? = null)
 
-    data class TmdbGenre(val id: Int, val name: String)
-    data class TmdbDetail(
-        val id: Int,
-        val title: String? = null,
-        val name: String? = null,
-        val overview: String? = null,
-        val tagline: String? = null,
-        @JsonProperty("poster_path") val posterPath: String? = null,
-        @JsonProperty("backdrop_path") val backdropPath: String? = null,
-        @JsonProperty("release_date") val releaseDate: String? = null,
-        @JsonProperty("first_air_date") val firstAirDate: String? = null,
-        val runtime: Int? = null,
-        @JsonProperty("episode_run_time") val episodeRunTime: List<Int>? = null,
-        @JsonProperty("vote_average") val voteAverage: Double? = null,
-        val genres: List<TmdbGenre>? = null,
-        val status: String? = null,
-        val seasons: List<TmdbSeason>? = null,
-        @JsonProperty("production_companies") val productionCompanies: List<ProdCompany>? = null
-    ) {
-        data class ProdCompany(val name: String?)
-    }
+@JsonIgnoreProperties(ignoreUnknown = true)
+private data class DetailGenre(val name: String? = null)
 
-    data class TmdbSeason(
-        val id: Int,
-        @JsonProperty("season_number") val seasonNumber: Int,
-        val name: String?,
-        @JsonProperty("episode_count") val episodeCount: Int?
-    )
+@JsonIgnoreProperties(ignoreUnknown = true)
+private data class DetailSeason(
+    @JsonProperty("season_number") val seasonNumber: Int? = null,
+    @JsonProperty("episode_count") val episodeCount: Int? = null
+)
 
-    data class TmdbSeasonDetail(
-        val episodes: List<TmdbEpisode>?
-    )
+@JsonIgnoreProperties(ignoreUnknown = true)
+private data class DetailJson(
+    val id: Int? = null,
+    val title: String? = null,
+    val name: String? = null,
+    val overview: String? = null,
+    @JsonProperty("poster_path") val posterPath: String? = null,
+    @JsonProperty("backdrop_path") val backdropPath: String? = null,
+    @JsonProperty("release_date") val releaseDate: String? = null,
+    @JsonProperty("first_air_date") val firstAirDate: String? = null,
+    val runtime: Int? = null,
+    @JsonProperty("vote_average") val voteAverage: Double? = null,
+    val genres: List<DetailGenre>? = null,
+    val status: String? = null,
+    val seasons: List<DetailSeason>? = null
+)
 
-    data class TmdbEpisode(
-        val id: Int,
-        @JsonProperty("episode_number") val episodeNumber: Int,
-        @JsonProperty("season_number") val seasonNumber: Int,
-        val name: String?,
-        val overview: String?,
-        @JsonProperty("still_path") val stillPath: String?,
-        @JsonProperty("air_date") val airDate: String?,
-        @JsonProperty("runtime") val runtime: Int?
-    )
+@JsonIgnoreProperties(ignoreUnknown = true)
+private data class EpisodeListSeason(
+    val season: Int? = null,
+    val episodes: Int? = null
+)
 
-    // Only /trending/all returns media_type on every item; the single-type
-    // endpoints leave it out, so the section passes its own type in.
-    private fun TmdbItem.toSearch(defaultType: String? = null): SearchResponse? {
-        val type = this.mediaType ?: defaultType ?: return null
-        if (type != "movie" && type != "tv") return null
-        val id = this.id ?: return null
-        val t = if (type == "movie") this.title ?: this.name else this.name ?: this.title
-        if (t.isNullOrBlank()) return null
-        val poster = this.posterPath?.let { tmdbImg + it }
-        val year = (this.releaseDate ?: this.firstAirDate)?.take(4)?.toIntOrNull()
-        // the TMDB id rides in the payload; the absolute url keeps fixUrl from rewriting it
-        return if (type == "movie") {
-            newMovieSearchResponse(t, "$mainUrl/movie|$id|$t", TvType.Movie) {
-                this.posterUrl = poster
-                this.year = year
+@JsonIgnoreProperties(ignoreUnknown = true)
+private data class EpisodeMeta(
+    val episode: Int? = null,
+    val name: String? = null,
+    val runtime: Int? = null,
+    val still: String? = null,
+    val overview: String? = null
+)
+
+@JsonIgnoreProperties(ignoreUnknown = true)
+private data class EpisodesResp(
+    val seasons: List<EpisodeListSeason>? = null,
+    val episodes: List<EpisodeMeta>? = null
+)
+
+// detail json is buried in the rsc stream, cut it out with a brace scan
+private fun extractDetailJson(rsc: String): String? {
+    val key = "\"detail\":"
+    val keyAt = rsc.indexOf(key)
+    if (keyAt < 0) return null
+    val start = rsc.indexOf('{', keyAt + key.length)
+    if (start < 0) return null
+    var depth = 0
+    var inString = false
+    var escaped = false
+    var i = start
+    while (i < rsc.length) {
+        val c = rsc[i]
+        if (inString) {
+            when {
+                escaped -> escaped = false
+                c == '\\' -> escaped = true
+                c == '"' -> inString = false
             }
         } else {
-            val isAnime = (this.genreIds ?: emptyList()).contains(16)
-            val tvType = if (isAnime) TvType.Anime else TvType.TvSeries
-            if (isAnime) {
-                newAnimeSearchResponse(t, "$mainUrl/tv|$id|$t", tvType) {
-                    this.posterUrl = poster
-                    this.year = year
-                }
-            } else {
-                newMovieSearchResponse(t, "$mainUrl/tv|$id|$t", tvType) {
-                    this.posterUrl = poster
-                    this.year = year
+            when (c) {
+                '"' -> inString = true
+                '{' -> depth++
+                '}' -> {
+                    depth--
+                    if (depth == 0) return rsc.substring(start, i + 1)
                 }
             }
         }
+        i++
+    }
+    return null
+}
+
+class KdesaProvider : MainAPI() {
+    override var mainUrl = "https://7movies.ac"
+    override var name = "KDesa"
+    override var lang = "en"
+    override val hasMainPage = true
+    override val hasDownloadSupport = true
+    override val supportedTypes = setOf(
+        TvType.Movie, TvType.TvSeries, TvType.Anime, TvType.AnimeMovie
+    )
+
+    override val mainPage = mainPageOf(
+        "movie|" to "Latest Movies",
+        "tv|" to "Latest TV Shows",
+        "movie|28" to "Action Movies",
+        "movie|878" to "Sci-Fi Movies",
+        "movie|27" to "Horror Movies",
+        "movie|35" to "Comedy Movies",
+        "movie|16" to "Animated Movies",
+        "tv|16" to "Animated Series",
+        "tv|10765" to "Sci-Fi & Fantasy Series"
+    )
+
+    private fun DiscoverItem.toSearch(): SearchResponse? {
+        val id = this.id ?: return null
+        val type = when (this.mediaType) {
+            "movie" -> "movie"
+            "tv" -> "tv"
+            else -> return null
+        }
+        val title = this.title?.trim()?.takeIf { it.isNotBlank() } ?: return null
+        val yearNum = year?.take(4)?.toIntOrNull()
+        val scoreNum = rating?.let { Score.from10(it.toInt()) }
+        return newMovieSearchResponse(title, "$mainUrl/$type|$id|$title", if (type == "movie") TvType.Movie else TvType.TvSeries) {
+            this.posterUrl = poster?.takeIf { it.isNotBlank() }
+            this.year = yearNum
+            this.score = scoreNum
+        }
     }
 
-    // Payloads look like movie|123|Title or tv|123|1|2|Title, optionally
-    // prefixed with the site url - strip it so both forms work.
+    // the prefix keeps the framework from mangling the pipe separated payload
     private fun payloadParts(raw: String): List<String> {
         var s = raw.trim()
         if (s.startsWith("$mainUrl/")) s = s.removePrefix("$mainUrl/")
@@ -160,42 +172,18 @@ class KdesaProvider : MainAPI() {
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         DonationManager.checkAndShow()
+        val (type, genre) = request.data.split("|", limit = 2)
+        val genreParam = genre.takeIf { it.isNotBlank() }?.let { "&genre=$it" } ?: ""
         return try {
-            var path: String
-            var defType: String? = null
-            when (request.data) {
-                "tmdb_trending" -> path = "/trending/all/day?page=$page"
-                "tmdb_popular_movies" -> {
-                    path = "/movie/popular?page=$page"; defType = "movie"
-                }
-                "tmdb_popular_tv" -> {
-                    path = "/tv/popular?page=$page"; defType = "tv"
-                }
-                "tmdb_top_movies" -> {
-                    path = "/movie/top_rated?page=$page"; defType = "movie"
-                }
-                "tmdb_top_tv" -> {
-                    path = "/tv/top_rated?page=$page"; defType = "tv"
-                }
-                "tmdb_anime_movies" -> {
-                    path = "/discover/movie?page=$page&with_genres=16&sort_by=popularity.desc&include_adult=false"; defType = "movie"
-                }
-                "tmdb_anime_tv" -> {
-                    path = "/discover/tv?page=$page&with_genres=16&sort_by=popularity.desc&include_adult=false"; defType = "tv"
-                }
-                "tmdb_airing_tv" -> {
-                    path = "/tv/on_the_air?page=$page"; defType = "tv"
-                }
-                "tmdb_now_playing" -> {
-                    path = "/movie/now_playing?page=$page"; defType = "movie"
-                }
-                else -> return newHomePageResponse(request.name, emptyList())
-            }
-            val json = tmdbGet(path)
-            val resp = parseJson<TmdbResp>(json)
-            val items = resp.results?.mapNotNull { it.toSearch(defType) } ?: emptyList()
-            newHomePageResponse(request.name, items, resp.totalPages != null && page < (resp.totalPages ?: 1))
-        } catch (_: Exception) {
+            val response = app.get(
+                "$mainUrl/api/discover?page=$page&type=$type$genreParam",
+                headers = siteHeaders("*/*", "$mainUrl/"),
+                timeout = 30_000L
+            )
+            val items = parseJson<DiscoverResp>(response.text).items.orEmpty()
+            newHomePageResponse(request.name, items.mapNotNull { it.toSearch() }, items.isNotEmpty())
+        } catch (e: Exception) {
+            Log.d(TAG, "main page: ${e.message}")
             newHomePageResponse(request.name, emptyList())
         }
     }
@@ -203,85 +191,153 @@ class KdesaProvider : MainAPI() {
     override suspend fun search(query: String): List<SearchResponse> {
         if (query.isBlank()) return emptyList()
         return try {
-            val json = tmdbGet("/search/multi?query=${URLEncoder.encode(query, "UTF-8")}&page=1&include_adult=false")
-            val resp = parseJson<TmdbResp>(json)
-            val results = resp.results?.mapNotNull { it.toSearch() } ?: emptyList()
-            results
-        } catch (_: Exception) {
+            val encoded = URLEncoder.encode(query, "UTF-8")
+            val response = app.get(
+                "$mainUrl/api/search?v=5&q=$encoded",
+                headers = siteHeaders("*/*", "$mainUrl/"),
+                timeout = 30_000L
+            )
+            parseJson<SearchResp>(response.text).results.orEmpty().mapNotNull { it.toSearch() }
+        } catch (e: Exception) {
+            Log.d(TAG, "search: ${e.message}")
             emptyList()
         }
+    }
+
+    private suspend fun fetchDetail(type: String, id: Int): DetailJson? {
+        return try {
+            val response = app.get(
+                "$mainUrl/$type/$id?_rsc=kdesa",
+                headers = mapOf(
+                    "Accept" to "*/*",
+                    "User-Agent" to UA,
+                    "RSC" to "1",
+                    "Referer" to "$mainUrl/"
+                ),
+                timeout = 30_000L
+            )
+            extractDetailJson(response.text)?.let { parseJson<DetailJson>(it) }
+        } catch (e: Exception) {
+            Log.d(TAG, "detail: ${e.message}")
+            null
+        }
+    }
+
+    private fun numberedEpisodes(tmdbId: Int, title: String, seasons: List<DetailSeason>): List<Episode> {
+        return seasons.filter { (it.seasonNumber ?: 0) > 0 && (it.episodeCount ?: 0) > 0 }.flatMap { season ->
+            (1..(season.episodeCount ?: 0)).map { ep ->
+                newEpisode("tv|$tmdbId|${season.seasonNumber}|$ep|$title") {
+                    this.season = season.seasonNumber
+                    this.episode = ep
+                }
+            }
+        }
+    }
+
+    // names and stills live on the player's index, one call per season
+    private suspend fun episodesForShow(tmdbId: Int, title: String, detail: DetailJson): List<Episode> {
+        val seasonMap = try {
+            val first = app.get(
+                "$EMBED_URL/api/episodes/$tmdbId/1?v=2",
+                headers = siteHeaders("*/*", "$mainUrl/"),
+                timeout = 30_000L
+            )
+            parseJson<EpisodesResp>(first.text).seasons.orEmpty()
+                .mapNotNull { s -> s.season?.let { it to (s.episodes ?: 0) } }
+                .toMap()
+        } catch (e: Exception) {
+            Log.d(TAG, "episode index: ${e.message}")
+            null
+        }
+
+        val seasons = seasonMap?.filterKeys { it > 0 && (seasonMap[it] ?: 0) > 0 }
+            ?: detail.seasons.orEmpty().filter { (it.seasonNumber ?: 0) > 0 && (it.episodeCount ?: 0) > 0 }
+                .mapNotNull { s -> s.seasonNumber?.let { it to (s.episodeCount ?: 0) } }
+                .toMap()
+        if (seasons.isEmpty()) return numberedEpisodes(tmdbId, title, detail.seasons.orEmpty())
+
+        val episodes = mutableListOf<Episode>()
+        for ((season, count) in seasons.toSortedMap()) {
+            val meta = try {
+                app.get(
+                    "$EMBED_URL/api/episodes/$tmdbId/$season?v=2",
+                    headers = siteHeaders("*/*", "$mainUrl/"),
+                    timeout = 30_000L
+                ).let { parseJson<EpisodesResp>(it.text).episodes }
+            } catch (e: Exception) {
+                Log.d(TAG, "season $season: ${e.message}")
+                null
+            }
+            if (meta.isNullOrEmpty()) {
+                (1..count).forEach { ep ->
+                    episodes.add(
+                        newEpisode("tv|$tmdbId|$season|$ep|$title") {
+                            this.season = season
+                            this.episode = ep
+                        }
+                    )
+                }
+            } else {
+                meta.forEach { ep ->
+                    val number = ep.episode ?: return@forEach
+                    episodes.add(
+                        newEpisode("tv|$tmdbId|$season|$number|$title") {
+                            this.name = ep.name?.takeIf { it.isNotBlank() }
+                            this.season = season
+                            this.episode = number
+                            this.posterUrl = ep.still?.takeIf { it.isNotBlank() }
+                            this.description = ep.overview?.takeIf { it.isNotBlank() }
+                            this.runTime = ep.runtime
+                        }
+                    )
+                }
+            }
+        }
+        return episodes
     }
 
     override suspend fun load(url: String): LoadResponse? {
         val parts = payloadParts(url)
         if (parts.size < 3) return null
-        val type = parts[0]
+        val type = if (parts[0] == "tv") "tv" else "movie"
         val tmdbId = parts[1].toIntOrNull() ?: return null
         val fallbackTitle = parts.drop(2).joinToString("|")
 
-        return try {
-            val detail = parseJson<TmdbDetail>(tmdbGet("/$type/$tmdbId"))
-            val title = detail.title ?: detail.name ?: fallbackTitle
-            val year = (detail.releaseDate ?: detail.firstAirDate)?.take(4)?.toIntOrNull()
-            val poster = detail.posterPath?.let { tmdbImg + it }
-            val bg = detail.backdropPath?.let { tmdbBack + it }
-            val genres = detail.genres?.mapNotNull { it.name } ?: emptyList()
-            val score = detail.voteAverage?.let { Score.from10(it.toInt()) }
+        val detail = fetchDetail(type, tmdbId) ?: return null
+        val title = (detail.title ?: detail.name)?.takeIf { it.isNotBlank() } ?: fallbackTitle
+        val year = (detail.releaseDate ?: detail.firstAirDate)?.take(4)?.toIntOrNull()
+        val poster = detail.posterPath?.let { TMDB_IMG + it }
+        val background = detail.backdropPath?.let { TMDB_BACK + it }
+        val genres = detail.genres.orEmpty().mapNotNull { it.name?.takeIf { g -> g.isNotBlank() } }
+        val score = detail.voteAverage?.let { Score.from10(it.toInt()) }
+        val isAnime = genres.any { it.equals("Animation", true) }
 
-            if (type == "movie") {
-                val data = "$mainUrl/movie|$tmdbId|$title"
-                newMovieLoadResponse(title, url, TvType.Movie, data) {
-                    this.posterUrl = poster
-                    this.backgroundPosterUrl = bg
-                    this.year = year
-                    this.plot = detail.overview
-                    this.tags = genres
-                    this.score = score
-                    this.duration = detail.runtime
-                    this.contentRating = null
-                }
-            } else {
-                val seasons = detail.seasons?.filter { it.seasonNumber > 0 && (it.episodeCount ?: 0) > 0 } ?: emptyList()
-                val episodes = mutableListOf<Episode>()
-                for (season in seasons) {
-                    try {
-                        val seasonDetail = parseJson<TmdbSeasonDetail>(
-                            tmdbGet("/tv/$tmdbId/season/${season.seasonNumber}")
-                        )
-                        seasonDetail.episodes?.forEach { ep ->
-                            val epData = "$mainUrl/tv|$tmdbId|${ep.seasonNumber}|${ep.episodeNumber}|$title"
-                            episodes.add(
-                                newEpisode(epData) {
-                                    this.name = ep.name
-                                    this.season = ep.seasonNumber
-                                    this.episode = ep.episodeNumber
-                                    this.posterUrl = ep.stillPath?.let { tmdbImg + it }
-                                    this.description = ep.overview
-                                    this.runTime = ep.runtime
-                                }
-                            )
-                        }
-                    } catch (_: Exception) {}
-                }
-
-                val isAnime = genres.any { it.equals("Animation", true) }
-                val tvType = if (isAnime) TvType.Anime else TvType.TvSeries
-                newTvSeriesLoadResponse(title, url, tvType, episodes) {
-                    this.posterUrl = poster
-                    this.backgroundPosterUrl = bg
-                    this.year = year
-                    this.plot = detail.overview
-                    this.tags = genres
-                    this.score = score
-                    this.showStatus = when (detail.status) {
-                        "Returning Series" -> ShowStatus.Ongoing
-                        "Ended", "Canceled" -> ShowStatus.Completed
-                        else -> null
-                    }
+        return if (type == "movie") {
+            newMovieLoadResponse(title, url, if (isAnime) TvType.AnimeMovie else TvType.Movie, "movie|$tmdbId|$title") {
+                this.posterUrl = poster
+                this.backgroundPosterUrl = background
+                this.year = year
+                this.plot = detail.overview
+                this.tags = genres
+                this.score = score
+                this.duration = detail.runtime
+            }
+        } else {
+            val episodes = episodesForShow(tmdbId, title, detail)
+            if (episodes.isEmpty()) return null
+            newTvSeriesLoadResponse(title, url, if (isAnime) TvType.Anime else TvType.TvSeries, episodes) {
+                this.posterUrl = poster
+                this.backgroundPosterUrl = background
+                this.year = year
+                this.plot = detail.overview
+                this.tags = genres
+                this.score = score
+                this.showStatus = when (detail.status) {
+                    "Returning Series" -> ShowStatus.Ongoing
+                    "Ended", "Canceled" -> ShowStatus.Completed
+                    else -> null
                 }
             }
-        } catch (_: Exception) {
-            null
         }
     }
 
@@ -292,25 +348,16 @@ class KdesaProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         val parts = payloadParts(data)
-        val type = parts.getOrNull(0) ?: return false
+        val type = if (parts.getOrNull(0) == "tv") "tv" else "movie"
         val tmdbId = parts.getOrNull(1)?.toIntOrNull() ?: return false
 
         val resolver = KdesaSources()
-        var any = false
-
-        if (type == "movie") {
-            val title = parts.drop(2).joinToString("|")
-            any = any or resolver.resolveMovie(tmdbId, title, subtitleCallback, callback)
+        return if (type == "movie") {
+            resolver.resolveMovie(tmdbId, subtitleCallback, callback)
         } else {
-            val season = parts.getOrNull(2)?.toIntOrNull()
-            val episode = parts.getOrNull(3)?.toIntOrNull()
-            val title = parts.drop(4).joinToString("|")
-            if (season == null || episode == null) {
-                return false
-            }
-            any = any or resolver.resolveShow(tmdbId, title, season, episode, subtitleCallback, callback)
+            val season = parts.getOrNull(2)?.toIntOrNull() ?: return false
+            val episode = parts.getOrNull(3)?.toIntOrNull() ?: return false
+            resolver.resolveShow(tmdbId, season, episode, subtitleCallback, callback)
         }
-
-        return any
     }
 }

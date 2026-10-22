@@ -122,7 +122,7 @@ class Nepu : MainAPI() {
             nepuGet(listUrl(section, filter, page))
         } catch (e: Exception) {
             Log.d(TAG, "main page $section: ${e.message}")
-            throw ErrorLoadingException("Could not reach Nepu. Open provider settings and verify Cloudflare access.")
+            throw ErrorLoadingException("Could not reach Nepu. Open provider settings and verify site access.")
         }
         if (response.code != 200) {
             throw ErrorLoadingException("Nepu returned ${response.code}")
@@ -187,7 +187,7 @@ class Nepu : MainAPI() {
             nepuGet(url)
         } catch (e: Exception) {
             Log.d(TAG, "load: ${e.message}")
-            throw ErrorLoadingException("Could not reach Nepu. Open provider settings and verify Cloudflare access.")
+            throw ErrorLoadingException("Could not reach Nepu. Open provider settings and verify site access.")
         }
         if (response.code != 200) {
             throw ErrorLoadingException("Nepu returned ${response.code} for this title")

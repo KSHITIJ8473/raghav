@@ -79,7 +79,7 @@ class NepuSettingsFragment(private val plugin: Plugin) : BottomSheetDialogFragme
             typeface = Typeface.DEFAULT_BOLD
         })
         root.addView(TextView(ctx).apply {
-            text = "Cloudflare access"
+            text = "Site access"
             textSize = 12.5f
             setTextColor(TEXT_SUBTLE)
             setPadding(0, d(2), 0, 0)
@@ -167,7 +167,7 @@ class NepuSettingsFragment(private val plugin: Plugin) : BottomSheetDialogFragme
                 }
                 AlertDialog.Builder(act)
                     .setTitle("Reset session?")
-                    .setMessage("All saved Cloudflare cookies are removed and the verification runs again from scratch.")
+                    .setMessage("All saved session cookies are removed and the verification runs again from scratch.")
                     .setPositiveButton("Reset") { _, _ -> runVerification() }
                     .setNegativeButton("Cancel", null)
                     .show()
@@ -213,7 +213,7 @@ class NepuSettingsFragment(private val plugin: Plugin) : BottomSheetDialogFragme
             else -> "No active session"
         }
         verifyButton?.apply {
-            text = if (active) "Verify again" else "Verify Cloudflare"
+            text = if (active) "Verify again" else "Verify access"
             isEnabled = true
             alpha = 1f
         }
@@ -229,11 +229,10 @@ class NepuSettingsFragment(private val plugin: Plugin) : BottomSheetDialogFragme
         resetButton?.isEnabled = false
         scope.launch {
             try {
-                // the full wipe is what brings the challenge back, without it
-                // the webview store keeps handing cloudflare the old clearance
+                // without the wipe the webview store just hands back the old session
                 wipeNepuBrowserState()
                 if (isAdded) renderStatus()
-                val success = solveNepuCloudflare("https://nepu.io/")
+                val success = solveNepuGuard()
                 if (success && NepuSession.active()) {
                     if (isAdded) {
                         Toast.makeText(requireContext(), "Nepu is ready", Toast.LENGTH_SHORT).show()

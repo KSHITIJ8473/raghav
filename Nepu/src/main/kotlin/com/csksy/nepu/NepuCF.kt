@@ -26,30 +26,37 @@ import android.widget.ProgressBar
 import android.widget.TextView
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties
+import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.api.Log
 import com.lagradost.cloudstream3.CloudStreamApp
 import com.lagradost.cloudstream3.CommonActivity
 import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.ui.settings.Globals
+import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.nicehttp.NiceResponse
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
-import okhttp3.Cookie
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
+import java.security.MessageDigest
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.coroutines.resume
+import kotlin.math.min
 
 private const val TAG = "Nepu_CF"
 
 private const val SOLVER_TIMEOUT_MS = 120_000L
 private const val POLL_INTERVAL_MS = 1000L
 
-// a cancelled or timed out check blocks the auto solver for a minute so the
-// home page retry loop cannot throw the dialog at the user over and over
+// stop the home page retry loop from spamming the dialog after a failed check
 private const val SOLVER_BACKOFF_MS = 60_000L
+
+// past this the webview workers win, native grinding gets too slow
+private const val MAX_NATIVE_DIFFICULTY = 6
 
 @Volatile private var lastSolverFailureAt = 0L
 
@@ -61,9 +68,12 @@ private const val TEXT_SUBTLE = 0xFF9E9EA8.toInt()
 private const val MAIN_URL = "https://nepu.io"
 private const val MAIN_HOST = "nepu.io"
 
+// anubis challenges come back with http 200, only this script tag tells them apart
+private const val ANUBIS_MARKER = "anubis_challenge"
+
 private val CHALLENGE_TITLES = listOf(
     "just a moment", "just a moment...", "checking your browser", "attention required",
-    "one more step", "verify you are human", "ddos-guard"
+    "one more step", "verify you are human", "ddos-guard", "making sure you're not a bot"
 )
 
 internal const val DEFAULT_UA =
@@ -89,12 +99,14 @@ internal fun mergeCookieStrings(existing: String, fresh: String): String {
     return map.entries.joinToString("; ") { "${it.key}=${it.value}" }
 }
 
-internal fun extractClearanceToken(cookieStr: String): String? {
-    val token = parseCookieMap(cookieStr)["cf_clearance"] ?: return null
-    return token.trim().takeIf { it.length >= 10 }
+// cookie name changes per deployment, the anubis-auth infix is the stable part
+internal fun extractAnubisAuth(cookieStr: String): String? {
+    return parseCookieMap(cookieStr).entries.firstOrNull {
+        it.key == "__anubis" || it.key.contains("anubis-auth")
+    }?.value?.takeIf { it.length >= 20 }
 }
 
-internal fun hasClearance(cookieStr: String): Boolean = extractClearanceToken(cookieStr) != null
+internal fun hasAnubisAuth(cookieStr: String): Boolean = extractAnubisAuth(cookieStr) != null
 
 internal object NepuSession {
     private const val KEY_COOKIES = "NEPU_CF_COOKIES"
@@ -118,7 +130,7 @@ internal object NepuSession {
         }
     }
 
-    // kept until the site rejects it, cloudflare decides the lifetime
+    // kept until the site rejects it, the server decides the lifetime
     fun cookies(): String? = cookies
 
     fun userAgent(): String = userAgent ?: DEFAULT_UA
@@ -140,8 +152,7 @@ internal object NepuSession {
         }
     }
 
-    // the server rotates __cf_bm and reissues cf_clearance on the fly, folding
-    // those into the stored string is what keeps a verified session alive
+    // the site rotates session cookies, folding them in keeps the session alive
     fun harvest(fresh: String) {
         val current = cookies ?: return
         val merged = mergeCookieStrings(current, fresh)
@@ -171,9 +182,7 @@ internal object NepuSession {
     }
 }
 
-// the webview flavor of the user agent leaks through "; wv" and the Version/
-// token, cloudflare treats those as bot traffic so they are stripped before
-// the challenge page runs
+// strip the webview markers, bot checks read them as automation
 internal fun cleanWebViewUa(original: String): String {
     var clean = original.replace("; wv", "").replace(Regex("Version/[0-9.]+\\s*"), "")
     clean = clean.replace("Android TV", "Android")
@@ -183,8 +192,6 @@ internal fun cleanWebViewUa(original: String): String {
     return clean.ifBlank { DEFAULT_UA }
 }
 
-// expired setCookie tricks stopped removing cf_clearance on current
-// webview builds, removeAllCookies does
 internal fun wipeNepuBrowserState() {
     try {
         val cm = CookieManager.getInstance()
@@ -203,7 +210,7 @@ internal fun wipeNepuBrowserState() {
     try {
         app.baseClient.connectionPool.evictAll()
     } catch (e: Exception) {
-        Log.e(TAG, "pool evict: ${e.message}")
+        Log.d(TAG, "pool evict: ${e.javaClass.simpleName}")
     }
     purgeNepuJar()
     NepuSession.clear()
@@ -212,9 +219,12 @@ internal fun wipeNepuBrowserState() {
 private fun purgeNepuJar() {
     try {
         val url = "$MAIN_URL/".toHttpUrlOrNull() ?: return
-        val expired = listOf("cf_clearance", "__cf_bm", "__ddg2_", "cf_chl_prog", "cf_chl_seq")
+        val jar = app.baseClient.cookieJar
+        val stale = jar.loadForRequest(url)
+            .mapNotNull { cookie -> cookie.name.takeIf { it.contains("anubis") || it == "cf_clearance" || it == "__cf_bm" } }
+            .distinct()
             .map { name ->
-                Cookie.Builder()
+                okhttp3.Cookie.Builder()
                     .name(name)
                     .value("expired")
                     .domain(MAIN_HOST)
@@ -222,22 +232,23 @@ private fun purgeNepuJar() {
                     .expiresAt(0L)
                     .build()
             }
-        app.baseClient.cookieJar.saveFromResponse(url, expired)
+        if (stale.isNotEmpty()) jar.saveFromResponse(url, stale)
     } catch (e: Exception) {
         Log.d(TAG, "jar purge skipped: ${e.message}")
     }
 }
 
-internal fun isNepuCloudflareBlocked(response: NiceResponse): Boolean {
+internal fun isNepuBlocked(response: NiceResponse): Boolean {
+    val body = try {
+        response.text
+    } catch (e: Exception) {
+        return true
+    }
+    if (body.contains(ANUBIS_MARKER)) return true
     val mitigated = response.headers["cf-mitigated"]?.equals("challenge", ignoreCase = true)
     if (mitigated == true) return true
     if (response.code != 403 && response.code != 503) return false
     if (mitigated == false) return false
-    val body = try {
-        response.text.lowercase().take(4000)
-    } catch (e: Exception) {
-        return true
-    }
     if (body.isBlank()) return true
     return body.contains("just a moment") ||
         body.contains("challenge-platform") ||
@@ -248,6 +259,125 @@ internal fun isNepuCloudflareBlocked(response: NiceResponse): Boolean {
 private fun isChallengeTitle(title: String): Boolean {
     val lower = title.lowercase()
     return CHALLENGE_TITLES.any { lower.contains(it) }
+}
+
+@JsonIgnoreProperties(ignoreUnknown = true)
+private data class AnubisPage(
+    @JsonProperty("challenge") val challenge: AnubisChallenge? = null,
+    @JsonProperty("rules") val rules: AnubisRules? = null
+)
+
+@JsonIgnoreProperties(ignoreUnknown = true)
+private data class AnubisChallenge(
+    @JsonProperty("id") val id: String? = null,
+    @JsonProperty("randomData") val randomData: String? = null,
+    @JsonProperty("difficulty") val difficulty: Int? = null,
+    @JsonProperty("method") val method: String? = null
+)
+
+@JsonIgnoreProperties(ignoreUnknown = true)
+private data class AnubisRules(
+    @JsonProperty("algorithm") val algorithm: String? = null,
+    @JsonProperty("difficulty") val difficulty: Int? = null
+)
+
+private fun parseAnubisPage(body: String): AnubisPage? {
+    val raw = Regex("<script id=\"anubis_challenge\"[^>]*>(.*?)</script>", RegexOption.DOT_MATCHES_ALL)
+        .find(body)?.groupValues?.get(1) ?: return null
+    return try {
+        parseJson<AnubisPage>(raw.trim())
+    } catch (e: Exception) {
+        null
+    }
+}
+
+private class PowResult(val hashHex: String, val nonce: Long)
+
+// sha256(randomData + nonce) until the digest opens with the requested zero hex digits
+private fun solveAnubisPowBlocking(randomData: String, difficulty: Int): PowResult {
+    val zeroBytes = difficulty / 2
+    val oddNibble = difficulty % 2 != 0
+    val threads = min(4, Runtime.getRuntime().availableProcessors()).coerceAtLeast(1)
+    val found = AtomicReference<PowResult>()
+    val workers = (0 until threads).map { index ->
+        Thread {
+            val digest = MessageDigest.getInstance("SHA-256")
+            var nonce = index.toLong()
+            while (found.get() == null && !Thread.currentThread().isInterrupted) {
+                digest.reset()
+                val hash = digest.digest((randomData + nonce).toByteArray(Charsets.UTF_8))
+                var ok = true
+                for (i in 0 until zeroBytes) {
+                    if (hash[i] != 0.toByte()) {
+                        ok = false
+                        break
+                    }
+                }
+                if (ok && oddNibble && (hash[zeroBytes].toInt() and 0xF0) != 0) ok = false
+                if (ok) {
+                    val hex = buildString(hash.size * 2) {
+                        hash.forEach { b ->
+                            append("0123456789abcdef"[(b.toInt() shr 4) and 0xF])
+                            append("0123456789abcdef"[b.toInt() and 0xF])
+                        }
+                    }
+                    found.compareAndSet(null, PowResult(hex, nonce))
+                    return@Thread
+                }
+                nonce += threads
+            }
+        }.apply { isDaemon = true; start() }
+    }
+    workers.forEach { it.join() }
+    return found.get() ?: throw IllegalStateException("proof of work produced no result")
+}
+
+private fun jarCookieString(): String {
+    val url = "$MAIN_URL/".toHttpUrlOrNull() ?: return ""
+    return try {
+        app.baseClient.cookieJar.loadForRequest(url)
+            .joinToString("; ") { "${it.name}=${it.value}" }
+    } catch (e: Exception) {
+        ""
+    }
+}
+
+private fun baseHeaders(accept: String): Map<String, String> = mapOf(
+    "Accept" to accept,
+    "User-Agent" to NepuSession.userAgent()
+)
+
+// solves over plain http and copies the auth cookie from the jar into NepuSession
+private suspend fun solveNepuAnubisNatively(): Boolean {
+    val ua = NepuSession.userAgent()
+    return try {
+        val started = System.currentTimeMillis()
+        val page = app.get(MAIN_URL, headers = baseHeaders("text/html,application/xhtml+xml,*/*;q=0.8"), timeout = 30L)
+        val parsed = parseAnubisPage(page.text) ?: return false
+        val challenge = parsed.challenge ?: return false
+        val id = challenge.id ?: return false
+        val randomData = challenge.randomData ?: return false
+        val difficulty = parsed.rules?.difficulty ?: challenge.difficulty ?: return false
+        val method = (challenge.method ?: parsed.rules?.algorithm ?: "fast").lowercase()
+        if (method != "fast" && method != "slow") return false
+        if (difficulty > MAX_NATIVE_DIFFICULTY || difficulty < 1) return false
+
+        // hash grinding is cpu work, it must stay off the caller's thread
+        val proof = withContext(Dispatchers.Default) { solveAnubisPowBlocking(randomData, difficulty) }
+        val elapsed = (System.currentTimeMillis() - started).coerceAtLeast(250L)
+        val passUrl = "$MAIN_URL/.within.website/x/cmd/anubis/api/pass-challenge" +
+            "?id=$id&response=${proof.hashHex}&nonce=${proof.nonce}" +
+            "&redir=%2F&elapsedTime=$elapsed"
+        val passed = app.get(passUrl, headers = baseHeaders("text/html,application/xhtml+xml,*/*;q=0.8"), timeout = 30L)
+        val cookies = jarCookieString()
+        if (passed.code !in 200..399 || !hasAnubisAuth(cookies)) return false
+
+        NepuSession.save(mergeCookieStrings(NepuSession.cookies() ?: "", cookies), ua)
+        true
+    } catch (e: Exception) {
+        Log.d(TAG, "native solve: ${e.message}")
+        false
+    }
 }
 
 private val solverMutex = Mutex()
@@ -288,8 +418,7 @@ private class NepuSolverDialog(
             targetUrl.takeIf { it.isNotBlank() },
             targetHost.takeIf { it.isNotBlank() },
             targetHost.takeIf { it.isNotBlank() }?.let { "$it/" },
-            "$MAIN_URL/",
-            "https://challenges.cloudflare.com/"
+            "$MAIN_URL/"
         ).filterNotNull()
         urls.forEach { u ->
             try {
@@ -303,17 +432,16 @@ private class NepuSolverDialog(
         return map.entries.joinToString("; ") { "${it.key}=${it.value}" }
     }
 
-    private fun checkForClearance() {
+    private fun checkForAuth() {
         if (resolved.get()) return
         val cookieString = try {
             extractCookies()
         } catch (e: Exception) {
-            Log.d(TAG, "clearance poll: ${e.message}")
+            Log.d(TAG, "auth poll: ${e.message}")
             return
         }
-        if (!hasClearance(cookieString)) return
-        // the clearance lands while the check is still running and can be
-        // reissued a few times, only the page after it proves it is usable
+        if (!hasAnubisAuth(cookieString)) return
+        // the cookie lands mid check, the redirect after it proves the session works
         if (challengePage) return
         finishWith(cookieString)
     }
@@ -323,7 +451,7 @@ private class NepuSolverDialog(
         lastSolverFailureAt = 0L
         handler.removeCallbacksAndMessages(null)
         val ua = webView?.settings?.userAgentString ?: DEFAULT_UA
-        NepuSession.save(cookieString, ua)
+        NepuSession.save(mergeCookieStrings(NepuSession.cookies() ?: "", cookieString), ua)
         try { webView?.destroy() } catch (_: Exception) {}
         try { dialog?.dismiss() } catch (_: Exception) {}
         try { onFinished(true) } catch (_: Exception) {}
@@ -342,7 +470,7 @@ private class NepuSolverDialog(
         override fun run() {
             if (resolved.get()) return
             elapsedMs += POLL_INTERVAL_MS
-            checkForClearance()
+            checkForAuth()
             if (resolved.get()) return
             if (elapsedMs >= SOLVER_TIMEOUT_MS) {
                 statusText?.text = "Timed out after ${elapsedMs / 1000}s"
@@ -372,7 +500,7 @@ private class NepuSolverDialog(
         }
 
         root.addView(TextView(activity).apply {
-            text = "Cloudflare verification"
+            text = "Site verification"
             textSize = 17f
             setTextColor(Color.WHITE)
             typeface = android.graphics.Typeface.DEFAULT_BOLD
@@ -447,8 +575,7 @@ private class NepuSolverDialog(
             try { setAcceptThirdPartyCookies(webView, true) } catch (_: Exception) {}
             flush()
         }
-        // the wipe runs right before the dialog opens, the small delay lets
-        // the async removeAllCookies land so the challenge is guaranteed
+        // let the async cookie wipe land before the challenge page loads
         webView?.postDelayed({ webView?.loadUrl(targetUrl) }, 350L)
         handler.postDelayed(pollRunnable, POLL_INTERVAL_MS)
     }
@@ -547,7 +674,7 @@ private class NepuSolverDialog(
                     } else {
                         "Reading session"
                     }
-                    checkForClearance()
+                    checkForAuth()
                 }
             }
         }
@@ -562,7 +689,7 @@ private class NepuSolverDialog(
     }
 }
 
-internal suspend fun solveNepuCloudflare(url: String): Boolean = withContext(Dispatchers.Main) {
+private suspend fun solveNepuCloudflare(url: String): Boolean = withContext(Dispatchers.Main) {
     val activity = CommonActivity.activity as? AppCompatActivity
     if (activity == null || activity.isFinishing || activity.isDestroyed) {
         return@withContext false
@@ -579,6 +706,12 @@ internal suspend fun solveNepuCloudflare(url: String): Boolean = withContext(Dis
         }
         cont.invokeOnCancellation { solver.dismiss() }
     }
+}
+
+// the native solver covers the common case, the webview only shows up as fallback
+internal suspend fun solveNepuGuard(): Boolean {
+    if (solveNepuAnubisNatively()) return true
+    return solveNepuCloudflare("$MAIN_URL/")
 }
 
 private fun solverOnBackoff(): Boolean =
@@ -612,20 +745,20 @@ private fun harvestSetCookies(response: NiceResponse) {
     }
 }
 
-private suspend fun throughCloudflare(
+private suspend fun throughGuard(
     first: NiceResponse,
     retry: suspend () -> NiceResponse,
     solve: suspend () -> Boolean
 ): NiceResponse {
     var response = first
     harvestSetCookies(response)
-    if (!isNepuCloudflareBlocked(response)) return response
+    if (!isNepuBlocked(response)) return response
 
     solverMutex.withLock {
         if (NepuSession.cookies() != null) {
             response = retry()
             harvestSetCookies(response)
-            if (!isNepuCloudflareBlocked(response)) return response
+            if (!isNepuBlocked(response)) return response
         }
         if (solverOnBackoff()) return response
         NepuSession.clear()
@@ -633,7 +766,7 @@ private suspend fun throughCloudflare(
         repeat(2) {
             response = retry()
             harvestSetCookies(response)
-            if (!isNepuCloudflareBlocked(response)) return response
+            if (!isNepuBlocked(response)) return response
         }
     }
     return response
@@ -644,11 +777,11 @@ internal suspend fun nepuGet(
     headers: Map<String, String> = emptyMap()
 ): NiceResponse {
     val accept = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
-    val first = app.get(url, headers = sessionHeaders(headers, accept), timeout = 30_000L)
-    return throughCloudflare(
+    val first = app.get(url, headers = sessionHeaders(headers, accept), timeout = 30L)
+    return throughGuard(
         first,
-        retry = { app.get(url, headers = sessionHeaders(headers, accept), timeout = 30_000L) },
-        solve = { solveNepuCloudflare("$MAIN_URL/") }
+        retry = { app.get(url, headers = sessionHeaders(headers, accept), timeout = 30L) },
+        solve = { solveNepuGuard() }
     )
 }
 
@@ -657,10 +790,10 @@ internal suspend fun nepuPostForm(
     form: Map<String, String>,
     headers: Map<String, String> = emptyMap()
 ): NiceResponse {
-    val first = app.post(url, data = form, headers = sessionHeaders(headers, "*/*"), timeout = 30_000L)
-    return throughCloudflare(
+    val first = app.post(url, data = form, headers = sessionHeaders(headers, "*/*"), timeout = 30L)
+    return throughGuard(
         first,
-        retry = { app.post(url, data = form, headers = sessionHeaders(headers, "*/*"), timeout = 30_000L) },
-        solve = { solveNepuCloudflare("$MAIN_URL/") }
+        retry = { app.post(url, data = form, headers = sessionHeaders(headers, "*/*"), timeout = 30L) },
+        solve = { solveNepuGuard() }
     )
 }

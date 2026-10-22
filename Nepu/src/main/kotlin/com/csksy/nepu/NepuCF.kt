@@ -108,6 +108,10 @@ internal fun extractAnubisAuth(cookieStr: String): String? {
 
 internal fun hasAnubisAuth(cookieStr: String): Boolean = extractAnubisAuth(cookieStr) != null
 
+// cloudflare drops cf_clearance once its managed challenge passes
+internal fun hasCfClearance(cookieStr: String): Boolean =
+    parseCookieMap(cookieStr)["cf_clearance"]?.takeIf { it.length >= 20 } != null
+
 internal object NepuSession {
     private const val KEY_COOKIES = "NEPU_CF_COOKIES"
     private const val KEY_UA = "NEPU_CF_USER_AGENT"
@@ -208,7 +212,8 @@ internal fun wipeNepuBrowserState() {
         Log.e(TAG, "storage wipe: ${e.message}")
     }
     try {
-        app.baseClient.connectionPool.evictAll()
+        // evictAll closes sockets, on the ui thread it throws before evicting anything
+        Thread { app.baseClient.connectionPool.evictAll() }.start()
     } catch (e: Exception) {
         Log.d(TAG, "pool evict: ${e.javaClass.simpleName}")
     }
@@ -440,7 +445,8 @@ private class NepuSolverDialog(
             Log.d(TAG, "auth poll: ${e.message}")
             return
         }
-        if (!hasAnubisAuth(cookieString)) return
+        // the site swaps between anubis and cloudflare, either cookie proves the check passed
+        if (!hasAnubisAuth(cookieString) && !hasCfClearance(cookieString)) return
         // the cookie lands mid check, the redirect after it proves the session works
         if (challengePage) return
         finishWith(cookieString)

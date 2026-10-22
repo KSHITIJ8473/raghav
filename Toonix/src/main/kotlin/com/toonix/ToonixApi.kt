@@ -477,6 +477,20 @@ object ToonixApi {
         }
     }
 
+    private val showHrefRegex = Regex(""""href":"(/show/[^"]+)"""")
+
+    // some titles keep a second batch of episodes on its own page, the season
+    // grid links there with a card that skips the show slug and the numbers
+    fun parseExtraShows(flight: String, slug: String): List<String> {
+        val out = LinkedHashSet<String>()
+        for (m in showHrefRegex.findAll(flight)) {
+            val target = m.groupValues[1].removePrefix("/show/")
+            if (target.isEmpty() || target == slug || target.contains('/')) continue
+            out.add(target)
+        }
+        return out.toList()
+    }
+
     private fun htmlTitle(html: String, fallback: String): String {
         val m = titleTagRegex.find(html) ?: return fallback
         var t = m.groupValues[1]

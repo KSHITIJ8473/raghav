@@ -7,6 +7,7 @@ import com.lagradost.cloudstream3.LoadResponse
 import com.lagradost.cloudstream3.MainAPI
 import com.lagradost.cloudstream3.MainPageRequest
 import com.lagradost.cloudstream3.SearchResponse
+import com.lagradost.cloudstream3.SeasonData
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.TvType
 import com.lagradost.cloudstream3.mainPageOf
@@ -401,12 +402,13 @@ class Toonix : MainAPI() {
         return episodes
     }
 
-    private suspend fun loadShow(url: String): LoadResponse? {
-        val slug = url.trimEnd('/').substringAfterLast('/')
-        val (html, flight) = ToonixApi.fetchPage(url)
-        val info = ToonixApi.parseShow(html, flight, slug)
-
+    private suspend fun collectShowEpisodes(
+        slug: String,
+        url: String,
+        info: ToonixShowInfo
+    ): Pair<List<com.lagradost.cloudstream3.Episode>, Map<Int, String>> {
         var episodes: List<com.lagradost.cloudstream3.Episode> = emptyList()
+        var titles: Map<Int, String> = emptyMap()
         if (info.episodeRefs.isNotEmpty()) {
             val (s0, e0) = info.episodeRefs.first()
             try {
@@ -414,6 +416,10 @@ class Toonix : MainAPI() {
                 val rail = ToonixApi.parseSeasonsRail(epFlight)
                 if (rail.isNotEmpty() && rail.any { it.episodes.isNotEmpty() }) {
                     episodes = showEpisodesFromRail(slug, rail)
+                    titles = rail.mapNotNull { r ->
+                        val n = r.number ?: return@mapNotNull null
+                        r.title?.let { n to it }
+                    }.toMap()
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
@@ -423,6 +429,7 @@ class Toonix : MainAPI() {
         }
         if (episodes.isEmpty() && info.seasonHrefs.isNotEmpty()) {
             episodes = showEpisodesFromSeasonPages(slug, info.seasonHrefs)
+            titles = info.seasonHrefs.toMap()
         }
         if (episodes.isEmpty() && info.episodeRefs.isNotEmpty()) {
             episodes = info.episodeRefs.map { (s, e) ->
@@ -433,8 +440,51 @@ class Toonix : MainAPI() {
                 }
             }
         }
-        if (episodes.isEmpty()) {
+        return episodes to titles
+    }
+
+    private suspend fun loadShow(url: String): LoadResponse? {
+        val slug = url.trimEnd('/').substringAfterLast('/')
+        val (html, flight) = ToonixApi.fetchPage(url)
+        val info = ToonixApi.parseShow(html, flight, slug)
+
+        val (mainEpisodes, mainTitles) = collectShowEpisodes(slug, url, info)
+        if (mainEpisodes.isEmpty()) {
             throw ErrorLoadingException("No episodes found for this show")
+        }
+
+        val episodes = mainEpisodes.toMutableList()
+        val names = mutableListOf<SeasonData>()
+        for (num in mainEpisodes.mapNotNull { it.season }.distinct()) {
+            val title = mainTitles[num]
+            if (!title.isNullOrBlank() && title != "Season $num") {
+                names.add(SeasonData(num, title, num))
+            }
+        }
+
+        // extra episodes sit on a page of their own, they get seasons after
+        // the last real one so the selector keeps them apart
+        var nextSeason = (mainEpisodes.maxOf { it.season ?: 0 }) + 1
+        ToonixApi.parseExtraShows(flight, slug).forEachIndexed { i, extraSlug ->
+            try {
+                val extraUrl = "${ToonixApi.BASE}/show/$extraSlug"
+                val (extraHtml, extraFlight) = ToonixApi.fetchPage(extraUrl)
+                val extraInfo = ToonixApi.parseShow(extraHtml, extraFlight, extraSlug)
+                val (extraEpisodes, _) = collectShowEpisodes(extraSlug, extraUrl, extraInfo)
+                if (extraEpisodes.isEmpty()) return@forEachIndexed
+                val prefix = if (i == 0) "Extra" else "Extra ${i + 1}"
+                for ((orig, group) in extraEpisodes.groupBy { it.season ?: 0 }) {
+                    val mapped = nextSeason++
+                    names.add(SeasonData(mapped, "$prefix S$orig", orig))
+                    for (ep in group) {
+                        episodes.add(ep.copy(season = mapped))
+                    }
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.d("Toonix", "extra show $extraSlug unavailable: ${e.message}")
+            }
         }
 
         val type = if (info.genres.any { it.equals("Anime", true) }) TvType.Anime else TvType.Cartoon
@@ -443,6 +493,7 @@ class Toonix : MainAPI() {
             year = info.year
             plot = info.synopsis
             tags = info.genres
+            seasonNames = names
         }
     }
 
@@ -508,9 +559,13 @@ class Toonix : MainAPI() {
             emitted = true
         }
 
-        // the site numbers its servers by position, legacy is a separate field
+        // the player labels its servers, unknown keys still need a position
         player.servers.forEachIndexed { idx, server ->
-            val name = "Server ${idx + 1}"
+            val name = when (server.key) {
+                "ra" -> "Ani"
+                "ad-hx" -> "Sora"
+                else -> "Server ${idx + 1}"
+            }
             if (server.embed || server.direct) {
                 val src = server.versions.firstOrNull()?.src?.takeIf { it.isNotBlank() } ?: server.src
                 if (src.isBlank()) return@forEachIndexed
@@ -554,7 +609,7 @@ class Toonix : MainAPI() {
                 for (version in versions) {
                     if (version.src.isBlank()) continue
                     val srcUrl = ToonixApi.absolutize(version.src, url) ?: continue
-                    val tag = if (server.versions.size > 1 && !version.label.isNullOrBlank()) "${version.label} " else ""
+                    val tag = if (server.versions.size > 1 && !version.label.isNullOrBlank()) " ${version.label}" else ""
                     val master = ToonixApi.fetchMaster(srcUrl)
                     when {
                         master.isMaster -> {
@@ -562,12 +617,12 @@ class Toonix : MainAPI() {
                             if (!streamAlive(probeUrl, "${ToonixApi.BASE}/")) continue
                             master.variants.forEach { v ->
                                 val q = if (v.height != null) "${v.height}p" else "(auto)"
-                                emit("$tag$name $q", v.url, ExtractorLinkType.M3U8, v.height, "${ToonixApi.BASE}/")
+                                emit("$name$tag $q", v.url, ExtractorLinkType.M3U8, v.height, "${ToonixApi.BASE}/")
                             }
                         }
                         master.isMedia -> {
                             if (!streamAlive(srcUrl, "${ToonixApi.BASE}/")) continue
-                            emit("$tag$name (auto)", srcUrl, ExtractorLinkType.M3U8, null, "${ToonixApi.BASE}/")
+                            emit("$name$tag (auto)", srcUrl, ExtractorLinkType.M3U8, null, "${ToonixApi.BASE}/")
                         }
                         else -> {}
                     }

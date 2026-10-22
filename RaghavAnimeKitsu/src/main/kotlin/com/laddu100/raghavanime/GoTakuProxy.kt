@@ -11,14 +11,16 @@ import java.net.Socket
 import java.net.URI
 import java.net.URLDecoder
 import java.net.URLEncoder
-import java.security.MessageDigest
+import android.util.Base64
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
 object GoTakuProxy {
 
-    private const val MAX_STREAMS = 10
+    // Only refreshed tokens and playlist copies are kept, for this many streams. A stream's link
+    // carries everything it needs (see register), so one dropped from here still plays.
+    private const val CACHED_STREAMS = 200
     private const val HLS_TYPE = "application/vnd.apple.mpegurl"
 
     private var serverSocket: ServerSocket? = null
@@ -48,9 +50,9 @@ object GoTakuProxy {
         val playlistCache = ConcurrentHashMap<String, String>()
     }
 
-    private val sessions = ConcurrentHashMap<String, StreamSession>()
-    private val order = ArrayDeque<String>()
-    private val orderLock = Any()
+    private val sessions = object : LinkedHashMap<String, StreamSession>(64, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, StreamSession>?) = size > CACHED_STREAMS
+    }
 
     @Synchronized
     private fun ensureServerRunning(): Int {
@@ -84,23 +86,44 @@ object GoTakuProxy {
     ): String? {
         val port = ensureServerRunning()
         if (port == 0) return null
-        val id = MessageDigest.getInstance("MD5")
-            .digest((manifestBase + stamp).toByteArray())
-            .joinToString("") { "%02x".format(it) }
-            .take(10)
-        synchronized(orderLock) {
-            if (!sessions.containsKey(id)) {
-                order.addLast(id)
-            }
-            while (order.size > MAX_STREAMS) {
-                order.removeFirstOrNull()?.let { sessions.remove(it) }
-            }
-            val session = StreamSession(id, manifestBase, stamp, masterUrl, keySeed, segmentBytes)
-            session.token = token
-            session.expiresAt = expiresAt
-            sessions[id] = session
-        }
+        // The id is the stream itself, so the link never stops working: no count of streams to
+        // fall out of when other episodes are opened, even in the middle of playback
+        val id = encodeSession(manifestBase, stamp, token, expiresAt, keySeed, segmentBytes, masterUrl)
+        val session = StreamSession(id, manifestBase, stamp, masterUrl, keySeed, segmentBytes)
+        session.token = token
+        session.expiresAt = expiresAt
+        synchronized(sessions) { sessions[id] = session }
         return "http://127.0.0.1:$port/$id"
+    }
+
+    private const val B64 = Base64.URL_SAFE or Base64.NO_PADDING or Base64.NO_WRAP
+
+    private fun encodeSession(
+        manifestBase: String, stamp: String, token: String, expiresAt: Long,
+        keySeed: ByteArray, segmentBytes: Int, masterUrl: String
+    ): String {
+        val fields = listOf(manifestBase, stamp, token, expiresAt.toString(), Base64.encodeToString(keySeed, B64), segmentBytes.toString(), masterUrl)
+        return Base64.encodeToString(fields.joinToString("\n").toByteArray(Charsets.UTF_8), B64)
+    }
+
+    /** The stream of a link: the cached one (refreshed token, playlist copies), else rebuilt from its id. */
+    private fun sessionFor(id: String): StreamSession? {
+        synchronized(sessions) { sessions[id] }?.let { return it }
+        val f = try {
+            String(Base64.decode(id, B64), Charsets.UTF_8).split("\n")
+        } catch (_: Exception) {
+            return null
+        }
+        if (f.size != 7) return null
+        val session = StreamSession(
+            id, f[0], f[1], f[6],
+            try { Base64.decode(f[4], B64) } catch (_: Exception) { return null },
+            f[5].toIntOrNull() ?: return null
+        )
+        session.token = f[2]
+        session.expiresAt = f[3].toLongOrNull() ?: 0
+        synchronized(sessions) { sessions[id] = session }
+        return session
     }
 
     private fun handleRequest(conn: Socket) {
@@ -126,7 +149,7 @@ object GoTakuProxy {
                 send404(conn)
                 return
             }
-            val session = sessions[segments[0]]
+            val session = sessionFor(segments[0])
             if (session == null) {
                 send404(conn)
                 return

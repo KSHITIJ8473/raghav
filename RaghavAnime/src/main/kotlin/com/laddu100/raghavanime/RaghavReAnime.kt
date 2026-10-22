@@ -8,7 +8,6 @@ import com.lagradost.cloudstream3.MainAPI
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.TvType
 import com.lagradost.cloudstream3.app
-import com.lagradost.cloudstream3.newSubtitleFile
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.newExtractorLink
@@ -52,63 +51,31 @@ class RaghavReAnime : MainAPI() {
             return false
         }
 
+        // Every server of an episode (HD-1/HD-2, sub/dub) points at the same flixcloud file:
+        // one MKV with both the Japanese and English audio and all subtitles inside
         val embeds = servers.mapNotNull { s ->
-            val link = s.dataLink?.takeIf { it.startsWith("http") } ?: return@mapNotNull null
-            val server = s.serverName ?: "HD"
-            link to server
-        }.distinctBy { it.first.substringBefore("?") + it.second }
+            s.dataLink?.takeIf { it.startsWith("http") && FlixDownload.embedId(it) != null }
+        }.distinctBy { FlixDownload.embedId(it) }
 
-        val seenSubs = HashSet<String>()
-        val seenUrls = HashSet<String>()
         val any = java.util.concurrent.atomic.AtomicBoolean(false)
 
         coroutineScope {
-            embeds.map { (embedUrl, serverName) ->
+            embeds.map { embedUrl ->
                 async {
-                    val res = FlixResolver.resolve(embedUrl, "$mainUrl/") ?: return@async
-                    val proxyMaster = FlixProxy.registerMaster(res.m3u8, res.masterContent, res.pkKey)
-                        ?: return@async
-                    val hasEnglishAudio = res.masterContent.contains("""LANGUAGE="en""") ||
-                        res.masterContent.contains("NAME=\"English\"")
-                    val hasOtherAudio = Regex("""TYPE=AUDIO[^\n]*LANGUAGE="(?!en)[^"]*"""")
-                        .containsMatchIn(res.masterContent) ||
-                        (res.masterContent.contains("TYPE=AUDIO") && !hasEnglishAudio)
-
-                    val lang = when {
-                        isDub && hasEnglishAudio -> "dub"
-                        !isDub && (hasOtherAudio || !hasEnglishAudio) -> "sub"
-                        isDub && !hasEnglishAudio -> "sub"
-                        else -> "dub"
-                    }
-
-                    val suffix = if (serverName.isNotBlank() && !serverName.equals("HD-1", true)) " ($serverName)" else ""
-                    val label = if (lang == "dub") "Re:ANIME Dub$suffix" else "Re:ANIME Sub$suffix"
-                    val url = "$proxyMaster?lang=$lang"
-                    if (seenUrls.add(url)) {
-                        any.set(true)
-                        val height = Regex("""RESOLUTION=\d+x(\d+)""")
-                            .findAll(res.masterContent)
-                            .mapNotNull { it.groupValues[1].toIntOrNull() }
-                            .maxOrNull()
-                        callback.invoke(
-                            newExtractorLink(name, label, url, type = ExtractorLinkType.M3U8) {
-                                height?.let { this.quality = it }
-                                this.headers = mapOf("Referer" to "https://flixcloud.cc/")
-                            }
-                        )
-                    }
-                    for (sub in res.subtitles) {
-                        if (!seenSubs.add(sub.url)) continue
-                        val ext = sub.format?.uppercase()
-                        val subName = if (ext != null) "${sub.language ?: "Subtitle"} ($ext)" else (sub.language ?: "Subtitle")
-                        subtitleCallback.invoke(newSubtitleFile(subName, sub.url) {})
-                    }
+                    val file = FlixDownload.resolve(embedUrl) ?: return@async
+                    any.set(true)
+                    val label = "Re:ANIME Sub & Dub" + (file.size?.let { " ($it)" } ?: "")
+                    callback.invoke(
+                        newExtractorLink(name, label, file.url, type = ExtractorLinkType.VIDEO) {
+                            file.quality?.let { this.quality = it }
+                            this.headers = file.headers
+                        }
+                    )
                 }
             }
         }.forEach { it.join() }
 
-        val found = any.get()
-        return found
+        return any.get()
     }
 
     private suspend fun flixServers(anilistId: Int, episode: Int): List<FlixServer> {
@@ -117,7 +84,7 @@ class RaghavReAnime : MainAPI() {
             val resp = app.get(
                 url,
                 headers = mapOf(
-                    "User-Agent" to FlixResolver.USER_AGENT,
+                    "User-Agent" to FlixDownload.USER_AGENT,
                     "Accept" to "application/json",
                     "Referer" to "$mainUrl/watch/"
                 )

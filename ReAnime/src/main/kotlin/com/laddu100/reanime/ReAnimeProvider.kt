@@ -21,7 +21,6 @@ import com.lagradost.cloudstream3.newAnimeLoadResponse
 import com.lagradost.cloudstream3.newAnimeSearchResponse
 import com.lagradost.cloudstream3.newEpisode
 import com.lagradost.cloudstream3.newHomePageResponse
-import com.lagradost.cloudstream3.newSubtitleFile
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.AppUtils.toJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
@@ -222,58 +221,26 @@ class ReAnimeProvider : MainAPI() {
         val servers = ReAnimeApi.flixServers(ref.anilistId, ref.tmdbId, ref.season, ref.ep)
         if (servers.isEmpty()) return false
 
+        // Every server of an episode (HD-1/HD-2, sub/dub) points at the same flixcloud file:
+        // one MKV with both the Japanese and English audio and all subtitles inside
         val embeds = servers.mapNotNull { s ->
-            val link = s.dataLink?.takeIf { it.startsWith("http") } ?: return@mapNotNull null
-            val server = s.serverName ?: "HD"
-            link to server
-        }.distinctBy { it.first.substringBefore("?") + it.second }
+            s.dataLink?.takeIf { it.startsWith("http") && FlixDownload.embedId(it) != null }
+        }.distinctBy { FlixDownload.embedId(it) }
 
-        val seenSubs = HashSet<String>()
-        val seenUrls = HashSet<String>()
         val any = AtomicBoolean(false)
 
         coroutineScope {
-            embeds.map { (embedUrl, serverName) ->
+            embeds.map { embedUrl ->
                 async {
-                    val res = FlixResolver.resolve(embedUrl, "$mainUrl/") ?: return@async
-                    val proxyMaster = FlixProxy.registerMaster(res.m3u8, res.masterContent, res.pkKey)
-                        ?: return@async
-                    val hasEnglishAudio = res.masterContent.contains("""LANGUAGE="en""") ||
-                        res.masterContent.contains("NAME=\"English\"")
-                    val hasOtherAudio = Regex("""TYPE=AUDIO[^\n]*LANGUAGE="(?!en)[^"]*"""")
-                        .containsMatchIn(res.masterContent) ||
-                        (res.masterContent.contains("TYPE=AUDIO") && !hasEnglishAudio)
-
-                    val wantDub = ref.lang == "dub"
-                    val lang = when {
-                        wantDub && hasEnglishAudio -> "dub"
-                        !wantDub && (hasOtherAudio || !hasEnglishAudio) -> "sub"
-                        wantDub && !hasEnglishAudio -> "sub"
-                        else -> "dub"
-                    }
-
-                    val suffix = if (serverName.isNotBlank() && !serverName.equals("HD-1", true)) " ($serverName)" else ""
-                    val label = if (lang == "dub") "Re:ANIME - Dub$suffix" else "Re:ANIME - Sub$suffix"
-                    val url = "$proxyMaster?lang=$lang"
-                    if (seenUrls.add(url)) {
-                        any.set(true)
-                        val height = Regex("""RESOLUTION=\d+x(\d+)""")
-                            .findAll(res.masterContent)
-                            .mapNotNull { it.groupValues[1].toIntOrNull() }
-                            .maxOrNull()
-                        callback.invoke(
-                            newExtractorLink(label, label, url, type = ExtractorLinkType.M3U8) {
-                                height?.let { this.quality = it }
-                                this.headers = mapOf("Referer" to "${ReAnimeApi.FLIX_EMBED_BASE}/")
-                            }
-                        )
-                    }
-                    for (sub in res.subtitles) {
-                        if (!seenSubs.add(sub.url)) continue
-                        val ext = sub.format?.uppercase()
-                        val name = if (ext != null) "${sub.language ?: "Subtitle"} ($ext)" else (sub.language ?: "Subtitle")
-                        subtitleCallback(newSubtitleFile(name, sub.url) {})
-                    }
+                    val file = FlixDownload.resolve(embedUrl) ?: return@async
+                    any.set(true)
+                    val label = "Re:ANIME - Sub & Dub" + (file.size?.let { " ($it)" } ?: "")
+                    callback.invoke(
+                        newExtractorLink(label, label, file.url, type = ExtractorLinkType.VIDEO) {
+                            file.quality?.let { this.quality = it }
+                            this.headers = file.headers
+                        }
+                    )
                 }
             }
         }.forEach { it.join() }

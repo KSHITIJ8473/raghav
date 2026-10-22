@@ -2,7 +2,6 @@ package com.laddu100.raghavanime
 
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.app
-import com.lagradost.cloudstream3.newSubtitleFile
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.M3u8Helper
@@ -105,30 +104,14 @@ object RaghavEmbeds {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val res = FlixResolver.resolve(embedUrl, referer) ?: return false
-        val proxyMaster = FlixProxy.registerMaster(res.m3u8, res.masterContent, res.pkKey)
-            ?: return false
-        val hasEnglishAudio = res.masterContent.contains("""LANGUAGE="en"""") ||
-            res.masterContent.contains("NAME=\"English\"")
-        val hasOtherAudio = Regex("""TYPE=AUDIO[^\n]*LANGUAGE="(?!en)[^"]*""")
-            .containsMatchIn(res.masterContent) ||
-            (res.masterContent.contains("TYPE=AUDIO") && !hasEnglishAudio)
-        val lang = when {
-            audio == "dub" && hasEnglishAudio -> "dub"
-            audio == "sub" && (hasOtherAudio || !hasEnglishAudio) -> "sub"
-            audio == "dub" && !hasEnglishAudio -> "sub"
-            else -> "dub"
-        }
+        // One plain MKV with both audio tracks and the subtitles inside: no proxy, no decryption
+        val file = FlixDownload.resolve(embedUrl) ?: return false
         callback.invoke(
-            newExtractorLink(sourceTag, label, "$proxyMaster?lang=$lang", type = ExtractorLinkType.M3U8) {
-                this.headers = mapOf("Referer" to "https://flixcloud.cc/")
+            newExtractorLink(sourceTag, label, file.url, type = ExtractorLinkType.VIDEO) {
+                file.quality?.let { this.quality = it }
+                this.headers = file.headers
             }
         )
-        for (sub in res.subtitles) {
-            val ext = sub.format?.uppercase()
-            val subName = if (ext != null) "${sub.language ?: "Subtitle"} ($ext)" else (sub.language ?: "Subtitle")
-            subtitleCallback.invoke(newSubtitleFile(subName, sub.url) {})
-        }
         return true
     }
 

@@ -107,8 +107,8 @@ internal object HindMoviezSite {
     }
 
     private fun pickPost(posts: List<Pair<String, String>>, res: PlayLinkData): Pair<String, String>? {
-        val title = res.title ?: return null
-        val matched = posts.filter { PlayNet.titleMatches(it.first, title) }
+        val matched = posts.filter { PlayNet.titleMatchesFor(it.first, res) }
+        if (matched.isEmpty()) return null
         if (res.season != null) {
             val seasonPosts = matched.filter { PlayNet.seasonsOf(it.first)?.contains(res.season) == true }
             if (seasonPosts.isNotEmpty()) {
@@ -116,8 +116,8 @@ internal object HindMoviezSite {
             }
             return matched.firstOrNull { PlayNet.seasonsOf(it.first) == null }
         }
+        // a post from another year is a different movie, war 2007 is not war 2019
         return matched.firstOrNull { PlayNet.yearMatches(it.first, res.matchYear) }
-            ?: matched.firstOrNull()
     }
 
     private fun buttonHeading(a: Element): String {
@@ -188,20 +188,22 @@ internal object HindMoviezSite {
         callback: (ExtractorLink) -> Unit
     ) {
         try {
-            val title = res.title ?: return
-            val imdbId = res.imdbId?.takeIf { it.isNotBlank() }
+            if (res.title.isNullOrBlank()) return
 
             var posts = emptyList<Pair<String, String>>()
-            for (domain in candidates()) {
-                val byId = if (imdbId != null) searchPosts(domain, imdbId) else emptyList()
-                val target = byId.ifEmpty { searchPosts(domain, title) }
-                if (target.isNotEmpty()) {
-                    posts = target
-                    break
+            var chosen: Pair<String, String>? = null
+            outer@ for (domain in candidates()) {
+                // the year keeps the wordpress search on the right post, the bare
+                // title alone buries it under every war named series and movie
+                for (query in PlayNet.searchQueries(res)) {
+                    val found = searchPosts(domain, query)
+                    if (found.isEmpty()) continue
+                    posts = found
+                    chosen = pickPost(posts, res)
+                    if (chosen != null) break@outer
                 }
             }
-            if (posts.isEmpty()) return
-            val chosen = pickPost(posts, res) ?: return
+            if (chosen == null) return
 
             val postDoc = try {
                 app.get(chosen.second, headers = PlayNet.headers(), timeout = 20L).document

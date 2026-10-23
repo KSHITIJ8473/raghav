@@ -78,7 +78,7 @@ internal object VegaMoviesSite {
 
     private fun pickPost(posts: List<VegaDoc>, res: PlayLinkData): VegaDoc? {
         val title = res.title ?: return null
-        val matched = posts.filter { PlayNet.titleMatches(it.post_title, title) }
+        val matched = posts.filter { PlayNet.titleMatchesFor(it.post_title, res) }
         if (matched.isEmpty()) return null
         return if (res.season != null) {
             val seasonPosts = matched.filter {
@@ -90,8 +90,8 @@ internal object VegaMoviesSite {
             }
             matched.firstOrNull { PlayNet.seasonsOf(it.post_title ?: "") == null }
         } else {
+            // a post from another year is a different movie, war 2007 is not war 2019
             matched.firstOrNull { PlayNet.yearMatches(it.post_title ?: "", res.matchYear) }
-                ?: matched.firstOrNull()
         }
     }
 
@@ -659,25 +659,28 @@ internal object VegaMoviesSite {
         callback: (ExtractorLink) -> Unit
     ) {
         try {
-            val title = res.title ?: return
-            // original titles written in another script find nothing on these catalogs,
-            // the latin spelling is the only thing the sites carry
-            val query = res.orgTitle
-                ?.takeIf { it.isNotBlank() && it != title && PlayNet.normalizeTitle(it).isNotBlank() }
-                ?: title
+            if (res.title.isNullOrBlank()) return
 
-            // both catalogs are searched side by side, the second round only runs when the first finds nothing
+            // both catalogs are searched side by side, every round runs both domains
             suspend fun searchRound(q: String): List<VegaDoc> = coroutineScope {
                 domains.map { domain ->
                     async(Dispatchers.IO) { searchPosts(domain, q) }
                 }.flatMap { it.await() }
             }
-            val posts = searchRound(query).ifEmpty { searchRound(title) }
-            if (posts.isEmpty()) return
-            val post = pickPost(posts, res) ?: return
-            val permalink = post.permalink?.takeIf { it.isNotBlank() } ?: return
+
+            // the year keeps the lookup on the right post, the bare title alone buries
+            // it under every war named series and movie the two catalogs carry
+            var post: VegaDoc? = null
+            for (query in PlayNet.searchQueries(res)) {
+                val posts = searchRound(query)
+                if (posts.isEmpty()) continue
+                post = pickPost(posts, res)
+                if (post != null) break
+            }
+            val post0 = post ?: return
+            val permalink = post0.permalink?.takeIf { it.isNotBlank() } ?: return
             // permalinks come back relative, the domain the search ran on is the only reliable origin
-            val domain = post.domain.ifBlank {
+            val domain = post0.domain.ifBlank {
                 domains.firstOrNull { permalink.contains(it.removePrefix("https://"), true) }
                     ?: domains.first()
             }
@@ -697,7 +700,7 @@ internal object VegaMoviesSite {
                         detail.seasons.filter { s -> PlayNet.seasonsOf(s.title) == null }.flatMap { it.groups }
                     // a one season post keeps every quality block under the post title and
                     // the title names the season, so the blocks are that season's files
-                    PlayNet.seasonsOf(post.post_title ?: "")?.contains(res.season) == true -> detail.movieGroups
+                    PlayNet.seasonsOf(post0.post_title ?: "")?.contains(res.season) == true -> detail.movieGroups
                     else -> emptyList()
                 }
             } else {

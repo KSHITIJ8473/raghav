@@ -555,7 +555,9 @@ internal object MmCineverse {
         }
 
         if (resp.code in 300..399) {
-            val location = resp.headers["location"] ?: return false
+            val location = resp.headers["location"]
+            resp.close()
+            if (location == null) return false
             val target = MmNet.abs(HUB, location)
             val host = MmNet.hostOf(target)
             val hash = target.substringAfter("#", "")

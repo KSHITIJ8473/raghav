@@ -142,6 +142,7 @@ internal object NetNaijaSite {
                     timeout = 15L
                 )
                 readToken(response)
+                response.close()
                 token
             } catch (_: Exception) {
                 null

@@ -154,7 +154,9 @@ internal object DrivePages {
 internal object HdHub4uSite {
     private const val DEFAULT_DOMAIN = "https://new6.hdhub4u.cl"
 
-    private suspend fun typesenseSearch(domain: String, query: String): List<Pair<String, String>> {
+    private data class HubPost(val title: String, val url: String, val imdbId: String)
+
+    private suspend fun typesenseSearch(domain: String, query: String): List<HubPost> {
         return try {
             val url = "https://search.pingora.fyi/collections/post/documents/search" +
                 "?q=${Uri.encode(query)}" +
@@ -188,7 +190,7 @@ internal object HdHub4uSite {
                 } else {
                     domain + permalink
                 }
-                postTitle to url2
+                HubPost(postTitle, url2, d.optString("imdb_id"))
             }
         } catch (_: Exception) {
             emptyList()
@@ -255,28 +257,45 @@ internal object HdHub4uSite {
             val domain = FirebaseDomainHelper.getDomain("justplay_hdhub4u")
                 ?: FirebaseDomainHelper.getDomain("hdhub4u")
                 ?: DEFAULT_DOMAIN
-            val title = res.title ?: return
-            val posts = typesenseSearch(domain, title)
-            if (posts.isEmpty()) return
+            if (res.title.isNullOrBlank()) return
 
-            val titleMatched = posts.filter { (postTitle, _) ->
-                PlayNet.titleMatches(postTitle, title)
-            }
+            // the catalog holds a flood of name containing posts, the year narrows the
+            // search before the matcher even runs, the bare title is the last resort
+            var chosen: List<HubPost> = emptyList()
+            for (query in PlayNet.searchQueries(res)) {
+                val posts = typesenseSearch(domain, query)
+                if (posts.isEmpty()) continue
 
-            val chosen = if (res.season != null) {
-                val seasonPosts = titleMatched.filter { (postTitle, _) ->
-                    PlayNet.seasonsOf(postTitle)?.contains(res.season) == true
+                // an imdb twin settles the pick even when the post spells the name oddly
+                res.imdbId?.takeIf { it.isNotBlank() }?.let { id ->
+                    posts.firstOrNull { it.imdbId.equals(id, ignoreCase = true) }?.let { hit ->
+                        chosen = listOf(hit)
+                    }
                 }
-                if (seasonPosts.isNotEmpty()) seasonPosts
-                else titleMatched.filter { (postTitle, _) -> PlayNet.seasonsOf(postTitle) == null }
-            } else {
-                titleMatched.filter { (postTitle, _) -> PlayNet.yearMatches(postTitle, res.matchYear) }
-                    .ifEmpty { titleMatched }
-            }.take(2)
+
+                if (chosen.isEmpty()) {
+                    val matched = posts.filter { PlayNet.titleMatchesFor(it.title, res) }
+                    if (matched.isNotEmpty()) {
+                        chosen = if (res.season != null) {
+                            val seasonPosts = matched.filter {
+                                PlayNet.seasonsOf(it.title)?.contains(res.season) == true
+                            }
+                            if (seasonPosts.isNotEmpty()) seasonPosts
+                            else matched.filter { PlayNet.seasonsOf(it.title) == null }
+                        } else {
+                            // a post from another year is a different movie, war 2007 is not war 2019
+                            matched.filter { PlayNet.yearMatches(it.title, res.matchYear) }
+                        }.take(2)
+                    }
+                }
+                if (chosen.isNotEmpty()) break
+            }
+            if (chosen.isEmpty()) return
+
             coroutineScope {
-                chosen.forEach { (_, postUrl) ->
+                chosen.forEach { post ->
                     async(Dispatchers.IO) {
-                        processPost(domain, postUrl, res, subtitleCallback, callback)
+                        processPost(domain, post.url, res, subtitleCallback, callback)
                     }
                 }
             }
@@ -337,28 +356,32 @@ internal object FourKhdHubSite {
             val domain = FirebaseDomainHelper.getDomain("justplay_4khdhub")
                 ?: FirebaseDomainHelper.getDomain("4khdhub")
                 ?: DEFAULT_DOMAIN
-            val title = res.title ?: return
+            if (res.title.isNullOrBlank()) return
 
-            val searchDoc = PlayNet.retry {
-                try {
-                    app.get(
-                        "$domain/?s=${Uri.encode(title)}",
-                        headers = PlayNet.headers(),
-                        timeout = 20L
-                    ).document
-                } catch (_: Exception) {
-                    null
+            var matched: Element? = null
+            for (query in PlayNet.searchQueries(res)) {
+                val searchDoc = PlayNet.retry {
+                    try {
+                        app.get(
+                            "$domain/?s=${Uri.encode(query)}",
+                            headers = PlayNet.headers(),
+                            timeout = 20L
+                        ).document
+                    } catch (_: Exception) {
+                        null
+                    }
+                } ?: continue
+                val elements = searchDoc.select("div.card-grid > a.movie-card")
+                fun contentOf(el: Element): String = el.selectFirst("div.movie-card-content")?.text()?.lowercase() ?: ""
+
+                // a card from another year is a different title, war 2007 is not war 2019
+                matched = elements.firstOrNull { el ->
+                    val content = contentOf(el)
+                    PlayNet.titleMatchesFor(content, res) && PlayNet.yearMatches(content, res.year)
                 }
-            } ?: return
-            val elements = searchDoc.select("div.card-grid > a.movie-card")
-            fun contentOf(el: Element): String = el.selectFirst("div.movie-card-content")?.text()?.lowercase() ?: ""
-
-            val matched = elements.firstOrNull { el ->
-                val content = contentOf(el)
-                PlayNet.titleMatches(content, title) && PlayNet.yearMatches(content, res.year)
-            } ?: elements.firstOrNull { el ->
-                PlayNet.titleMatches(contentOf(el), title)
-            } ?: return
+                if (matched != null) break
+            }
+            if (matched == null) return
 
             val href = matched.attr("href").trim()
             val detailUrl = if (href.startsWith("http")) href else domain + href
@@ -588,21 +611,29 @@ internal object Movies4uSite {
         callback: (ExtractorLink) -> Unit
     ) {
         try {
-            val title = res.title ?: return
-            val posts = findPosts(title)
-            if (posts.isEmpty()) return
+            if (res.title.isNullOrBlank()) return
+            var chosen: List<Pair<String, String>> = emptyList()
 
-            val matched = posts.filter { (postTitle, _) -> PlayNet.titleMatches(postTitle, title) }
-            val chosen = if (res.season != null) {
-                val seasonPosts = matched.filter { (postTitle, _) ->
-                    PlayNet.seasonsOf(postTitle)?.contains(res.season) == true
-                }
-                if (seasonPosts.isNotEmpty()) seasonPosts
-                else matched.filter { (postTitle, _) -> PlayNet.seasonsOf(postTitle) == null }
-            } else {
-                matched.filter { (postTitle, _) -> PlayNet.yearMatches(postTitle, res.matchYear) }
-                    .ifEmpty { matched }
-            }.take(2)
+            // the year keeps the lookup away from every name containing post, the
+            // matcher gets a short list and the right one is on it
+            for (query in PlayNet.searchQueries(res)) {
+                val posts = findPosts(query)
+                if (posts.isEmpty()) continue
+
+                val matched = posts.filter { (postTitle, _) -> PlayNet.titleMatchesFor(postTitle, res) }
+                if (matched.isEmpty()) continue
+                chosen = if (res.season != null) {
+                    val seasonPosts = matched.filter { (postTitle, _) ->
+                        PlayNet.seasonsOf(postTitle)?.contains(res.season) == true
+                    }
+                    if (seasonPosts.isNotEmpty()) seasonPosts
+                    else matched.filter { (postTitle, _) -> PlayNet.seasonsOf(postTitle) == null }
+                } else {
+                    // a post from another year is a different movie, war 2007 is not war 2019
+                    matched.filter { (postTitle, _) -> PlayNet.yearMatches(postTitle, res.matchYear) }
+                }.take(2)
+                if (chosen.isNotEmpty()) break
+            }
             if (chosen.isEmpty()) return
 
             chosen.forEach { (_, postUrl) ->
@@ -671,18 +702,27 @@ internal object TmfSite {
         callback: (ExtractorLink) -> Unit
     ) {
         try {
-            val title = res.title ?: return
+            if (res.title.isNullOrBlank()) return
             val domain = PlayTmfNet.domain()
 
-            val searchDoc = PlayTmfNet.fetchPage("$domain/?s=${Uri.encode(title)}") ?: return
-            val anchors = searchAnchors(searchDoc)
-            if (anchors.isEmpty()) return
+            var target: Pair<String, String>? = null
+            for (query in PlayNet.searchQueries(res)) {
+                val searchDoc = PlayTmfNet.fetchPage("$domain/?s=${Uri.encode(query)}") ?: continue
+                val anchors = searchAnchors(searchDoc)
+                if (anchors.isEmpty()) continue
 
-            val matched = anchors.filter { (t, _) -> PlayNet.titleMatches(t, title) }
-            val target = matched.firstOrNull { (t, _) ->
-                if (res.season != null) PlayNet.seasonsOf(t)?.contains(res.season) == true
-                else PlayNet.yearMatches(t, res.matchYear)
-            } ?: matched.firstOrNull() ?: anchors.firstOrNull() ?: return
+                val matched = anchors.filter { (t, _) -> PlayNet.titleMatchesFor(t, res) }
+                if (matched.isEmpty()) continue
+                target = matched.firstOrNull { (t, _) ->
+                    if (res.season != null) PlayNet.seasonsOf(t)?.contains(res.season) == true
+                    else PlayNet.yearMatches(t, res.matchYear)
+                } ?: matched.firstOrNull { (t, _) ->
+                    // a season request may also live in a post that never names a season
+                    res.season != null && PlayNet.seasonsOf(t) == null
+                }
+                if (target != null) break
+            }
+            if (target == null) return
 
             val postDoc = PlayTmfNet.fetchPage(target.second, domain) ?: return
             val groups = downloadGroups(postDoc)
@@ -1052,9 +1092,10 @@ internal object MultimoviesSite {
         val norm = PlayNet.normalizeTitle(title)
         val exact = cards.filter { PlayNet.normalizeTitle(it.title) == norm }
         val pool = exact.ifEmpty { cards }
+        // a card from another year is a different title, not a fallback
         return pool.firstOrNull { c ->
             c.year == null || year == null || kotlin.math.abs(c.year - year) <= 1
-        } ?: pool.first()
+        }
     }
 
     suspend fun invoke(
@@ -1065,16 +1106,26 @@ internal object MultimoviesSite {
         try {
             val domain = currentDomain()
             val title = res.title ?: return
-            val cards = searchCards(domain, title)
-
+            var movie: MmCard? = null
+            var show: MmCard? = null
+            for (query in PlayNet.searchQueries(res)) {
+                val cards = searchCards(domain, query)
+                if (cards.isEmpty()) continue
+                if (res.season == null) {
+                    val matches = cards.filter { !it.isTv && PlayNet.titleMatchesFor(it.title, res) }
+                    movie = pickCard(matches, title, res.year)
+                } else {
+                    val matches = cards.filter { it.isTv && PlayNet.titleMatchesFor(it.title, res) }
+                    show = pickCard(matches, title, res.matchYear)
+                }
+                if (movie != null || show != null) break
+            }
             if (res.season == null) {
-                val matches = cards.filter { !it.isTv && PlayNet.titleMatches(it.title, title) }
-                val movie = pickCard(matches, title, res.year) ?: return
-                resolvePost(movie.url, subtitleCallback, callback)
+                val target = movie ?: return
+                resolvePost(target.url, subtitleCallback, callback)
             } else {
-                val matches = cards.filter { it.isTv && PlayNet.titleMatches(it.title, title) }
-                val show = pickCard(matches, title, res.matchYear) ?: return
-                val href = episodeHref(domain, show.url, res.season, res.episode) ?: return
+                val target = show ?: return
+                val href = episodeHref(domain, target.url, res.season, res.episode) ?: return
                 resolvePost(href, subtitleCallback, callback)
             }
         } catch (_: Exception) {}

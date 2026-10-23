@@ -42,7 +42,10 @@ internal object PlayTmfNet {
             ).distinct()
             for (candidate in candidates) {
                 val ok = try {
-                    app.get("$candidate/?s=the", headers = PlayNet.browserHeaders(), timeout = 15L).isSuccessful
+                    val res = app.get("$candidate/?s=the", headers = PlayNet.browserHeaders(), timeout = 15L)
+                    val fine = res.isSuccessful
+                    res.close()
+                    fine
                 } catch (_: Exception) {
                     false
                 }
@@ -63,7 +66,10 @@ internal object PlayTmfNet {
                 null
             }
         } ?: return null
-        if (!res.isSuccessful) return null
+        if (!res.isSuccessful) {
+            res.close()
+            return null
+        }
         return try {
             res.document
         } catch (_: Exception) {
@@ -161,7 +167,10 @@ internal object PlayTmfNet {
             jar.putAll(res.cookies)
             val loc = res.headers["location"]?.trim().orEmpty()
             if (loc.isEmpty()) {
-                if (res.code != 200) return null
+                if (res.code != 200) {
+                    res.close()
+                    return null
+                }
                 val body = try {
                     res.text
                 } catch (_: Exception) {
@@ -172,6 +181,7 @@ internal object PlayTmfNet {
                 }
                 return res
             }
+            res.close()
             current = when {
                 loc.startsWith("http") -> loc
                 loc.startsWith("/") -> PlayNet.getBaseUrl(current) + loc
@@ -246,6 +256,7 @@ internal object PlayTmfSources {
                 return null
             }
             val loc = res.headers["location"]?.trim().orEmpty()
+            res.close()
             if (loc.isEmpty()) return current
             current = when {
                 loc.startsWith("http") -> loc
@@ -490,7 +501,10 @@ internal object PlayTmfSources {
                 json = body.toString(),
                 timeout = 25L
             )
-            if (!res.isSuccessful) return null
+            if (!res.isSuccessful) {
+                res.close()
+                return null
+            }
             val parsed = try {
                 JSONObject(res.text)
             } catch (_: Exception) {
@@ -524,7 +538,10 @@ internal object PlayTmfSources {
                 json = body.toString(),
                 timeout = 30L
             )
-            if (!res.isSuccessful) return null
+            if (!res.isSuccessful) {
+                res.close()
+                return null
+            }
             val parsed = try {
                 JSONObject(res.text)
             } catch (_: Exception) {
@@ -579,7 +596,10 @@ internal object PlayTmfSources {
                 json = body.toString(),
                 timeout = 25L
             )
-            if (!res.isSuccessful) return null
+            if (!res.isSuccessful) {
+                res.close()
+                return null
+            }
             val parsed = try {
                 JSONObject(res.text)
             } catch (_: Exception) {
@@ -673,12 +693,14 @@ internal object PlayTmfSources {
                 text.contains("fslv2") -> listOf(Stream("FSLv2", abs, ExtractorLinkType.VIDEO))
                 text.contains("fsl") -> listOf(Stream("FSL Server", abs, ExtractorLinkType.VIDEO))
                 text.contains("buzzserver") -> {
-                    val dlink = app.get(
+                    val res = app.get(
                         "$abs/download",
                         referer = abs,
                         allowRedirects = false,
                         timeout = 15L
-                    ).headers["hx-redirect"] ?: ""
+                    )
+                    val dlink = res.headers["hx-redirect"] ?: ""
+                    res.close()
                     if (dlink.isNotBlank()) {
                         listOf(Stream("BuzzServer", absolute(dlink, base), ExtractorLinkType.VIDEO))
                     } else emptyList()
@@ -693,12 +715,14 @@ internal object PlayTmfSources {
                     } else emptyList()
                 }
                 text.contains("instant download") || text.contains("instant dl") -> {
-                    val loc = app.get(
+                    val res = app.get(
                         abs,
                         headers = PlayNet.browserHeaders(base),
                         allowRedirects = false,
                         timeout = 15L
-                    ).headers["location"]?.trim()
+                    )
+                    val loc = res.headers["location"]?.trim()
+                    res.close()
                     val direct = when {
                         loc == null -> null
                         loc.contains("url=") -> loc.substringAfter("url=")

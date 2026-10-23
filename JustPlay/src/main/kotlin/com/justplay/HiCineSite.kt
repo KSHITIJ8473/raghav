@@ -361,7 +361,7 @@ internal object HiCineSite {
     private fun pixelDirect(pageUrl: String): String? {
         val id = pageUrl.substringBefore("?").trimEnd('/').substringAfterLast('/')
         if (id.length !in 5..15) return null
-        return "https://pixeldrain.dev/api/file/$id?download"
+        return "https://pixeldrain.dev/api/file/$id"
     }
 
     // 10Gbps lands on a generator page that only carries the real url in its query

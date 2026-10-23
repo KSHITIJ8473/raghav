@@ -26,6 +26,14 @@ import java.util.concurrent.ConcurrentHashMap
 internal const val PLAY_UA =
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 
+// nicehttp keeps the response body open unless text is read, status and header
+// only lookups have to close it or the connection never goes back to the pool
+internal fun NiceResponse.close() {
+    try {
+        okhttpResponse.close()
+    } catch (_: Exception) {}
+}
+
 internal object PlayNet {
 
     private val cfKillers = ConcurrentHashMap<String, CloudflareKiller>()
@@ -85,7 +93,9 @@ internal object PlayNet {
             h.putAll(headers)
             h["Range"] = "bytes=0-1023"
             val res = app.get(url, headers = h, timeout = 12L)
-            res.code
+            val code = res.code
+            res.close()
+            code
         } catch (_: Exception) {
             null
         }
@@ -133,7 +143,11 @@ internal object PlayNet {
         if (!url.startsWith("http")) return false
         return try {
             val res = app.get(url, headers = headers, timeout = 12L)
-            res.code == 200 && res.text.trimStart().startsWith("#EXTM3U")
+            if (res.code != 200) {
+                res.close()
+                return false
+            }
+            res.text.trimStart().startsWith("#EXTM3U")
         } catch (_: Exception) {
             false
         }
@@ -174,7 +188,129 @@ internal object PlayNet {
     }
 
     fun normalizeTitle(s: String?): String =
-        (s ?: "").lowercase().replace(Regex("[^a-z0-9]"), "")
+        foldAccents(s ?: "").lowercase().replace("&", " and ")
+            .replace(Regex("[^a-z0-9]"), "")
+
+    private fun foldAccents(s: String): String = try {
+        java.text.Normalizer.normalize(s, java.text.Normalizer.Form.NFD)
+            .replace(Regex("\\p{Mn}+"), "")
+    } catch (_: Exception) {
+        s
+    }
+
+    // words of a title the way the sites spell them, the ampersand reads as "and"
+    private fun wordsOf(s: String): List<String> =
+        foldAccents(s).lowercase().replace("&", " and ")
+            .split(Regex("[^a-z0-9]+")).filter { it.isNotBlank() }
+
+    // the filler the sites pad after the movie name, a name that runs into one of
+    // these tokens has ended and everything beyond it is quality or audio metadata
+    private val tailJunk = setOf(
+        "480p", "720p", "1080p", "1440p", "2160p", "4k", "2k", "8k", "uhd", "qhd", "fhd",
+        "bluray", "web", "webdl", "webrip", "webhd", "hdrip", "hdcam", "hdtc", "hdts",
+        "dvdscr", "predvd", "dvdrip", "brrip", "nf", "amzn", "jio", "hotstar", "zee5",
+        "sony", "disney", "hbo", "imax", "hq", "sdr", "hdr", "dv", "10bit", "8bit", "60fps",
+        "x264", "x265", "h264", "h265", "hevc", "avc", "aac", "aac5", "ddp", "dd5", "dd2",
+        "atmos", "truehd", "dts", "opus", "51", "20", "ch",
+        "hindi", "english", "dual", "multi", "audio", "org", "original", "dubbed", "dub",
+        "subbed", "subs", "esub", "esubs", "subtitle", "subtitles", "hardsub",
+        "tamil", "telugu", "punjabi", "marathi", "kannada", "malayalam", "bengali",
+        "gujarati", "urdu", "japanese", "korean", "chinese", "mandarin", "cantonese",
+        "spanish", "french", "russian", "arabic", "turkish", "thai", "german", "italian",
+        "danish", "kazakh", "vietnamese",
+        "line", "clean", "uncut", "extended", "remastered", "proper", "repack", "full",
+        "movie", "film", "desi", "studio", "v2", "added", "complete", "series", "season",
+        "seasons", "episode", "episodes", "download", "watch", "online", "stream",
+        "gbps", "tc", "cam", "scr"
+    )
+
+    private val boundaryPattern = Regex(
+        """^(?:(?:19|20)\d{2}|\d{3,4}p|\d+(?:\.\d+)?(?:mb|gb|kb|tb)|[xh]\d{3}|dd[p]?\d*|\d+k|\d+gbps|\d+fps|\d+(?:\.\d+)?bit)$"""
+    )
+
+    private fun isBoundaryToken(token: String): Boolean =
+        token in tailJunk || boundaryPattern.matches(token)
+
+    private val leadNoise = setOf("download", "watch", "online", "stream")
+
+    // the post may open with the site's own words or a rating tag before the name starts
+    private fun nameStarts(postWords: List<String>): Sequence<Int> = sequence {
+        yield(0)
+        var idx = 0
+        var skipped = 0
+        while (skipped < 2 && idx < postWords.size) {
+            val w = postWords[idx]
+            val noise = w in leadNoise || (w.length <= 2 && w.all { it.isDigit() })
+            if (!noise) break
+            idx++
+            skipped++
+            if (idx < postWords.size) yield(idx)
+        }
+    }
+
+    fun titleMatches(postTitle: String?, query: String): Boolean {
+        if (postTitle.isNullOrBlank()) return false
+        val normQuery = normalizeTitle(query)
+        if (normQuery.isBlank()) return false
+        val normPost = normalizeTitle(postTitle)
+        if (!normPost.contains(normQuery)) return false
+        // long names are unambiguous enough that a hit anywhere in the post is a real find
+        if (normQuery.length >= 10) return true
+
+        val queryWords = wordsOf(query)
+        val postWords = wordsOf(postTitle)
+        if (queryWords.isEmpty() || postWords.isEmpty()) return false
+
+        // the name is matched as whole words glued together, this keeps acronym spellings
+        // like k g f chapter 2 against kgf chapter 2 in step while a name that only
+        // overlaps the first word of a longer one, war inside war 2 or war path, fails
+        for (start in nameStarts(postWords)) {
+            val maxEnd = minOf(start + queryWords.size, postWords.size)
+            for (end in start + 1..maxEnd) {
+                if (postWords.subList(start, end).joinToString("") != normQuery) continue
+                val next = postWords.getOrNull(end)
+                if (next == null || isBoundaryToken(next)) return true
+            }
+        }
+        return false
+    }
+
+    // series posts carry season or episode markers, a movie request never wants them
+    // unless its own name carries the same marker, four seasons, star wars episode one
+    fun isSeriesPost(text: String?): Boolean {
+        if (text.isNullOrBlank()) return false
+        if (seasonsOf(text) != null) return true
+        return Regex(
+            "(?i)\\bweb[- ]?series\\b|\\bseasons?\\b|\\bepisodes?\\b|\\bS\\d{1,2}\\s*[- ]?E\\d{1,3}\\b"
+        ).containsMatchIn(text)
+    }
+
+    // the full gate for a site post against the requested title
+    fun titleMatchesFor(postTitle: String?, res: PlayLinkData): Boolean {
+        val query = res.title ?: return false
+        if (!titleMatches(postTitle, query)) return false
+        if (res.season == null && isSeriesPost(postTitle) && !isSeriesPost(query)) return false
+        return true
+    }
+
+    // search rounds ordered from most to least specific, the title alone is a weak
+    // signal on catalogs flooded with name containing posts, war pulls every star wars
+    fun searchQueries(res: PlayLinkData): List<String> {
+        val title = res.title?.takeIf { it.isNotBlank() } ?: return emptyList()
+        val out = LinkedHashSet<String>()
+        res.matchYear?.let { year -> out.add("$title $year") }
+        out.add(title)
+        res.orgTitle
+            ?.takeIf {
+                it.isNotBlank() && normalizeTitle(it).isNotBlank() &&
+                    normalizeTitle(it) != normalizeTitle(title)
+            }
+            ?.let { org ->
+                res.matchYear?.let { year -> out.add("$org $year") }
+                out.add(org)
+            }
+        return out.toList()
+    }
 
     fun seasonsOf(text: String): Set<Int>? {
         val seasons = mutableSetOf<Int>()
@@ -195,22 +331,6 @@ internal object PlayNet {
             it.groupValues[1].toIntOrNull()?.let { s -> if (s in 1..50) seasons.add(s) }
         }
         return seasons.ifEmpty { null }
-    }
-
-    fun titleMatches(postTitle: String?, query: String): Boolean {
-        if (postTitle.isNullOrBlank()) return false
-        val normQuery = normalizeTitle(query)
-        if (normQuery.isBlank()) return false
-        if (!normalizeTitle(postTitle).contains(normQuery)) return false
-        if (normQuery.length < 4) return normalizeTitle(postTitle) == normQuery
-        if (normQuery.length >= 10) return true
-        var stripped = normalizeTitle(postTitle)
-        for (prefix in listOf("download", "watch")) {
-            if (stripped.startsWith(prefix) && stripped.length > prefix.length) {
-                stripped = stripped.substring(prefix.length)
-            }
-        }
-        return stripped.startsWith(normQuery)
     }
 
     fun yearMatches(text: String, year: Int?): Boolean {
@@ -260,7 +380,14 @@ internal object PlayNet {
             }
             jar.putAll(res.cookies)
             val loc = res.headers["location"]?.trim().orEmpty()
-            if (loc.isEmpty()) return res.takeIf { it.code == 200 }
+            if (loc.isEmpty()) {
+                if (res.code != 200) {
+                    res.close()
+                    return null
+                }
+                return res
+            }
+            res.close()
             current = absolute(loc, current)
         }
         return null
@@ -292,6 +419,7 @@ internal object PlayNet {
             null
         }
         if (plain != null && plain.code == 200 && !isCfChallenge(plain)) return plain
+        plain?.close()
 
         return lockFor(url).withLock {
             val killer = killerFor(url)
@@ -301,7 +429,12 @@ internal object PlayNet {
             } catch (_: Exception) {
                 null
             }
-            if (solved != null && solved.code == 200 && !isCfChallenge(solved)) solved else null
+            if (solved != null && solved.code == 200 && !isCfChallenge(solved)) {
+                solved
+            } else {
+                solved?.close()
+                null
+            }
         }
     }
 
@@ -322,6 +455,7 @@ internal object PlayNet {
                 return null
             }
             val loc = res.headers["location"]?.trim().orEmpty()
+            res.close()
             if (loc.isEmpty()) {
                 return current.takeIf { it.startsWith("http") }
             }

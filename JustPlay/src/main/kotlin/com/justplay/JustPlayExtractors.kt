@@ -58,7 +58,9 @@ class PlayHubCloud : ExtractorApi() {
             if (link.contains("download", true)) return link
             val id = link.substringBefore("?").substringBefore("#").substringAfterLast("/")
             if (id.isBlank()) return null
-            return "${PlayNet.getBaseUrl(link)}/api/file/$id?download"
+            // the bare file url serves identical bytes, the attachment form only
+            // invites players to treat the response oddly
+            return "${PlayNet.getBaseUrl(link)}/api/file/$id"
         }
 
         suspend fun emitHubServers(
@@ -118,12 +120,14 @@ class PlayHubCloud : ExtractorApi() {
                     label.contains("fsl") -> found.add("FSL Server [$labelExtras]" to abs)
                     label.contains("buzzserver") -> {
                         try {
-                            val dlink = app.get(
+                            val res = app.get(
                                 "$abs/download",
                                 referer = abs,
                                 allowRedirects = false,
                                 timeout = 15L
-                            ).headers["hx-redirect"] ?: ""
+                            )
+                            val dlink = res.headers["hx-redirect"] ?: ""
+                            res.close()
                             if (dlink.isNotBlank()) {
                                 found.add("BuzzServer [$labelExtras]" to PlayNet.absolute(dlink, PlayNet.getBaseUrl(abs)))
                             }
@@ -142,8 +146,9 @@ class PlayHubCloud : ExtractorApi() {
                     }
                     label.contains("instant download") || label.contains("instant dl") -> {
                         try {
-                            val loc = app.get(abs, headers = PlayNet.headers(base), allowRedirects = false, timeout = 10L)
-                                .headers["location"]?.trim()
+                            val res = app.get(abs, headers = PlayNet.headers(base), allowRedirects = false, timeout = 10L)
+                            val loc = res.headers["location"]?.trim()
+                            res.close()
                             val direct = when {
                                 loc == null -> null
                                 loc.contains("url=") -> loc.substringAfter("url=")
@@ -240,8 +245,9 @@ class PlayHubCloud : ExtractorApi() {
                     }
                     text.contains("instant download") || text.contains("instant dl") -> {
                         try {
-                            val loc = app.get(href, headers = PlayNet.headers(), allowRedirects = false, timeout = 10L)
-                                .headers["location"]?.trim()
+                            val res = app.get(href, headers = PlayNet.headers(), allowRedirects = false, timeout = 10L)
+                            val loc = res.headers["location"]?.trim()
+                            res.close()
                             val direct = when {
                                 loc == null -> null
                                 loc.contains("url=") -> loc.substringAfter("url=")
@@ -435,7 +441,10 @@ class PlayFilePress : ExtractorApi() {
                 headers = PlayNet.browserHeaders("$mainUrl/"),
                 timeout = 15L
             )
-            if (!infoRes.isSuccessful) return
+            if (!infoRes.isSuccessful) {
+                infoRes.close()
+                return
+            }
             val info = try {
                 JSONObject(infoRes.text).optJSONObject("data") ?: return
             } catch (_: Exception) {
@@ -895,8 +904,9 @@ open class PlayGDFlix : ExtractorApi() {
                     text.contains("Login To DL", true) || link.startsWith("/login") -> {}
                     text.contains("Instant DL", true) || text.contains("Instant Download", true) -> {
                         try {
-                            val loc = app.get(abs, headers = PlayNet.headers(res.url), allowRedirects = false, timeout = 10L)
-                                .headers["location"]?.trim()
+                            val hop = app.get(abs, headers = PlayNet.headers(res.url), allowRedirects = false, timeout = 10L)
+                            val loc = hop.headers["location"]?.trim()
+                            hop.close()
                             val direct = when {
                                 loc == null -> null
                                 loc.contains("url=") -> loc.substringAfter("url=")
@@ -936,7 +946,7 @@ open class PlayGDFlix : ExtractorApi() {
                     link.contains("pixeldrain") -> {
                         val pixelBase = PlayNet.getBaseUrl(link)
                         val final = if (link.contains("download", true)) link
-                        else "$pixelBase/api/file/${link.substringAfterLast("/")}?download"
+                        else "$pixelBase/api/file/${link.substringAfterLast("/")}"
                         emit(final, "Pixeldrain")
                     }
                     link.contains("gofile") ->

@@ -79,11 +79,11 @@ internal object MoviesDriveSite {
     }
 
     private fun pickPost(posts: List<DrivePost>, res: PlayLinkData): DrivePost? {
-        val title = res.title ?: return null
+        if (res.title.isNullOrBlank()) return null
         res.imdbId?.takeIf { it.isNotBlank() }?.let { id ->
             posts.firstOrNull { it.imdbId.equals(id, ignoreCase = true) }?.let { return it }
         }
-        val matched = posts.filter { PlayNet.titleMatches(it.title, title) }
+        val matched = posts.filter { PlayNet.titleMatchesFor(it.title, res) }
         if (res.season != null) {
             val seasonPosts = matched.filter { PlayNet.seasonsOf(it.title)?.contains(res.season) == true }
             if (seasonPosts.isNotEmpty()) {
@@ -91,8 +91,8 @@ internal object MoviesDriveSite {
             }
             return matched.firstOrNull { PlayNet.seasonsOf(it.title) == null }
         }
+        // a post from another year is a different movie, war 2007 is not war 2019
         return matched.firstOrNull { PlayNet.yearMatches(it.title, res.matchYear) }
-            ?: matched.firstOrNull()
     }
 
     private suspend fun getDoc(url: String): Document? = try {
@@ -200,20 +200,21 @@ internal object MoviesDriveSite {
         callback: (ExtractorLink) -> Unit
     ) {
         try {
-            val title = res.title ?: return
-            val imdbId = res.imdbId?.takeIf { it.isNotBlank() }
+            if (res.title.isNullOrBlank()) return
 
-            var posts = emptyList<DrivePost>()
-            for (domain in candidates()) {
-                val byId = if (imdbId != null) searchPosts(domain, imdbId) else emptyList()
-                val target = byId.ifEmpty { searchPosts(domain, title) }
-                if (target.isNotEmpty()) {
-                    posts = target.map { it.copy(url = it.url.replaceFirst(Regex("^[^/]*//[^/]+"), domain)) }
-                    break
+            var chosen: DrivePost? = null
+            outer@ for (domain in candidates()) {
+                // the year keeps the lookup on the right post, the bare title alone
+                // buries it under every war named series and movie
+                for (query in PlayNet.searchQueries(res)) {
+                    val found = searchPosts(domain, query)
+                    if (found.isEmpty()) continue
+                    val rewritten = found.map { it.copy(url = it.url.replaceFirst(Regex("^[^/]*//[^/]+"), domain)) }
+                    chosen = pickPost(rewritten, res)
+                    if (chosen != null) break@outer
                 }
             }
-            if (posts.isEmpty()) return
-            val chosen = pickPost(posts, res) ?: return
+            if (chosen == null) return
             val doc = getDoc(chosen.url) ?: return
 
             if (res.season == null) {

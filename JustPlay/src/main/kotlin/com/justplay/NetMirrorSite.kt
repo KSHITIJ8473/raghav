@@ -202,7 +202,7 @@ internal object NetMirrorSite {
             app.get(
                 "https://userver.net52.cc/?hee5=$addhash&a=y&t=${Math.random()}",
                 timeout = 15L
-            )
+            ).close()
         } catch (_: Exception) {
         }
 

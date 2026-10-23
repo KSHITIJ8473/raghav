@@ -1,8 +1,6 @@
 package com.justplay
 
 import android.net.Uri
-import com.fasterxml.jackson.annotation.JsonIgnoreProperties
-import com.lagradost.cloudstream3.CloudStreamApp
 import com.lagradost.cloudstream3.HomePageResponse
 import com.lagradost.cloudstream3.MainAPI
 import com.lagradost.cloudstream3.SearchResponse
@@ -11,7 +9,6 @@ import com.lagradost.cloudstream3.TvType
 import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.newHomePageResponse
 import com.lagradost.cloudstream3.newMovieSearchResponse
-import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.AppUtils.toJson
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
@@ -60,67 +57,9 @@ internal object PlayTmdb {
     }
 }
 
-object PlayHistory {
-    private const val KEY_WATCHED = "JUSTPLAY_WATCHED"
-    private const val MAX_WATCHED = 50
-    private val lock = Any()
-
-    @JsonIgnoreProperties(ignoreUnknown = true)
-    data class WatchEntry(
-        val id: Int? = null,
-        val type: String? = null,
-        val genres: List<Int> = emptyList(),
-        val ts: Long = 0L
-    )
-
-    fun read(): List<WatchEntry> {
-        val raw = try {
-            CloudStreamApp.getKey<String>(KEY_WATCHED)
-        } catch (_: Exception) {
-            null
-        } ?: return emptyList()
-        return try {
-            parseJson<Array<WatchEntry>>(raw).toList()
-        } catch (_: Exception) {
-            emptyList()
-        }
-    }
-
-    fun record(detail: JSONObject, type: String) {
-        val id = detail.optInt("id", 0)
-        if (id == 0) return
-        val genres = ArrayList<Int>(4)
-        detail.optJSONArray("genres")?.let { arr ->
-            for (i in 0 until arr.length()) {
-                val gid = arr.optJSONObject(i)?.optInt("id", 0) ?: 0
-                if (gid != 0) genres.add(gid)
-            }
-        }
-        val entry = WatchEntry(id, type, genres, System.currentTimeMillis())
-        synchronized(lock) {
-            val kept = read().filterNot { it.id == entry.id && it.type == entry.type }
-            val updated = (kept + entry).takeLast(MAX_WATCHED)
-            try {
-                CloudStreamApp.setKey(KEY_WATCHED, updated.toJson())
-            } catch (_: Exception) {
-            }
-        }
-    }
-
-    fun topGenres(entries: List<WatchEntry>, count: Int): List<Int> =
-        entries.flatMap { it.genres }
-            .groupingBy { it }
-            .eachCount()
-            .entries
-            .sortedByDescending { it.value }
-            .map { it.key }
-            .take(count)
-}
-
 internal object PlayDiscovery {
 
     const val ROW_SURPRISE = "surprise_me"
-    const val ROW_RECOMMENDED = "recommended"
     const val ROW_GENRE = "mixed_genre"
 
     fun genreData(genreId: Int): String = "$ROW_GENRE&with_genres=$genreId"
@@ -132,7 +71,6 @@ internal object PlayDiscovery {
         53 to "Thriller",
         12 to "Adventure",
         80 to "Crime",
-        16 to "Animation",
         27 to "Horror",
         10749 to "Romance",
         878 to "Sci-Fi",
@@ -154,16 +92,12 @@ internal object PlayDiscovery {
         LanguageRow("pa", "Punjabi Movies", 5),
         LanguageRow("bn", "Bengali Movies", 5),
         LanguageRow("mr", "Marathi Movies", 5),
-        LanguageRow("ja", "Japanese Movies", 50),
         LanguageRow("ko", "Korean Movies", 20)
     )
 
     fun languageData(row: LanguageRow): String =
         "/discover/movie&with_original_language=${row.code}" +
             "&sort_by=popularity.desc&vote_count.gte=${row.minVotes}"
-
-    fun recommendedRowName(): String =
-        if (PlayHistory.read().isEmpty()) "Fresh Picks" else "Recommended for You"
 
     // capped so the seen set never grows without bound, it just starts over
     private val shownUrls = ConcurrentHashMap.newKeySet<String>()
@@ -283,50 +217,5 @@ internal object PlayDiscovery {
             }
         }
         return newHomePageResponse(name, out, hasNext = true)
-    }
-
-    private fun tmdbIdOf(url: String): Int? = try {
-        parseJson<PlayTmdbData>(url).id
-    } catch (_: Exception) {
-        null
-    }
-
-    private suspend fun freshPage(api: MainAPI, page: Int, name: String): HomePageResponse {
-        val (list, hasNext) = mixedDiscover(
-            api,
-            "/movie/now_playing", emptyMap(),
-            "/tv/on_the_air", emptyMap(),
-            page
-        )
-        return newHomePageResponse(name, list, hasNext = hasNext)
-    }
-
-    suspend fun recommendedPage(api: MainAPI, page: Int, name: String): HomePageResponse {
-        val entries = PlayHistory.read()
-        if (entries.isEmpty()) return freshPage(api, page, name)
-        val genres = PlayHistory.topGenres(entries, 2)
-        if (genres.isEmpty()) return freshPage(api, page, name)
-        val watched = entries.mapNotNull { it.id }.toHashSet()
-        val genreParam = genres.joinToString(",")
-        val (mixed, more) = mixedDiscover(
-            api,
-            "/discover/movie",
-            mapOf(
-                "with_genres" to genreParam,
-                "sort_by" to "popularity.desc",
-                "vote_count.gte" to "300"
-            ),
-            "/discover/tv",
-            mapOf(
-                "with_genres" to genreParam,
-                "sort_by" to "popularity.desc",
-                "vote_count.gte" to "100"
-            ),
-            page
-        )
-        val unseen = mixed.filterNot { watched.contains(tmdbIdOf(it.url)) }
-        // fall back to the unfiltered mix when every title on the page was already opened
-        val list = if (unseen.isEmpty() && mixed.isNotEmpty()) mixed else unseen
-        return newHomePageResponse(name, list, hasNext = more && page < 40)
     }
 }

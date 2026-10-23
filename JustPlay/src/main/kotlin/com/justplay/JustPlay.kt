@@ -540,7 +540,9 @@ class JustPlay : MainAPI() {
         val seenUrls = ConcurrentHashMap.newKeySet<String>()
         val sourceCounts = ConcurrentHashMap<String, AtomicInteger>()
 
-        // links go out in ordered batches, one link at a time keeps the player rebuilding its list mid start
+        // links go out in one batch, a stream of single links keeps the player rebuilding
+        // its source list while the first link is still starting and that churn is what
+        // breaks playback until the title is reopened
         val held = mutableListOf<ExtractorLink>()
         val heldLock = Any()
 
@@ -551,21 +553,23 @@ class JustPlay : MainAPI() {
                 held.clear()
                 out
             }
-            // streams first so the link the app starts on its own lands on one that shows a frame fast
+            // streams go first so the link the app starts on its own is one that
+            // shows a frame fast, direct files sit behind them at the same quality
             batch.sortedWith(compareBy({ it.type == ExtractorLinkType.VIDEO }, { -it.quality }))
                 .forEach(callback)
         }
 
         val guardedCallback: (ExtractorLink) -> Unit = label@{ link ->
-            val isDownload = PlaySourceFilter.isDownloadOnlyName(link.name)
-            val allowed = if (isDownload) dlOnly else streamOnly
+            val treatAsDownload = PlaySourceFilter.isDownloadOnlyName(link.name)
+            val allowed = if (treatAsDownload) dlOnly else streamOnly
             if (!allowed) return@label
             if (!seenUrls.add(link.url)) return@label
             val emitted = sourceCounts.computeIfAbsent(link.source) { AtomicInteger() }
             if (emitted.incrementAndGet() > LINKS_PER_SOURCE) return@label
-            val out = if (isDownload) PlaySourceFilter.taggedDownloadOnly(link) else link
-            // the app autoplays the highest ranked link, a uhd remux is slow to first frame so the rank stays at 1080p
-            if (!isDownload && out.type == ExtractorLinkType.VIDEO && out.quality > Qualities.P1080.value) {
+            val out = if (treatAsDownload) PlaySourceFilter.taggedDownloadOnly(link) else link
+            // the app starts the highest ranked link on its own, a uhd remux takes ages
+            // before the first frame so the rank stays at 1080p, the label keeps the truth
+            if (!treatAsDownload && out.type == ExtractorLinkType.VIDEO && out.quality > Qualities.P1080.value) {
                 out.quality = Qualities.Unknown.value
             }
             synchronized(heldLock) { held.add(out) }

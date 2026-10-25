@@ -132,6 +132,7 @@ class RaghavAniPM : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
+        mainUrl = FirebaseDomainHelper.getDomain("anipm") ?: mainUrl
         val channel = if (isDub) "dub" else "sub"
 
         var entry: AniPMEntry? = if (anilistId > 0) AniPMEntry(anilistId = anilistId) else null
@@ -178,6 +179,18 @@ class RaghavAniPM : MainAPI() {
                         if (packageAnilist > 0 && emitHardsub(
                                 packageAnilist, resolvedRoot, episode, channel,
                                 seenLinks, seenSubUrls, seenSubLabels, subtitleCallback, callback
+                            )
+                        ) {
+                            found.set(true)
+                        }
+                    } catch (e: Exception) {
+                        if (e is CancellationException) throw e
+                    }
+                },
+                async {
+                    try {
+                        if (packageAnilist > 0 && emitBetaServer(
+                                packageAnilist, episode, channel, seenLinks, callback
                             )
                         ) {
                             found.set(true)
@@ -293,8 +306,73 @@ class RaghavAniPM : MainAPI() {
         if (!packages.path("episodes").path(episode.toString()).path(field).asBoolean(false)) return false
         return emitSettlar(
             root, episode, "${channel}hard", seenLinks, seenSubUrls, seenSubLabels,
-            subtitleCallback, callback, "AniPM Hardsub"
+            subtitleCallback, callback, "AniPm Hardsub ($channel)"
         )
+    }
+
+    // the beta server's single master carries an audio rendition per language,
+    // so one link serves every track and the player picks the audio
+    private suspend fun emitBetaServer(
+        anilistId: Int,
+        episode: Int,
+        channel: String,
+        seenLinks: MutableSet<String>,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
+        val text = getJson("$mainUrl/api/anime/beta-server/$anilistId") ?: return false
+        val info = try {
+            parseJson<JsonNode>(text)
+        } catch (e: Exception) {
+            null
+        } ?: return false
+        if (!info.path("available").asBoolean(false)) return false
+        val episodeList = info.path("episodes")
+        if (!episodeList.isArray || episodeList.none { it.asInt(-1) == episode }) return false
+        if (channel == "dub" && !info.path("dub").asBoolean(false)) return false
+        if (channel == "sub" && !info.path("sub").asBoolean(false)) return false
+
+        // /watch/{slug}-{id} flips into /hls/{id}-{slug}/E####/master.m3u8
+        val watchPath = info.path("path").asText("").removePrefix("/watch/").takeIf { it.isNotBlank() }
+            ?: return false
+        val split = watchPath.lastIndexOf('-')
+        if (split <= 0) return false
+        val origin = info.path("origin").asText("").takeIf { it.isNotBlank() }?.removeSuffix("/")
+            ?: return false
+        val slug = watchPath.substring(0, split)
+        val betaId = watchPath.substring(split + 1)
+        val masterUrl = "$origin/hls/$betaId-$slug/E${"%04d".format(episode)}/master.m3u8"
+
+        // the beta edge sometimes answers the first hit with a 5xx
+        repeat(2) {
+            try {
+                val res = app.get(
+                    masterUrl,
+                    headers = mapOf(
+                        "User-Agent" to USER_AGENT,
+                        "Accept" to "*/*",
+                        "Referer" to "$origin/"
+                    ),
+                    timeout = 15L
+                )
+                if (res.code == 200 && res.text.startsWith("#EXTM3U")) {
+                    if (seenLinks.add(masterUrl)) {
+                        callback.invoke(
+                            newExtractorLink(name, "AniPm- Multi audio", masterUrl, type = ExtractorLinkType.M3U8) {
+                                referer = "$origin/"
+                                headers = mapOf(
+                                    "User-Agent" to USER_AGENT,
+                                    "Referer" to "$origin/"
+                                )
+                            }
+                        )
+                    }
+                    return true
+                }
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+            }
+        }
+        return false
     }
 
     private fun encode(value: String): String =

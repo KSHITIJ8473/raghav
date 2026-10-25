@@ -89,8 +89,7 @@ class AniPMProvider : MainAPI() {
         return newHomePageResponse(sectionName, list, hasNext = res?.hasNextPage == true)
     }
 
-    // fresh releases that the site has not claimed yet carry a 1_000_000 + anilist id
-    // offset, and the series endpoint only answers to the anilist id itself
+    // unclaimed releases ride a 1_000_000 id offset, the series endpoint only answers to the anilist id
     private fun usableId(id: Int?, anilistId: String?): Int? {
         if (id == null) return null
         if (id >= 1_000_000) return anilistId?.toIntOrNull() ?: id
@@ -150,8 +149,8 @@ class AniPMProvider : MainAPI() {
         val mixedNumbers = expandRanges(filler?.mixed)
         val packages = AniPMApi.packages(series.anilistId)
 
-        // playback bootstrap wants the id the series response identifies as, which
-        // differs from the url id when an offset id had to be retried
+        // the bootstrap call wants the id the series response names, which is
+        // not the url id when an offset id had to be retried
         val seriesId = series.id ?: id
 
         fun episodeData(number: Int, dub: Boolean): String {
@@ -253,10 +252,16 @@ class AniPMProvider : MainAPI() {
         if (hardAvailable) {
             tasks.add {
                 emitSettlar(
-                    selection, episode, "${channel}hard", "$name Hardsub",
+                    selection, episode, "${channel}hard", "AniPm Hardsub ($channel)",
                     seenLinks, seenSubUrls, seenSubLabels,
                     subtitleCallback, callback
                 )
+            }
+        }
+
+        if (anilistId.isNotBlank()) {
+            tasks.add {
+                emitBetaServer(anilistId, episode, channel, seenLinks, callback)
             }
         }
         tasks.add {
@@ -331,6 +336,46 @@ class AniPMProvider : MainAPI() {
                 }
             )
         }
+        return true
+    }
+
+    // the beta server's single master carries an audio rendition per language,
+    // so one link serves every track and the player picks the audio
+    private suspend fun emitBetaServer(
+        anilistId: String,
+        episode: Int,
+        channel: String,
+        seenLinks: MutableSet<String>,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
+        val info = AniPMApi.betaServer(anilistId) ?: return false
+        if (info.available != true) return false
+        if (episode !in (info.episodes ?: emptyList())) return false
+        if (channel == "dub" && info.dub != true) return false
+        if (channel == "sub" && info.sub != true) return false
+
+        // /watch/{slug}-{id} flips into /hls/{id}-{slug}/E####/master.m3u8
+        val watchPath = info.path?.removePrefix("/watch/")?.takeIf { it.isNotBlank() } ?: return false
+        val split = watchPath.lastIndexOf('-')
+        if (split <= 0) return false
+        val origin = (info.origin ?: return false).removeSuffix("/")
+        val slug = watchPath.substring(0, split)
+        val betaId = watchPath.substring(split + 1)
+        val masterUrl = "$origin/hls/$betaId-$slug/E${"%04d".format(episode)}/master.m3u8"
+
+        val master = AniPMApi.betaMasterVerified(masterUrl, "$origin/") ?: return false
+        if (!seenLinks.add(master)) return true
+
+        val playHeaders = mapOf(
+            "User-Agent" to AniPMApi.USER_AGENT,
+            "Referer" to "$origin/"
+        )
+        callback.invoke(
+            newExtractorLink(name, "AniPm- Multi audio", master, type = ExtractorLinkType.M3U8) {
+                referer = "$origin/"
+                headers = playHeaders
+            }
+        )
         return true
     }
 

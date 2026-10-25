@@ -108,8 +108,7 @@ class EliteStreams : MainAPI() {
             pairs.add(firstKid to firstKey)
         }
         // multi audio channels ship one clearkey pair per track, a license
-        // that only carries the first one kills the video track with a
-        // missing key error
+        // with only the first kills the video track
         stream.kids?.forEach { (kid, key) ->
             if (pairs.none { it.first == kid }) pairs.add(kid to key)
         }
@@ -140,9 +139,8 @@ class EliteStreams : MainAPI() {
             return
         }
 
-        // the player drops kid and key into a single entry clearkey license.
-        // the remaining pairs ride inside the kid string and close the extra
-        // entries around it, so the finished license holds every pair
+        // the player takes a single kid/key pair, the remaining pairs ride
+        // inside the kid string so the license ends up holding all of them
         val kidField = StringBuilder(encoded.first().first)
         for (i in 1 until encoded.size) {
             kidField.append("\"},{\"kty\":\"oct\",\"k\":\"").append(encoded[i].second)
@@ -188,14 +186,7 @@ class EliteStreams : MainAPI() {
             }
             return true
         }
-
-        // static jio channels resolve at play time so the akamai cookie and
-        // clearkey pair are as fresh as the api can make them
-        val jioId = payload.jioId ?: return false
-        val baseName = payload.name.removeSuffix(" (${payload.sourceLabel})")
-        val stream = EsFeeds.resolveJio(jioId, baseName) ?: return false
-        emitStream(stream, payload.name, callback)
-        return true
+        return false
     }
 
     data class ChannelPayload(

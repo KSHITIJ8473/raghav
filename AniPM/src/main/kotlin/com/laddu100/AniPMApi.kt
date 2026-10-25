@@ -105,6 +105,36 @@ object AniPMApi {
         }
     }
 
+    suspend fun betaServer(anilistId: String): AniPMBetaServer? {
+        if (anilistId.isBlank()) return null
+        val text = getJson("${url()}/api/anime/beta-server/$anilistId") ?: return null
+        return try {
+            parseJson<AniPMBetaServer>(text)
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    // the beta edge sometimes answers the first hit with a 5xx, so the master
+    // is asked for twice before the link goes to the player
+    suspend fun betaMasterVerified(masterUrl: String, referer: String): String? {
+        val headers = mapOf(
+            "User-Agent" to USER_AGENT,
+            "Accept" to "*/*",
+            "Referer" to referer
+        )
+        repeat(2) {
+            try {
+                val res = app.get(masterUrl, headers = headers, timeout = 15_000L)
+                if (res.code == 200 && res.text.startsWith("#EXTM3U")) {
+                    return masterUrl
+                }
+            } catch (_: Exception) {
+            }
+        }
+        return null
+    }
+
     suspend fun bootstrap(id: Int, episode: Int, lang: String): AniPMBootstrap? {
         // anilist sourced titles only answer to the anilist provider, claimed ones to settlar
         val text = getJson("${url()}/api/anime/playback-bootstrap/settlar/$id?ep=$episode&lang=$lang&backup=1")

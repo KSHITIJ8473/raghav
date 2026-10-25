@@ -134,3 +134,15 @@ data class SettlarSubtitle(
     @JsonProperty("label") val label: String? = null,
     @JsonProperty("srclang") val srclang: String? = null
 )
+
+@JsonIgnoreProperties(ignoreUnknown = true)
+data class AniPMBetaServer(
+    @JsonProperty("available") val available: Boolean? = null,
+    @JsonProperty("origin") val origin: String? = null,
+    @JsonProperty("path") val path: String? = null,
+    @JsonProperty("episodes") val episodes: List<Int>? = null,
+    @JsonProperty("sub") val sub: Boolean? = null,
+    @JsonProperty("dub") val dub: Boolean? = null,
+    @JsonProperty("audio") val audio: List<String>? = null,
+    @JsonProperty("subs") val subs: List<String>? = null
+)

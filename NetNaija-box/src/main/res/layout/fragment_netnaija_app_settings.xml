@@ -16,7 +16,7 @@
         android:text="NETNAIJA-BOX"
         android:textSize="11sp"
         android:textStyle="bold"
-        android:textColor="#FF2E3B"
+        android:textColor="#6EB5FF"
         android:letterSpacing="0.24" />
 
     <TextView

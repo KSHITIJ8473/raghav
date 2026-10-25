@@ -28,9 +28,9 @@ class NetNaijaAppSectionsFragment(private val sharedPref: SharedPreferences) : D
     private val cText = Color.parseColor("#F4F4F6")
     private val cSub = Color.parseColor("#8F8F98")
     private val cDim = Color.parseColor("#5C5C66")
-    private val cAccent = Color.parseColor("#E50914")
-    private val cAccentDeep = Color.parseColor("#B91C1C")
-    private val cOnDark = Color.parseColor("#130D10")
+    private val cAccent = Color.parseColor("#0A84FF")
+    private val cAccentDeep = Color.parseColor("#0060DF")
+    private val cOnDark = Color.parseColor("#16161A")
 
     private val order = ArrayList<Pair<String, String>>()
     private val hidden = HashSet<String>()
@@ -68,14 +68,14 @@ class NetNaijaAppSectionsFragment(private val sharedPref: SharedPreferences) : D
             background = GradientDrawable().apply {
                 setColor(cOnDark)
                 cornerRadius = 28 * d
-                setStroke(d.toInt(), Color.parseColor("#3A1E23"))
+                setStroke(d.toInt(), Color.parseColor("#30FFFFFF"))
             }
         }
         scroll.addView(root)
 
         root.addView(TextView(ctx).apply {
             text = "NETNAIJA-BOX"
-            textSize = 11f; setTextColor(Color.parseColor("#FF2E3B"))
+            textSize = 11f; setTextColor(Color.parseColor("#6EB5FF"))
             setTypeface(typeface, Typeface.BOLD); letterSpacing = 0.24f
         })
         root.addView(TextView(ctx).apply {
@@ -98,11 +98,11 @@ class NetNaijaAppSectionsFragment(private val sharedPref: SharedPreferences) : D
                 layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
             })
             countView = TextView(ctx).apply {
-                textSize = 11f; setTextColor(Color.parseColor("#FF6B74"))
+                textSize = 11f; setTextColor(Color.parseColor("#6EB5FF"))
                 setTypeface(typeface, Typeface.BOLD)
                 background = GradientDrawable().apply {
-                    setStroke(1, Color.argb(0x48, 0xE5, 0x09, 0x14)); cornerRadius = 12 * d
-                    setColor(Color.argb(0x24, 0xE5, 0x09, 0x14))
+                    setStroke(1, Color.argb(0x48, 0x0A, 0x84, 0xFF)); cornerRadius = 12 * d
+                    setColor(Color.argb(0x24, 0x0A, 0x84, 0xFF))
                 }
                 setPadding(10.dp(), 4.dp(), 10.dp(), 4.dp())
             }
@@ -120,7 +120,7 @@ class NetNaijaAppSectionsFragment(private val sharedPref: SharedPreferences) : D
             stateListAnimator = null
             background = GradientDrawable().apply {
                 setColor(Color.TRANSPARENT)
-                setStroke(d.toInt(), Color.parseColor("#4A252A"))
+                setStroke(d.toInt(), Color.parseColor("#2EFFFFFF"))
                 cornerRadius = 16 * d
             }
             layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = 16.dp() }
@@ -197,11 +197,11 @@ class NetNaijaAppSectionsFragment(private val sharedPref: SharedPreferences) : D
                 isChecked = !isHidden
                 trackTintList = ColorStateList(
                     arrayOf(intArrayOf(android.R.attr.state_checked), intArrayOf()),
-                    intArrayOf(cAccent, Color.parseColor("#2A1A1D"))
+                    intArrayOf(Color.parseColor("#34C759"), Color.parseColor("#3A3A3C"))
                 )
                 thumbTintList = ColorStateList(
                     arrayOf(intArrayOf(android.R.attr.state_checked), intArrayOf()),
-                    intArrayOf(Color.WHITE, Color.parseColor("#7A7A82"))
+                    intArrayOf(Color.WHITE, Color.parseColor("#D1D1D6"))
                 )
                 setOnCheckedChangeListener { _, checked ->
                     if (checked) hidden.remove(key) else hidden.add(key)
@@ -255,7 +255,7 @@ class NetNaijaAppSectionsFragment(private val sharedPref: SharedPreferences) : D
             isFocusable = enabled
             background = GradientDrawable().apply {
                 setColor(Color.TRANSPARENT)
-                setStroke(1, if (enabled) Color.parseColor("#4A252A") else Color.parseColor("#2A161A"))
+                setStroke(1, if (enabled) Color.parseColor("#2EFFFFFF") else Color.parseColor("#1AFFFFFF"))
                 cornerRadius = 12 * d
             }
             layoutParams = LinearLayout.LayoutParams((34 * d).toInt(), (34 * d).toInt()).apply {
@@ -271,8 +271,8 @@ class NetNaijaAppSectionsFragment(private val sharedPref: SharedPreferences) : D
     }
 
     private fun rowBackground(d: Float, radiusDp: Float): GradientDrawable = GradientDrawable().apply {
-        setColor(Color.parseColor("#1B1214"))
-        setStroke(1, Color.parseColor("#33191E"))
+        setColor(Color.parseColor("#1A1A1E"))
+        setStroke(1, Color.parseColor("#1AFFFFFF"))
         cornerRadius = radiusDp * d
     }
 }

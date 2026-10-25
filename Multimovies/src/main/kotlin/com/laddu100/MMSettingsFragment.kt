@@ -1,9 +1,10 @@
 package com.laddu100
 
 import android.annotation.SuppressLint
-import android.graphics.Color
+import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
+import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -21,6 +22,16 @@ import kotlinx.coroutines.launch
 
 class MMSettingsFragment(private val plugin: Plugin) : BottomSheetDialogFragment() {
 
+    private val panelTop = 0xFF1C1C20.toInt()
+    private val panelBottom = 0xFF141418.toInt()
+    private val edge = 0x33FFFFFF.toInt()
+    private val edgeSoft = 0x1FFFFFFF.toInt()
+    private val glassFill = 0x14FFFFFF.toInt()
+    private val textDim = 0xFF98989F.toInt()
+    private val green = 0xFF34C759.toInt()
+    private val blueHi = 0xFF409CFF.toInt()
+    private val blueDeep = 0xFF0060DF.toInt()
+
     @SuppressLint("SetTextI18n")
     override fun onCreateView(
         inflater: LayoutInflater,
@@ -28,52 +39,130 @@ class MMSettingsFragment(private val plugin: Plugin) : BottomSheetDialogFragment
         savedInstanceState: Bundle?
     ): View {
         val ctx = requireContext()
-        val dp = resources.displayMetrics.density
-        val pad = (16 * dp).toInt()
-        val smallPad = (8 * dp).toInt()
+        val density = resources.displayMetrics.density
+        fun dp(v: Int) = (v * density).toInt()
 
         val root = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(pad, pad, pad, pad)
+            setPadding(dp(20), dp(20), dp(20), dp(18))
+            background = GradientDrawable(
+                GradientDrawable.Orientation.TOP_BOTTOM,
+                intArrayOf(panelTop, panelBottom)
+            ).apply {
+                cornerRadii = floatArrayOf(
+                    dp(26).toFloat(), dp(26).toFloat(),
+                    dp(26).toFloat(), dp(26).toFloat(),
+                    0f, 0f, 0f, 0f
+                )
+                setStroke(dp(1), edge)
+            }
             layoutParams = ViewGroup.LayoutParams(-1, -2)
         }
 
         root.addView(TextView(ctx).apply {
-            text = "Multimovies Settings"
-            textSize = 20f; setTextColor(Color.WHITE)
-            typeface = android.graphics.Typeface.DEFAULT_BOLD
-            setPadding(0, 0, 0, smallPad)
+            text = "RAGHAV REPO · MULTIMOVIES"
+            textSize = 10f
+            setTextColor(textDim)
+            typeface = Typeface.DEFAULT_BOLD
+            letterSpacing = 0.18f
+            setPadding(dp(4), 0, dp(4), dp(10))
+        })
+
+        root.addView(TextView(ctx).apply {
+            text = "Settings"
+            textSize = 24f
+            setTextColor(0xFFFFFFFF.toInt())
+            typeface = Typeface.DEFAULT_BOLD
+            setPadding(dp(4), 0, dp(4), dp(6))
         })
 
         root.addView(TextView(ctx).apply {
             text = "If the site shows a \"Just a moment\" screen, tap Bypass Cloudflare to solve the challenge. Cookies are saved for 15 hours."
-            textSize = 13f; setTextColor(Color.parseColor("#B0B0C0"))
-            setPadding(0, 0, 0, smallPad)
+            textSize = 12.5f
+            setTextColor(textDim)
+            setLineSpacing(0f, 1.3f)
+            setPadding(dp(4), 0, dp(4), dp(16))
         })
 
+        val statusChip = LinearLayout(ctx).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(12), dp(7), dp(12), dp(7))
+            background = GradientDrawable().apply {
+                setColor(glassFill)
+                cornerRadius = dp(9).toFloat()
+                setStroke(dp(1), edgeSoft)
+            }
+            layoutParams = LinearLayout.LayoutParams(-2, -2).also { it.bottomMargin = dp(16) }
+        }
+        val cookieOn = MMCFStore.getCookies() != null
+        statusChip.addView(View(ctx).apply {
+            background = GradientDrawable().apply {
+                setColor(if (cookieOn) green else textDim)
+                cornerRadius = dp(4).toFloat()
+            }
+            layoutParams = LinearLayout.LayoutParams(dp(7), dp(7)).also { it.rightMargin = dp(8) }
+        })
+        statusChip.addView(TextView(ctx).apply {
+            text = if (cookieOn) "CF cookies saved" else "No CF cookies saved"
+            textSize = 11.5f
+            setTextColor(if (cookieOn) green else textDim)
+            typeface = Typeface.DEFAULT_BOLD
+        })
+        root.addView(statusChip)
+
         val bypassBtn = Button(ctx).apply {
-            text = if (MMCFStore.getCookies() != null) "CF Cookies Saved" else "Bypass Cloudflare"
-            background = makeBg(0xFF6D5ACF.toInt())
-            setTextColor(Color.WHITE)
-            layoutParams = LinearLayout.LayoutParams(-1, -2).also { it.bottomMargin = smallPad }
+            text = if (cookieOn) "Bypass Cloudflare Again" else "Bypass Cloudflare"
+            textSize = 15f
+            setTextColor(0xFFFFFFFF.toInt())
+            setAllCaps(false)
+            typeface = Typeface.DEFAULT_BOLD
+            isFocusable = true
+            setPadding(dp(20), 0, dp(20), 0)
+            background = GradientDrawable().apply {
+                setColors(intArrayOf(blueHi, blueDeep))
+                orientation = GradientDrawable.Orientation.LEFT_RIGHT
+                cornerRadius = dp(16).toFloat()
+            }
+            layoutParams = LinearLayout.LayoutParams(-1, dp(50)).also { it.bottomMargin = dp(10) }
         }
         root.addView(bypassBtn)
 
+        val clearBg = GradientDrawable().apply {
+            setColor(glassFill)
+            cornerRadius = dp(16).toFloat()
+            setStroke(dp(1), edge)
+        }
         val clearBtn = Button(ctx).apply {
             text = "Clear CF Cookies"
-            background = makeBg(0xFFE5484D.toInt())
-            setTextColor(Color.WHITE)
-            layoutParams = LinearLayout.LayoutParams(-1, -2).also { it.bottomMargin = smallPad }
+            textSize = 14f
+            setTextColor(0xFFD1D1D6.toInt())
+            setAllCaps(false)
+            typeface = Typeface.DEFAULT_BOLD
+            isFocusable = true
+            background = clearBg
+            setOnFocusChangeListener { _, hasFocus ->
+                clearBg.setStroke(dp(1), if (hasFocus) 0x66FFFFFF.toInt() else edge)
+            }
+            layoutParams = LinearLayout.LayoutParams(-1, dp(46)).also { it.bottomMargin = dp(14) }
         }
         root.addView(clearBtn)
 
-        val saveBtn = Button(ctx).apply {
-            text = "Save & Close"
-            background = makeBg(0xFF2E7D32.toInt())
-            setTextColor(Color.WHITE)
-            layoutParams = LinearLayout.LayoutParams(-1, -2)
+        val closeBtn = Button(ctx).apply {
+            text = "CLOSE"
+            textSize = 13f
+            letterSpacing = 0.18f
+            setTextColor(0xFF070709.toInt())
+            setAllCaps(false)
+            typeface = Typeface.DEFAULT_BOLD
+            background = GradientDrawable().apply {
+                setColors(intArrayOf(0xFFFFFFFF.toInt(), 0xFFD9D9DE.toInt()))
+                orientation = GradientDrawable.Orientation.LEFT_RIGHT
+                cornerRadius = dp(14).toFloat()
+            }
+            layoutParams = LinearLayout.LayoutParams(-1, dp(48))
         }
-        root.addView(saveBtn)
+        root.addView(closeBtn)
 
         bypassBtn.setOnClickListener {
             val host = MultimoviesProvider().mainUrl
@@ -92,7 +181,7 @@ class MMSettingsFragment(private val plugin: Plugin) : BottomSheetDialogFragment
             CoroutineScope(Dispatchers.Main).launch {
                 try {
                     val success = showMMCFBypassDialogAndWait(host)
-                    bypassBtn.text = if (success && MMCFStore.getCookies() != null) "CF Cookies Saved" else "Bypass Cloudflare"
+                    bypassBtn.text = if (success && MMCFStore.getCookies() != null) "Bypass Cloudflare Again" else "Bypass Cloudflare"
                     Toast.makeText(ctx, if (success) "Saved" else "Cancelled", Toast.LENGTH_SHORT).show()
                 } catch (e: Exception) {
                     bypassBtn.text = "Bypass Cloudflare"
@@ -113,7 +202,9 @@ class MMSettingsFragment(private val plugin: Plugin) : BottomSheetDialogFragment
                             cm.setCookie(host, "$name=; Max-Age=0; expires=Thu, 01 Jan 1970 00:00:00 GMT")
                         }
                         cm.flush()
-                    } catch (e: Exception) {}
+                    } catch (e: Exception) {
+                        Log.e("MM_Settings", "clear: ${e.message}")
+                    }
                     MMCFStore.clear()
                     bypassBtn.text = "Bypass Cloudflare"
                     Toast.makeText(ctx, "Cleared", Toast.LENGTH_SHORT).show()
@@ -122,14 +213,8 @@ class MMSettingsFragment(private val plugin: Plugin) : BottomSheetDialogFragment
                 .show()
         }
 
-        saveBtn.setOnClickListener { dismiss() }
+        closeBtn.setOnClickListener { dismiss() }
 
         return root
-    }
-
-    private fun makeBg(color: Int) = GradientDrawable().apply {
-        shape = GradientDrawable.RECTANGLE
-        cornerRadius = 12f
-        setColor(color)
     }
 }

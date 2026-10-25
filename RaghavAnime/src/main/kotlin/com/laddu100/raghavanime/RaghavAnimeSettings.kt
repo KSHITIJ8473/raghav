@@ -46,16 +46,17 @@ object RaghavAnimeSettings {
     private const val APP_TITLE = "RaghavAnime"
     private const val REPO_TAG = "RAGHAV REPO · RAGHAVANIME"
 
-    private const val BG = 0xFF0B0506.toInt()
-    private const val SURFACE = 0xFF150F11.toInt()
-    private const val SURFACE_2 = 0xFF201518.toInt()
-    private const val BORDER = 0xFF2E1C1F.toInt()
-    private const val BORDER_HI = 0xFF4A272C.toInt()
-    private const val TEXT = 0xFFF8EDEE.toInt()
-    private const val SUBTEXT = 0xFF9D8488.toInt()
-    private const val RED = 0xFFE53935.toInt()
-    private const val RED_BRIGHT = 0xFFFF5A52.toInt()
-    private const val RED_DEEP = 0xFF8E1418.toInt()
+    private const val BG = 0xFF070709.toInt()
+    private const val SURFACE = 0xFF1A1A1E.toInt()
+    private const val SURFACE_2 = 0xFF2A2A2E.toInt()
+    private const val BORDER = 0x1AFFFFFF.toInt()
+    private const val BORDER_HI = 0x2EFFFFFF.toInt()
+    private const val TEXT = 0xFFFFFFFF.toInt()
+    private const val SUBTEXT = 0xFF98989F.toInt()
+    private const val ACCENT = 0xFF0A84FF.toInt()
+    private const val ACCENT_HI = 0xFF409CFF.toInt()
+    private const val ACCENT_DEEP = 0xFF0060DF.toInt()
+    private const val GREEN = 0xFF34C759.toInt()
 
     private fun dp(ctx: Context, v: Int): Int =
         (v * ctx.resources.displayMetrics.density).toInt()
@@ -75,14 +76,14 @@ object RaghavAnimeSettings {
                 intArrayOf(android.R.attr.state_checked),
                 intArrayOf()
             ),
-            intArrayOf(RED_DEEP, 0xFF231316.toInt())
+            intArrayOf(GREEN, 0xFF3A3A3C.toInt())
         )
         thumbTintList = ColorStateList(
             arrayOf(
                 intArrayOf(android.R.attr.state_checked),
                 intArrayOf()
             ),
-            intArrayOf(RED_BRIGHT, 0xFF6E5A5D.toInt())
+            intArrayOf(0xFFFFFFFF.toInt(), 0xFFD1D1D6.toInt())
         )
     }
 
@@ -115,12 +116,12 @@ object RaghavAnimeSettings {
             val cx = width / 2f
             val cy = height / 2f
             val r = minOf(width, height) / 2f - width * 0.05f
-            ring.color = RED
+            ring.color = 0x59FFFFFF.toInt()
             ring.strokeWidth = r * 0.15f
             canvas.drawCircle(cx, cy, r, ring)
             fill.shader = LinearGradient(
                 cx - r, cy - r, cx + r, cy + r,
-                RED_BRIGHT, RED_DEEP, Shader.TileMode.CLAMP
+                ACCENT_HI, ACCENT_DEEP, Shader.TileMode.CLAMP
             )
             val s = r * 0.6f
             val tri = Path()
@@ -144,7 +145,7 @@ object RaghavAnimeSettings {
             ).apply { rightMargin = dp(ctx, 8) }
         }
         if (withDot) {
-            pill.addView(View(ctx).apply { background = shape(RED_BRIGHT, 4, ctx) },
+            pill.addView(View(ctx).apply { background = shape(GREEN, 4, ctx) },
                 LinearLayout.LayoutParams(dp(ctx, 7), dp(ctx, 7)).apply {
                     rightMargin = dp(ctx, 7)
                 })
@@ -161,7 +162,7 @@ object RaghavAnimeSettings {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
-        h.addView(View(ctx).apply { background = shape(RED, 2, ctx) },
+        h.addView(View(ctx).apply { background = shape(0x66FFFFFF.toInt(), 2, ctx) },
             LinearLayout.LayoutParams(dp(ctx, 18), dp(ctx, 3)).apply {
                 rightMargin = dp(ctx, 10)
             })
@@ -183,7 +184,7 @@ object RaghavAnimeSettings {
         val row = LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            background = shape(SURFACE, 16, ctx, 1, BORDER)
+            background = shape(SURFACE, 18, ctx, 1, BORDER)
             setPadding(dp(ctx, 16), dp(ctx, 18), dp(ctx, 16), dp(ctx, 18))
             isClickable = true
             layoutParams = LinearLayout.LayoutParams(
@@ -193,7 +194,7 @@ object RaghavAnimeSettings {
         }
 
         val bar = View(ctx).apply {
-            background = shape(RED, 2, ctx)
+            background = shape(ACCENT, 2, ctx)
             scaleY = 0.55f
         }
         row.addView(bar, LinearLayout.LayoutParams(dp(ctx, 4), dp(ctx, 42)).apply {
@@ -221,7 +222,7 @@ object RaghavAnimeSettings {
             background = shape(SURFACE_2, 17, ctx, 1, BORDER_HI)
         }
         chev.addView(TextView(ctx).apply {
-            text = "›"; setTextColor(RED); textSize = 20f
+            text = "›"; setTextColor(0xFFD1D1D6.toInt()); textSize = 20f
             setTypeface(typeface, Typeface.BOLD); gravity = Gravity.CENTER
         }, FrameLayout.LayoutParams(dp(ctx, 34), dp(ctx, 34)))
         row.addView(chev)
@@ -279,7 +280,7 @@ object RaghavAnimeSettings {
         val row = LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            background = shape(SURFACE, 14, ctx, 1, BORDER)
+            background = shape(SURFACE, 16, ctx, 1, BORDER)
             setPadding(dp(ctx, 16), dp(ctx, 15), dp(ctx, 16), dp(ctx, 15))
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
@@ -385,9 +386,9 @@ object RaghavAnimeSettings {
             orientation = LinearLayout.VERTICAL
             background = GradientDrawable().apply {
                 orientation = GradientDrawable.Orientation.TL_BR
-                colors = intArrayOf(0xFF230A0E.toInt(), 0xFF110609.toInt())
-                cornerRadius = dp(ctx, 24).toFloat()
-                setStroke(dp(ctx, 1), RED_DEEP)
+                colors = intArrayOf(0xFF26262B.toInt(), 0xFF141418.toInt())
+                cornerRadius = dp(ctx, 26).toFloat()
+                setStroke(dp(ctx, 1), 0x33FFFFFF.toInt())
             }
             setPadding(dp(ctx, 20), dp(ctx, 22), dp(ctx, 20), dp(ctx, 18))
         }
@@ -444,7 +445,7 @@ object RaghavAnimeSettings {
             setTextColor(BG)
             background = GradientDrawable().apply {
                 orientation = GradientDrawable.Orientation.LEFT_RIGHT
-                colors = intArrayOf(RED_BRIGHT, RED_DEEP)
+                colors = intArrayOf(0xFFFFFFFF.toInt(), 0xFFD9D9DE.toInt())
                 cornerRadius = dp(ctx, 14).toFloat()
             }
             isAllCaps = false; setTypeface(typeface, Typeface.BOLD)
@@ -572,7 +573,7 @@ object RaghavAnimeSettings {
                 setPadding(dp(ctx, 2), dp(ctx, 10), dp(ctx, 2), dp(ctx, 10))
             }
             val fieldCard = LinearLayout(ctx).apply {
-                background = shape(SURFACE, 14, ctx, 1, BORDER)
+                background = shape(SURFACE, 16, ctx, 1, BORDER)
                 setPadding(dp(ctx, 14), dp(ctx, 4), dp(ctx, 14), dp(ctx, 4))
                 layoutParams = LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
@@ -672,7 +673,7 @@ object RaghavAnimeSettings {
             }
             CustomPosters.presets.forEach { (label, url) ->
                 chips.addView(TextView(ctx).apply {
-                    text = label; textSize = 12.5f; setTextColor(RED_BRIGHT)
+                    text = label; textSize = 12.5f; setTextColor(ACCENT_HI)
                     setTypeface(typeface, Typeface.BOLD)
                     background = shape(SURFACE_2, 16, ctx, 1, BORDER_HI)
                     setPadding(dp(ctx, 14), dp(ctx, 7), dp(ctx, 14), dp(ctx, 7))
@@ -728,7 +729,7 @@ object RaghavAnimeSettings {
                 isAllCaps = false
                 background = GradientDrawable().apply {
                     orientation = GradientDrawable.Orientation.LEFT_RIGHT
-                    colors = intArrayOf(RED_BRIGHT, RED_DEEP)
+                    colors = intArrayOf(ACCENT_HI, ACCENT_DEEP)
                     cornerRadius = dp(ctx, 16).toFloat()
                 }
                 layoutParams = LinearLayout.LayoutParams(
@@ -761,7 +762,7 @@ object RaghavAnimeSettings {
             val stepRow = LinearLayout(ctx).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
-                background = shape(SURFACE, 12, ctx, 1, BORDER)
+                background = shape(SURFACE, 14, ctx, 1, BORDER)
                 setPadding(dp(ctx, 16), dp(ctx, 14), dp(ctx, 16), dp(ctx, 14))
                 layoutParams = LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
@@ -784,7 +785,7 @@ object RaghavAnimeSettings {
 
             val valueText = TextView(ctx).apply {
                 text = value.toString()
-                setTextColor(RED_BRIGHT); textSize = 16f
+                setTextColor(ACCENT_HI); textSize = 16f
                 setTypeface(typeface, Typeface.BOLD)
                 gravity = Gravity.CENTER
                 minWidth = dp(ctx, 30)
@@ -835,7 +836,7 @@ object RaghavAnimeSettings {
                 isAllCaps = false
                 background = GradientDrawable().apply {
                     orientation = GradientDrawable.Orientation.LEFT_RIGHT
-                    colors = intArrayOf(RED_BRIGHT, RED_DEEP)
+                    colors = intArrayOf(ACCENT_HI, ACCENT_DEEP)
                     cornerRadius = dp(ctx, 16).toFloat()
                 }
                 layoutParams = LinearLayout.LayoutParams(
@@ -857,7 +858,7 @@ object RaghavAnimeSettings {
         val row = LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            background = shape(SURFACE, 12, ctx, 1, BORDER)
+            background = shape(SURFACE, 14, ctx, 1, BORDER)
             setPadding(dp(ctx, 16), dp(ctx, 14), dp(ctx, 16), dp(ctx, 14))
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
@@ -880,7 +881,7 @@ object RaghavAnimeSettings {
         row.addView(col)
         row.addView(Button(ctx).apply {
             text = btnText; textSize = 12f
-            setTextColor(RED_BRIGHT)
+            setTextColor(ACCENT_HI)
             background = shape(SURFACE_2, 16, ctx, 1, BORDER_HI)
             isAllCaps = false; setTypeface(typeface, Typeface.BOLD)
             setPadding(dp(ctx, 14), dp(ctx, 8), dp(ctx, 14), dp(ctx, 8))

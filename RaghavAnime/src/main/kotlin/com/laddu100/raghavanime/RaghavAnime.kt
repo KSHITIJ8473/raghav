@@ -108,24 +108,26 @@ class RaghavAnime : MainAPI() {
         val ctx = activity ?: return
         ctx.runOnUiThread {
             try {
-                val cBg = Color.parseColor("#0A0A0A")
-                val cCard = Color.parseColor("#1A1A1A")
-                val cAccent = Color.parseColor("#FF1744")
+                val cAccent = Color.parseColor("#0A84FF")
                 val cText = Color.parseColor("#FFFFFF")
-                val cTextSub = Color.parseColor("#9E9E9E")
+                val cTextSub = Color.parseColor("#98989F")
                 val d = ctx.resources.displayMetrics.density
                 fun Int.dp() = (this * d).toInt()
 
                 val container = LinearLayout(ctx).apply {
                     orientation = LinearLayout.VERTICAL
                     setPadding(24.dp(), 28.dp(), 24.dp(), 24.dp())
-                    setBackgroundColor(cBg)
+                    background = GradientDrawable().apply {
+                        cornerRadius = 24 * d
+                        setColor(Color.parseColor("#17171B"))
+                        setStroke(1.dp(), Color.parseColor("#30FFFFFF"))
+                    }
                 }
 
                 container.addView(TextView(ctx).apply {
                     text = "AniList API is Down"
                     textSize = 20f
-                    setTextColor(cAccent)
+                    setTextColor(cText)
                     setTypeface(typeface, Typeface.BOLD)
                     gravity = Gravity.CENTER
                     setPadding(0, 0, 0, 12.dp())
@@ -148,7 +150,7 @@ class RaghavAnime : MainAPI() {
                     textSize = 14f
                     setTypeface(typeface, Typeface.BOLD)
                     background = GradientDrawable().apply {
-                        cornerRadius = 12 * d
+                        cornerRadius = 16 * d
                         setColor(cAccent)
                     }
                     setPadding(0, 14.dp(), 0, 14.dp())

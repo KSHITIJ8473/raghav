@@ -37,7 +37,6 @@ class DonationDialogFragment : DialogFragment() {
 
         private const val DISMISS_SECONDS = 9
 
-        // translucent on 12+ so the window blur can frost behind it, legacy pair is near opaque
         private const val PANEL_TOP = 0xE6222228.toInt()
         private const val PANEL_BOTTOM = 0xE016161A.toInt()
         private const val PANEL_TOP_LEGACY = 0xF2222228.toInt()
@@ -80,9 +79,6 @@ class DonationDialogFragment : DialogFragment() {
                 cornerRadius = dp(density, 26f)
                 setStroke(dp(density, 1), EDGE)
             })
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                setBackgroundBlurRadius(dp(density, 28))
-            }
         }
         return dialog
     }

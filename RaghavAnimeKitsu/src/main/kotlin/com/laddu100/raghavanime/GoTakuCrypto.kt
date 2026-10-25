@@ -12,9 +12,12 @@ import java.io.ByteArrayInputStream
 
 object GoTakuCrypto {
 
+    // the api answers 426 for older versions
+    private const val SEALED_VERSION = 6
+
     private val apiSeed = intArrayOf(
-        203, 10, 122, 188, 182, 30, 245, 41, 26, 106, 139, 92, 56, 203, 90, 52,
-        167, 208, 189, 122, 150, 242, 60, 1, 70, 177, 253, 150, 158, 124, 253, 47
+        179, 30, 96, 89, 215, 107, 110, 243, 131, 139, 238, 126, 21, 71, 36, 87,
+        225, 51, 199, 190, 199, 243, 192, 9, 240, 241, 185, 245, 2, 201, 163, 88
     ).map { it.toByte() }.toByteArray()
 
     // rotated by the site, current value lives in the embed player bundle
@@ -66,7 +69,7 @@ object GoTakuCrypto {
 
     // sealed body: one version byte, then the gcm iv, then the payload
     private fun isSealed(body: ByteArray): Boolean {
-        return body.size > 29 && body[0].toInt() == 1
+        return body.size > 29 && body[0].toInt() == SEALED_VERSION
     }
 
     private fun gcmDecrypt(key: ByteArray, iv: ByteArray, ciphertext: ByteArray): ByteArray {

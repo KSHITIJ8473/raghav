@@ -34,6 +34,8 @@ class RaghavGoTaku : MainAPI() {
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         DonationManager.checkAndShow()
+        GoTakuApi.refreshDomain()
+        mainUrl = GoTakuApi.site()
         val params = mutableMapOf(
             "sort" to "latest",
             "limit" to "28",
@@ -50,9 +52,9 @@ class RaghavGoTaku : MainAPI() {
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
+        if (query.isBlank()) return emptyList()
         GoTakuApi.refreshDomain()
         mainUrl = GoTakuApi.site()
-        if (query.isBlank()) return emptyList()
         val (titles, _) = GoTakuApi.fetchTitles(mapOf("q" to query, "limit" to "28"))
         return titles.mapNotNull { it.toSearchResponse() }
     }

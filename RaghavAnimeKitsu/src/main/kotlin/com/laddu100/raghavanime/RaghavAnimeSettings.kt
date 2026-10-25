@@ -433,7 +433,7 @@ object RaghavAnimeSettings {
         val postersRow = homeRow(ctx, "Posters", "Custom poster template and labels") { openPosters(ctx) }
         root.addView(postersRow)
 
-        val perfRow = homeRow(ctx, "Performance", "Loading concurrency") { openPerformance(ctx) }
+        val perfRow = homeRow(ctx, "Performance", "Instant load and concurrency") { openPerformance(ctx) }
         root.addView(perfRow)
 
         root.addView(View(ctx), LinearLayout.LayoutParams(
@@ -754,6 +754,15 @@ object RaghavAnimeSettings {
 
     private fun openPerformance(ctx: Context) {
         subWindow(ctx, "PERFORMANCE") { body ->
+            body.addView(labelBlock(ctx, "Source loading",
+                "How the sources fill up when an episode opens"))
+
+            var instant = RaghavPerf.instantLoadSetting()
+            val instantRow = toggleRow(ctx, "Instant Load", null, instant) { checked ->
+                instant = checked
+            }.first
+            body.addView(instantRow)
+
             body.addView(labelBlock(ctx, "Source concurrency",
                 "How many sources fetch links at the same time"))
 
@@ -845,7 +854,8 @@ object RaghavAnimeSettings {
                 setPadding(0, dp(ctx, 15), 0, dp(ctx, 15))
                 setOnClickListener {
                     RaghavPerf.setUserConcurrency(value)
-                    Toast.makeText(ctx, "Concurrency saved", Toast.LENGTH_SHORT).show()
+                    RaghavPerf.setUserInstantLoad(instant)
+                    Toast.makeText(ctx, "Saved. Restart the app to switch the loading mode", Toast.LENGTH_LONG).show()
                 }
             })
         }

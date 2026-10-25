@@ -37,9 +37,7 @@ class DonationDialogFragment : DialogFragment() {
 
         private const val DISMISS_SECONDS = 9
 
-        // the panel stays translucent so the window blur on android 12 and up
-        // can frost whatever sits behind the dialog, older devices fall back
-        // to the nearly opaque pair
+        // translucent on 12+ so the window blur can frost behind it, legacy pair is near opaque
         private const val PANEL_TOP = 0xE6222228.toInt()
         private const val PANEL_BOTTOM = 0xE016161A.toInt()
         private const val PANEL_TOP_LEGACY = 0xF2222228.toInt()

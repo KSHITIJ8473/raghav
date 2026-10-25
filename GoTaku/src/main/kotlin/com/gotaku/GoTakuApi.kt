@@ -61,7 +61,7 @@ object GoTakuApi {
 
     // k endpoints answer sealed, callers parse the text into their own type
     private suspend fun fetchText(url: String, k: Boolean = false): String? {
-        val fullUrl = if (k) "$url${if (url.contains('?')) '&' else '?'}k=1" else url
+        val fullUrl = if (k) "$url${if (url.contains('?')) '&' else '?'}k=6" else url
         val body = getBody(fullUrl, siteHeaders()) ?: return null
         val plain = GoTakuCrypto.unseal(body) ?: body
         return String(plain, Charsets.UTF_8)

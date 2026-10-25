@@ -117,7 +117,9 @@ object ToonixApi {
     private const val UA =
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 
-    private val flightChunkRegex = Regex("""self\.__next_f\.push\(\[1,"((?:[^"\\]|\\.)*)"\]\)""")
+    // possessive: java.util.regex recurses once per repetition of a plain group, and the
+    // site's chunks are 500-700 KB, so that overflowed the stack on desktop JVMs
+    private val flightChunkRegex = Regex("""self\.__next_f\.push\(\[1,"((?:[^"\\]++|\\.)*+)"\]\)""")
     private val sectionRegex = Regex(""""title":"([^"]+)","viewAllHref"""")
     private val slugHrefRegex = Regex(""""slug":"([^"]+)","href":"([^"]+)"""")
     private val legacySrcRegex = Regex(""""legacySrc":(?:"([^"]+)"|null)""")

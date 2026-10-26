@@ -14,10 +14,10 @@ object RaghavAnimeFeatures {
 
     private const val PREFIX = "raghavanime_feat_"
 
-    fun isEnabled(feature: String): Boolean = getKey<Boolean>(PREFIX + feature) ?: when (feature) {
+    // watch time has no switch anymore, the recommendations read it
+    fun isEnabled(feature: String): Boolean = when (feature) {
         "watch_time" -> true
-        "recommendations" -> true
-        else -> false
+        else -> getKey<Boolean>(PREFIX + feature) ?: (feature == "recommendations")
     }
     fun setEnabled(feature: String, enabled: Boolean) { setKey(PREFIX + feature, enabled) }
 
@@ -163,11 +163,6 @@ object RaghavAnimeFeatures {
 
     fun invalidateRecommendationsCache() {
         try { setKey(PREFIX + "rec_cache", emptyList<RecommendationEntry>().toJson()) } catch (_: Exception) {}
-    }
-
-    fun resetRecommendations() {
-        invalidateRecommendationsCache()
-        setKey(PREFIX + "rec_reset", true)
     }
 
     private suspend fun anilistQuery(query: String, variables: Map<String, Any?>): String {

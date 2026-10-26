@@ -2,12 +2,8 @@ package com.laddu100.raghavanime
 
 import com.lagradost.cloudstream3.app
 
-/**
- * flixcloud.cc serves every episode as one plain MKV download (both audio tracks, all
- * subtitles inside), so no local proxy is needed to decrypt the HLS stream:
- *   /d/{id}/__data.json -> file id + signed token -> /download/{file}/progress -> /download/{file}
- * The token is bound to the IP that asked for it, which is the device that plays the file.
- */
+// the download token is bound to the IP that asked for it, so the file link
+// has to be minted on the device that plays it
 object FlixDownload {
 
     const val USER_AGENT =
@@ -28,7 +24,7 @@ object FlixDownload {
     private val qualityRegex = Regex("""(\d{3,4})p""")
     private val sizeRegex = Regex(""""(\d+(?:\.\d+)?\s*[KMG]B)"""", RegexOption.IGNORE_CASE)
 
-    /** The embed id ("dtpx2rezr4mb" of https://flixcloud.cc/e/dtpx2rezr4mb?v=1): every server of an episode shares it. */
+    // every server of an episode shares the same embed id
     fun embedId(embedUrl: String): String? = idRegex.find(embedUrl)?.groupValues?.get(1)
 
     suspend fun resolve(embedUrl: String): File? {

@@ -2,6 +2,7 @@ package com.laddu100.raghavanime
 
 import android.app.Dialog
 import android.content.Context
+import android.content.Intent
 import android.content.res.ColorStateList
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -33,6 +34,7 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.widget.SwitchCompat
+import com.lagradost.cloudstream3.MainActivity
 import com.lagradost.cloudstream3.app
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -483,36 +485,56 @@ object RaghavAnimeSettings {
         dlg.show()
     }
 
+    private fun saveAndRestartButton(ctx: Context, onSave: () -> Unit): Button =
+        Button(ctx).apply {
+            text = "SAVE & RESTART"; textSize = 15f
+            setTextColor(Color.WHITE); setTypeface(typeface, Typeface.BOLD)
+            letterSpacing = 0.03f
+            stateListAnimator = null
+            isAllCaps = false
+            background = GradientDrawable().apply {
+                orientation = GradientDrawable.Orientation.LEFT_RIGHT
+                colors = intArrayOf(ACCENT_HI, ACCENT_DEEP)
+                cornerRadius = dp(ctx, 16).toFloat()
+            }
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = dp(ctx, 12) }
+            setPadding(0, dp(ctx, 15), 0, dp(ctx, 15))
+            setOnClickListener { onSave() }
+        }
+
+    private fun confirmRestart(ctx: Context, message: String) {
+        AlertDialog.Builder(ctx)
+            .setTitle("Restart Required")
+            .setMessage(message)
+            .setPositiveButton("Restart") { _, _ -> restartApp(ctx) }
+            .setNegativeButton("Later") { _, _ ->
+                try {
+                    MainActivity.reloadHomeEvent.invoke(true)
+                } catch (_: Throwable) {}
+            }
+            .show()
+    }
+
+    private fun restartApp(ctx: Context) {
+        try {
+            val context = ctx.applicationContext
+            val pm = context.packageManager
+            val intent = pm.getLaunchIntentForPackage(context.packageName)
+            val componentName = intent?.component
+            if (componentName != null) {
+                val restartIntent = Intent.makeRestartActivityTask(componentName)
+                context.startActivity(restartIntent)
+                Runtime.getRuntime().exit(0)
+            }
+        } catch (_: Throwable) {}
+    }
+
     private fun openFeatures(ctx: Context) {
         subWindow(ctx, "FEATURES") { body ->
-            body.addView(labelBlock(ctx, "Experimental features",
-                "Watch time tracking and homepage recommendations"))
-
-            // recommendations read the watch history, turning the tracker off
-            // would starve them so it needs a confirmation first
-            var trackerSwitch: SwitchCompat? = null
-            val (trackerRow, sw) = toggleRow(
-                ctx, "Watch Time Tracker",
-                "Tracks watch time per anime and feeds the recommendations",
-                RaghavAnimeFeatures.isEnabled("watch_time")
-            ) { checked ->
-                if (checked) {
-                    RaghavAnimeFeatures.setEnabled("watch_time", true)
-                } else {
-                    AlertDialog.Builder(ctx)
-                        .setTitle("Watch Time Tracker")
-                        .setMessage("Recommendations depend on the watch history. Turn the tracker off anyway?")
-                        .setPositiveButton("Turn off") { _, _ ->
-                            RaghavAnimeFeatures.setEnabled("watch_time", false)
-                        }
-                        .setNegativeButton("Keep on") { _, _ ->
-                            trackerSwitch?.isChecked = true
-                        }
-                        .show()
-                }
-            }
-            trackerSwitch = sw
-            body.addView(trackerRow)
+            body.addView(labelBlock(ctx, "Homepage recommendations",
+                "Recommended anime built from your watch history"))
 
             val (recRow, _) = toggleRow(
                 ctx, "Anime Recommendations",
@@ -526,19 +548,6 @@ object RaghavAnimeSettings {
             }
             body.addView(recRow)
 
-            body.addView(actionRow(ctx, "Reset recommendations",
-                "Clears the current recommendation rows", "RESET") {
-                AlertDialog.Builder(ctx)
-                    .setTitle("Reset Recommendations")
-                    .setMessage("Clear all recommendations from the homepage? New ones appear after the next watch.")
-                    .setPositiveButton("Reset") { _, _ ->
-                        RaghavAnimeFeatures.resetRecommendations()
-                        Toast.makeText(ctx, "Recommendations cleared", Toast.LENGTH_SHORT).show()
-                    }
-                    .setNegativeButton("Cancel", null)
-                    .show()
-            })
-
             body.addView(actionRow(ctx, "Reset watch history",
                 "Deletes all watch time data and recommendations", "RESET") {
                 AlertDialog.Builder(ctx)
@@ -550,6 +559,10 @@ object RaghavAnimeSettings {
                     }
                     .setNegativeButton("Cancel", null)
                     .show()
+            })
+
+            body.addView(saveAndRestartButton(ctx) {
+                confirmRestart(ctx, "Features saved. Restart CloudStream now to apply them?")
             })
         }
     }
@@ -721,25 +734,9 @@ object RaghavAnimeSettings {
             body.addView(previewRow)
             reloadPreview()
 
-            body.addView(Button(ctx).apply {
-                text = "SAVE"; textSize = 15f
-                setTextColor(Color.WHITE); setTypeface(typeface, Typeface.BOLD)
-                letterSpacing = 0.03f
-                stateListAnimator = null
-                isAllCaps = false
-                background = GradientDrawable().apply {
-                    orientation = GradientDrawable.Orientation.LEFT_RIGHT
-                    colors = intArrayOf(ACCENT_HI, ACCENT_DEEP)
-                    cornerRadius = dp(ctx, 16).toFloat()
-                }
-                layoutParams = LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
-                ).apply { topMargin = dp(ctx, 12) }
-                setPadding(0, dp(ctx, 15), 0, dp(ctx, 15))
-                setOnClickListener {
-                    CustomPosters.template = templateField.text.toString()
-                    Toast.makeText(ctx, "Template saved", Toast.LENGTH_SHORT).show()
-                }
+            body.addView(saveAndRestartButton(ctx) {
+                CustomPosters.template = templateField.text.toString()
+                confirmRestart(ctx, "Posters saved. Restart CloudStream now to apply them?")
             })
         }
     }
@@ -758,7 +755,7 @@ object RaghavAnimeSettings {
                 "How the sources fill up when an episode opens"))
 
             var instant = RaghavPerf.instantLoadSetting()
-            val instantRow = toggleRow(ctx, "Instant Load", null, instant) { checked ->
+            val instantRow = toggleRow(ctx, "Instant Load", "Requires stable", instant) { checked ->
                 instant = checked
             }.first
             body.addView(instantRow)
@@ -837,26 +834,10 @@ object RaghavAnimeSettings {
                 Toast.makeText(ctx, "Back to the device default", Toast.LENGTH_SHORT).show()
             })
 
-            body.addView(Button(ctx).apply {
-                text = "SAVE"; textSize = 15f
-                setTextColor(Color.WHITE); setTypeface(typeface, Typeface.BOLD)
-                letterSpacing = 0.03f
-                stateListAnimator = null
-                isAllCaps = false
-                background = GradientDrawable().apply {
-                    orientation = GradientDrawable.Orientation.LEFT_RIGHT
-                    colors = intArrayOf(ACCENT_HI, ACCENT_DEEP)
-                    cornerRadius = dp(ctx, 16).toFloat()
-                }
-                layoutParams = LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
-                ).apply { topMargin = dp(ctx, 12) }
-                setPadding(0, dp(ctx, 15), 0, dp(ctx, 15))
-                setOnClickListener {
-                    RaghavPerf.setUserConcurrency(value)
-                    RaghavPerf.setUserInstantLoad(instant)
-                    Toast.makeText(ctx, "Saved. Restart the app to switch the loading mode", Toast.LENGTH_LONG).show()
-                }
+            body.addView(saveAndRestartButton(ctx) {
+                RaghavPerf.setUserConcurrency(value)
+                RaghavPerf.setUserInstantLoad(instant)
+                confirmRestart(ctx, "Performance saved. Restart CloudStream now to apply them?")
             })
         }
     }

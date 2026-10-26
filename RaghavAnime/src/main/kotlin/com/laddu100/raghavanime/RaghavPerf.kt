@@ -75,20 +75,8 @@ object RaghavPerf {
 
     // what the settings screen shows: the saved preference, the mode a restart will run
     fun instantLoadSetting(): Boolean = try {
-        getKey<Boolean>(INSTANT_LOAD_KEY) ?: true
-    } catch (_: Exception) { true }
-
-    // latched for the whole app process so a flip in the settings only takes
-    // effect once CloudStream restarts, matching the save and restart flow
-    @Volatile
-    private var instantLoadLatch: Boolean? = null
-
-    fun instantLoad(): Boolean {
-        instantLoadLatch?.let { return it }
-        val value = instantLoadSetting()
-        instantLoadLatch = value
-        return value
-    }
+        getKey<Boolean>(INSTANT_LOAD_KEY) ?: false
+    } catch (_: Exception) { false }
 
     fun prefetchConcurrency(): Int = when (profile()) {
         DeviceProfile.LOW_END -> 2

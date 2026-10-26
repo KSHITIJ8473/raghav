@@ -106,7 +106,6 @@ object GoTakuProxy {
         return Base64.encodeToString(fields.joinToString("\n").toByteArray(Charsets.UTF_8), B64)
     }
 
-    /** The stream of a link: the cached one (refreshed token, playlist copies), else rebuilt from its id. */
     private fun sessionFor(id: String): StreamSession? {
         synchronized(sessions) { sessions[id] }?.let { return it }
         val f = try {

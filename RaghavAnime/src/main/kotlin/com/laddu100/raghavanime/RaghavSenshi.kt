@@ -191,7 +191,6 @@ class RaghavSenshi : MainAPI() {
         mainUrl = FirebaseDomainHelper.getDomain("senshi") ?: mainUrl
         RaghavSenshiVhost.refreshDomain()
         val wantDub = epData.type == "dub"
-        val modeLabel = if (wantDub) "Dub" else "Sub"
 
         val embeds = probeEmbeds(epData.malId, epData.ep) ?: run {
             return false
@@ -229,7 +228,7 @@ class RaghavSenshi : MainAPI() {
 
                 for (file in files) {
                     val master = file.src ?: continue
-                    if (emitStreamLinks(master, modeLabel, wantDub, callback)) {
+                    if (emitStreamLinks(master, wantDub, callback)) {
                         found = true
                     }
                 }
@@ -240,7 +239,6 @@ class RaghavSenshi : MainAPI() {
 
     private suspend fun emitStreamLinks(
         master: String,
-        modeLabel: String,
         wantDub: Boolean,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
@@ -265,7 +263,7 @@ class RaghavSenshi : MainAPI() {
                 .mapNotNull { it.groupValues[2].toIntOrNull() }
                 .maxOrNull()
             callback.invoke(
-                newExtractorLink(source = name, name = "Senshi $modeLabel", url = master, type = ExtractorLinkType.M3U8) {
+                newExtractorLink(source = name, name = "Senshi Sub & Dub", url = master, type = ExtractorLinkType.M3U8) {
                     height?.let { this.quality = it }
                     this.headers = mapOf(
                         "User-Agent" to RaghavSenshiVhost.browserUa(),
@@ -289,11 +287,11 @@ class RaghavSenshi : MainAPI() {
                 val variants = parseVariantQualities(playlist)
                 if (variants.isEmpty()) {
                     callback.invoke(
-                        newExtractorLink(source = name, name = "Senshi $modeLabel", url = "$proxyBase/m/$mode/0/master.m3u8", type = ExtractorLinkType.M3U8)
+                        newExtractorLink(source = name, name = "Senshi Sub & Dub", url = "$proxyBase/m/$mode/0/master.m3u8", type = ExtractorLinkType.M3U8)
                     )
                 } else {
                     variants.forEach { q ->
-                        val label = "Senshi $modeLabel ${q.first}"
+                        val label = "Senshi Sub & Dub ${q.first}"
                         callback.invoke(
                             newExtractorLink(source = name, name = label, url = "$proxyBase/m/$mode/${q.second}/master.m3u8", type = ExtractorLinkType.M3U8) {
                                 this.quality = getQualityFromName(q.first)
@@ -306,7 +304,7 @@ class RaghavSenshi : MainAPI() {
         }
 
         callback.invoke(
-            newExtractorLink(source = name, name = "Senshi $modeLabel", url = master, type = ExtractorLinkType.M3U8) {
+            newExtractorLink(source = name, name = "Senshi Sub & Dub", url = master, type = ExtractorLinkType.M3U8) {
                 this.referer = "$mainUrl/"
                 this.headers = streamHeaders
             }

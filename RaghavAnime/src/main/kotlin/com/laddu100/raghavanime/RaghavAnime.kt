@@ -22,6 +22,7 @@ import com.lagradost.cloudstream3.utils.AppUtils.toJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.nicehttp.RequestBodyTypes
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -588,9 +589,15 @@ class RaghavAnime : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         rawCallback: (ExtractorLink) -> Unit
     ): Boolean {
-        // every link is handed to the player the moment its source resolves
-        // so the loading screen shows the set growing live
-        val callback = rawCallback
+        // instant load hands the first burst of links to the player and lets
+        // the pass finish in the background, the normal mode keeps the call
+        // open so the loading screen follows every source until the cap
+        val instant = RaghavPerf.instantLoadSetting()
+        val firstLink = CompletableDeferred<Unit>()
+        val callback: (ExtractorLink) -> Unit = { link ->
+            firstLink.complete(Unit)
+            rawCallback(link)
+        }
         val subs = subtitleCallback
         val linkData = parseJson<LinkData>(data)
         val aniId = linkData.animeId
@@ -739,9 +746,18 @@ class RaghavAnime : MainAPI() {
                 { runBoundedSource(name, task) }
             })
         }
-        // the player only takes links while loadLinks is running, so the pass
-        // stays open for the slowest sources before it returns
-        withTimeoutOrNull(MAX_SOURCE_WAIT_MS) { linksJob?.join() }
+        if (instant) {
+            withTimeoutOrNull(INSTANT_WAIT_MS) { firstLink.await() }
+            // give the fast sources a moment to land next to the first one
+            // so the player starts on a proper pick instead of a lone link
+            if (firstLink.isCompleted) {
+                delay(INSTANT_SETTLE_MS)
+            }
+        } else {
+            // the player only takes links while loadLinks is running, so the pass
+            // stays open for the slowest sources before it returns
+            withTimeoutOrNull(MAX_SOURCE_WAIT_MS) { linksJob?.join() }
+        }
 
         return true
     }
@@ -1045,6 +1061,8 @@ class RaghavAnime : MainAPI() {
         var hasShownThisSession = false
         private val homePageCache = mutableMapOf<String, List<AniListMedia>>()
         private const val MAX_SOURCE_WAIT_MS = 35_000L
+        private const val INSTANT_WAIT_MS = 20_000L
+        private const val INSTANT_SETTLE_MS = 1_500L
     }
 }
 

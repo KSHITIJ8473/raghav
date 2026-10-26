@@ -435,7 +435,7 @@ object RaghavAnimeSettings {
         val postersRow = homeRow(ctx, "Posters", "Custom poster template and labels") { openPosters(ctx) }
         root.addView(postersRow)
 
-        val perfRow = homeRow(ctx, "Performance", "Instant load and concurrency") { openPerformance(ctx) }
+        val perfRow = homeRow(ctx, "Performance", "Source loading concurrency") { openPerformance(ctx) }
         root.addView(perfRow)
 
         root.addView(View(ctx), LinearLayout.LayoutParams(
@@ -751,15 +751,6 @@ object RaghavAnimeSettings {
 
     private fun openPerformance(ctx: Context) {
         subWindow(ctx, "PERFORMANCE") { body ->
-            body.addView(labelBlock(ctx, "Source loading",
-                "How the sources fill up when an episode opens"))
-
-            var instant = RaghavPerf.instantLoadSetting()
-            val instantRow = toggleRow(ctx, "Instant Load", "Requires stable", instant) { checked ->
-                instant = checked
-            }.first
-            body.addView(instantRow)
-
             body.addView(labelBlock(ctx, "Source concurrency",
                 "How many sources fetch links at the same time"))
 
@@ -836,7 +827,6 @@ object RaghavAnimeSettings {
 
             body.addView(saveAndRestartButton(ctx) {
                 RaghavPerf.setUserConcurrency(value)
-                RaghavPerf.setUserInstantLoad(instant)
                 confirmRestart(ctx, "Performance saved. Restart CloudStream now to apply them?")
             })
         }

@@ -61,22 +61,8 @@ object RaghavPerf {
         return if (saved in 6..40) saved else null
     }
 
-    fun sourceConcurrency(): Int = userConcurrency() ?: when (profile()) {
-        DeviceProfile.LOW_END -> 6
-        DeviceProfile.MID_RANGE -> 12
-        DeviceProfile.HIGH_END -> 16
-    }
-
-    private const val INSTANT_LOAD_KEY = "raghavanime_instant_load"
-
-    fun setUserInstantLoad(value: Boolean) {
-        try { setKey(INSTANT_LOAD_KEY, value) } catch (_: Exception) {}
-    }
-
-    // what the settings screen shows: the saved preference, the mode a restart will run
-    fun instantLoadSetting(): Boolean = try {
-        getKey<Boolean>(INSTANT_LOAD_KEY) ?: false
-    } catch (_: Exception) { false }
+    // every source gets a slot of its own so none of them sit behind slower ones
+    fun sourceConcurrency(): Int = userConcurrency() ?: 16
 
     fun prefetchConcurrency(): Int = when (profile()) {
         DeviceProfile.LOW_END -> 2
@@ -125,13 +111,11 @@ object RaghavSourceStats {
 
     private const val PREFS = "raghavanime_perf"
     private const val KEY_PREFIX = "source_stats_"
-    private const val BROKEN_AFTER_FAILS = 5
 
     private class Stat {
         var success = 0
         var fail = 0
         var totalMs = 0L
-        var consecutiveFails = 0
     }
 
     private val stats = ConcurrentHashMap<String, Stat>()
@@ -151,12 +135,11 @@ object RaghavSourceStats {
                 for ((key, value) in saved) {
                     if (!key.startsWith(KEY_PREFIX) || value !is String) continue
                     val parts = value.split(",")
-                    if (parts.size < 4) continue
+                    if (parts.size < 3) continue
                     val s = Stat()
                     s.success = parts[0].toIntOrNull() ?: 0
                     s.fail = parts[1].toIntOrNull() ?: 0
                     s.totalMs = parts[2].toLongOrNull() ?: 0L
-                    s.consecutiveFails = parts[3].toIntOrNull() ?: 0
                     stats[key.removePrefix(KEY_PREFIX)] = s
                 }
             }
@@ -168,7 +151,7 @@ object RaghavSourceStats {
         val p = prefs() ?: return
         val editor = p.edit()
         for ((name, s) in stats) {
-            editor.putString(KEY_PREFIX + name, "${s.success},${s.fail},${s.totalMs},${s.consecutiveFails}")
+            editor.putString(KEY_PREFIX + name, "${s.success},${s.fail},${s.totalMs}")
         }
         editor.apply()
     }
@@ -179,14 +162,9 @@ object RaghavSourceStats {
             val s = stats.getOrPut(source) { Stat() }
             if (success) {
                 s.success++
-                s.fail = 0
                 s.totalMs += durationMs
-                s.consecutiveFails = 0
             } else {
                 s.fail++
-                s.success = 0
-                s.totalMs = 0L
-                s.consecutiveFails++
             }
         }
         persist()
@@ -195,7 +173,6 @@ object RaghavSourceStats {
     fun priority(source: String): Double {
         ensureLoaded()
         val s = stats[source] ?: return 0.0
-        if (s.consecutiveFails >= BROKEN_AFTER_FAILS) return -1000.0
         val runs = s.success + s.fail
         if (runs <= 0) return 0.0
         val successRate = s.success.toDouble() / runs

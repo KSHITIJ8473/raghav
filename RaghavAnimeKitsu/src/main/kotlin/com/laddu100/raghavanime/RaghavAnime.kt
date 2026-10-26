@@ -21,7 +21,6 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.app
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -35,6 +34,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import java.net.URLEncoder
 import com.raghav.donation.DonationManager
+import java.util.concurrent.ConcurrentLinkedQueue
 
 class RaghavAnime : MainAPI() {
     override var mainUrl = "https://kitsu.io"
@@ -59,8 +59,16 @@ class RaghavAnime : MainAPI() {
 
     private val loadScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
-    @Volatile
-    private var linksJob: Job? = null
+    // one loading pass per episode, shared by every player open of that
+    // episode so the sources are not cancelled and restarted on re-entry
+    private class SourcePass(val key: String, val start: Long) {
+        val links = ConcurrentLinkedQueue<ExtractorLink>()
+        val subs = ConcurrentLinkedQueue<SubtitleFile>()
+        var job: Job? = null
+    }
+
+    private val passLock = Any()
+    private var currentPass: SourcePass? = null
 
     private val downCheckLock = kotlinx.coroutines.sync.Mutex()
     @Volatile
@@ -401,16 +409,6 @@ class RaghavAnime : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         rawCallback: (ExtractorLink) -> Unit
     ): Boolean {
-        // instant load hands the first burst of links to the player and lets
-        // the pass finish in the background, the normal mode keeps the call
-        // open so the loading screen follows every source until the cap
-        val instant = RaghavPerf.instantLoadSetting()
-        val firstLink = CompletableDeferred<Unit>()
-        val callback: (ExtractorLink) -> Unit = { link ->
-            firstLink.complete(Unit)
-            rawCallback(link)
-        }
-        val subs = subtitleCallback
         val linkData = parseJson<LinkData>(data)
         val aniId = linkData.animeId
         val title = linkData.title
@@ -425,6 +423,35 @@ class RaghavAnime : MainAPI() {
         val animeKey = linkData.kitsuId.toString()
         val searchTitles = listOfNotNull(title, jpTitle).filter { it.isNotBlank() }
         val targetTitles = listOfNotNull(title, jpTitle)
+
+        val episodeKey = "$animeKey|$episode|${if (isDub) "dub" else "sub"}"
+        var reuse = false
+        val pass: SourcePass
+        synchronized(passLock) {
+            val running = currentPass
+            val runningJob = running?.job
+            if (running != null && runningJob != null && running.key == episodeKey &&
+                (runningJob.isActive ||
+                    System.currentTimeMillis() - running.start < PASS_TTL_MS)) {
+                reuse = true
+                pass = running
+            } else {
+                runningJob?.cancel()
+                pass = SourcePass(episodeKey, System.currentTimeMillis())
+                currentPass = pass
+            }
+        }
+
+        // everything the pass emits is kept so a later open of the episode
+        // gets the whole set replayed instead of re-resolving every source
+        val callback: (ExtractorLink) -> Unit = { link ->
+            pass.links.add(link)
+            rawCallback(link)
+        }
+        val subs: (SubtitleFile) -> Unit = { file ->
+            pass.subs.add(file)
+            subtitleCallback(file)
+        }
 
         val sources = listOf<Pair<String, suspend () -> Unit>>(
             "Miruro" to {
@@ -552,24 +579,23 @@ class RaghavAnime : MainAPI() {
 
         val concurrency = RaghavPerf.sourceConcurrency()
 
-        linksJob?.cancel()
-        linksJob = loadScope.launch {
-            RaghavPerf.runLimitedAsync(concurrency, ordered.map { (name, task) ->
-                { runBoundedSource(name, task) }
-            })
-        }
-        if (instant) {
-            withTimeoutOrNull(INSTANT_WAIT_MS) { firstLink.await() }
-            // give the fast sources a moment to land next to the first one
-            // so the player starts on a proper pick instead of a lone link
-            if (firstLink.isCompleted) {
-                delay(INSTANT_SETTLE_MS)
+        if (!reuse) {
+            pass.job = loadScope.launch {
+                RaghavPerf.runLimitedAsync(concurrency, ordered.map { (name, task) ->
+                    { runBoundedSource(name, task) }
+                })
             }
         } else {
-            // the player only takes links while loadLinks is running, so the pass
-            // stays open for the slowest sources before it returns
-            withTimeoutOrNull(MAX_SOURCE_WAIT_MS) { linksJob?.join() }
+            pass.links.forEach(rawCallback)
+            pass.subs.forEach(subtitleCallback)
         }
+
+        // the player only collects links while this call is open, so it stays
+        // up for the full pass and every source gets its turn
+        withTimeoutOrNull(MAX_SOURCE_WAIT_MS) { pass.job?.join() }
+
+        pass.links.forEach(rawCallback)
+        pass.subs.forEach(subtitleCallback)
 
         return true
     }
@@ -890,8 +916,7 @@ class RaghavAnime : MainAPI() {
         var hasShownThisSession = false
         private val homePageCache = mutableMapOf<String, List<KitsuMedia>>()
         private const val MAX_SOURCE_WAIT_MS = 35_000L
-        private const val INSTANT_WAIT_MS = 20_000L
-        private const val INSTANT_SETTLE_MS = 1_500L
+        private const val PASS_TTL_MS = 10 * 60 * 1000L
     }
 }
 

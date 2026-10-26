@@ -610,7 +610,7 @@ class RaghavAnime : MainAPI() {
             } catch (c: CancellationException) {
                 throw c
             } catch (e: Throwable) {
-                delay(2000)
+                delay(750)
                 task()
                 ok = true
             }
@@ -701,6 +701,7 @@ class RaghavAnime : MainAPI() {
                     { if (aniId > 0) warmSource("AniNami", animeKey, isDub) { resolveAniNami(aniId, null, isDub)?.episodes } },
                     { warmSource("Xanime", animeKey, isDub) { resolveXanime(titles, targets, null, isDub, year)?.episodes } },
                     { warmSource("Senshi", animeKey, isDub) { resolveSenshi(titles, targets, null, isDub, year)?.episodes } },
+                    { warmSource("AniSuge", animeKey, isDub) { resolveAniSuge(titles, targets, null, isDub, year)?.episodes } },
                     { if (aniId > 0) RaghavAniChan().warm() }
                 ))
             }
@@ -782,33 +783,117 @@ class RaghavAnime : MainAPI() {
     private suspend fun resolveAniWaves(titles: List<String>, targets: List<String>, episode: Int?, isDub: Boolean): SourceCache.Match? {
         val aniWaves = AniWaves()
         val cleanedTargets = targets.map { cleanTitle(it) }
-        var failedSearches = 0
-        var fallback: Map<Int, String>? = null
-        for (t in titles) {
-            val searchResults = try { aniWaves.search(t) } catch (e: Throwable) {
-                failedSearches++
-                continue
-            }
-            val candidates = searchResults.filter { r -> cleanedTargets.contains(cleanTitle(r.name)) }
-            for (result in candidates) {
-                try {
-                    val loadResult = aniWaves.load(result.url) as? com.lagradost.cloudstream3.AnimeLoadResponse ?: continue
-                    val epList = if (isDub) loadResult.episodes?.get(DubStatus.Dubbed) else loadResult.episodes?.get(DubStatus.Subbed)
-                    val map = episodeMap(epList) ?: continue
-                    if (fallback == null) fallback = map
-                    if (episode == null || map.containsKey(episode)) {
-                        return SourceCache.Match(map, episode != null)
+
+        // both aliases are searched together so one slow call cannot stall the source
+        val searches = if (titles.isEmpty()) {
+            emptyList()
+        } else {
+            coroutineScope {
+                titles.map { t ->
+                    async {
+                        searchTitle(t) { q -> aniWaves.search(q) }
                     }
+                }.awaitAll()
+            }
+        }
+
+        data class Wave(val score: Int, val result: SearchResponse)
+        val candidates = mutableListOf<Wave>()
+        for (searchResults in searches) {
+            for (r in searchResults.orEmpty()) {
+                val score = titleMatchScore(cleanTitle(r.name), cleanedTargets)
+                if (score > 0) candidates.add(Wave(score, r))
+            }
+        }
+        val ordered = candidates
+            .distinctBy { it.result.url }
+            .sortedByDescending { it.score }
+
+        var fallback: Map<Int, String>? = null
+        var loadTried = 0
+        var openedAny = false
+        // exact names first, close names follow when no exact one carried the episode
+        for (tier in 2 downTo 1) {
+            for (cand in ordered) {
+                if (cand.score != tier) continue
+                loadTried++
+                val loadResult = try {
+                    aniWaves.load(cand.result.url) as? com.lagradost.cloudstream3.AnimeLoadResponse
                 } catch (e: Throwable) {
-                    continue
+                    if (e is CancellationException) throw e
+                    null
+                } ?: continue
+                openedAny = true
+                val epList = if (isDub) {
+                    loadResult.episodes?.get(DubStatus.Dubbed)?.takeIf { it.isNotEmpty() }
+                        ?: loadResult.episodes?.get(DubStatus.Subbed)
+                } else {
+                    loadResult.episodes?.get(DubStatus.Subbed)
+                }
+                val map = episodeMap(epList) ?: continue
+                if (fallback == null) fallback = map
+                if (episode == null || map.containsKey(episode)) {
+                    return SourceCache.Match(map, episode != null)
                 }
             }
         }
         if (fallback != null) return SourceCache.Match(fallback, false)
-        if (titles.isNotEmpty() && failedSearches == titles.size) {
+        if (loadTried > 0 && !openedAny) {
+            throw IllegalStateException("AniWaves is unreachable right now")
+        }
+        if (titles.isNotEmpty() && searches.all { it == null }) {
             throw IllegalStateException("AniWaves is unreachable right now")
         }
         return null
+    }
+
+    private fun titleMatchScore(cleaned: String, cleanedTargets: List<String>): Int {
+        if (cleaned.isBlank()) return 0
+        if (cleanedTargets.contains(cleaned)) return 2
+        if (cleaned.length >= 4 && cleanedTargets.any { tgt -> tgt.contains(cleaned) || cleaned.contains(tgt) }) return 1
+        return 0
+    }
+
+    // some sites cannot find "Title: Subtitle" or a long romaji, a shorter ask saves them
+    private fun searchFallbacks(title: String): List<String> {
+        val out = mutableListOf<String>()
+        val base = title.substringBefore(':').trim()
+        if (base.length >= 3 && !base.equals(title, ignoreCase = true)) out.add(base)
+        val words = title.split(' ').filter { it.isNotBlank() }
+        if (words.size > 4) out.add(words.take(4).joinToString(" "))
+        val first = words.firstOrNull()?.trim()?.trim { !it.isLetterOrDigit() } ?: ""
+        if (first.length >= 4 && !first.equals(title, ignoreCase = true) &&
+            out.none { it.equals(first, ignoreCase = true) }) out.add(first)
+        return out
+    }
+
+    private suspend fun searchTitle(
+        query: String,
+        doSearch: suspend (String) -> List<SearchResponse>
+    ): List<SearchResponse>? {
+        return try {
+            val direct = doSearch(query)
+            if (direct.isNotEmpty()) {
+                direct
+            } else {
+                var found = emptyList<SearchResponse>()
+                for (alt in searchFallbacks(query)) {
+                    try {
+                        val altResults = doSearch(alt)
+                        if (altResults.isNotEmpty()) {
+                            found = altResults
+                            break
+                        }
+                    } catch (e: Throwable) {
+                        if (e is CancellationException) throw e
+                    }
+                }
+                found
+            }
+        } catch (e: Throwable) {
+            if (e is CancellationException) throw e
+            null
+        }
     }
 
     private suspend fun findEpisodeMap(
@@ -828,23 +913,24 @@ class RaghavAnime : MainAPI() {
 
         data class Candidate(val combinedScore: Int, val titleScore: Int, val result: SearchResponse)
 
-        val allCandidates = mutableListOf<Candidate>()
-        var failedSearches = 0
-        for (t in searchTitles) {
-            val searchResults = try { doSearch(t) } catch (e: Throwable) {
-                failedSearches++
-                continue
+        // every alias is searched at once so a slow site does not stall the rest
+        val searches = if (searchTitles.isEmpty()) {
+            emptyList()
+        } else {
+            coroutineScope {
+                searchTitles.map { t ->
+                    async {
+                        searchTitle(t, doSearch)
+                    }
+                }.awaitAll()
             }
-            for (r in searchResults) {
+        }
+
+        val allCandidates = mutableListOf<Candidate>()
+        for (searchResults in searches) {
+            for (r in searchResults.orEmpty()) {
                 val c = cleanTitle(r.name)
-                if (c.isBlank()) continue
-                val titleScore = when {
-                    cleanedTargets.contains(c) -> 2
-                    c.length >= 6 && cleanedTargets.any { tgt ->
-                        (c.startsWith(tgt) || tgt.startsWith(c))
-                    } -> 1
-                    else -> 0
-                }
+                val titleScore = titleMatchScore(c, cleanedTargets)
                 if (titleScore == 0) continue
 
                 val candSeasonNum = extractSeasonNumber(r.name)
@@ -857,45 +943,48 @@ class RaghavAnime : MainAPI() {
             }
         }
 
-        allCandidates.sortByDescending { it.combinedScore }
+        val ordered = allCandidates
+            .distinctBy { it.result.url }
+            .sortedByDescending { it.combinedScore }
 
         var fallback: Map<Int, String>? = null
-
-        for (cand in allCandidates) {
-            if (cand.titleScore < 2) break
-            try {
-                val loadResult = doLoad(cand.result.url) ?: continue
+        var loadTried = 0
+        var openedAny = false
+        // exact names carry the episode, close names only step in when no exact
+        // one did, so a site that spells the title differently still loads
+        for (tier in 2 downTo 1) {
+            for (cand in ordered) {
+                if (cand.titleScore != tier) continue
+                if (tier == 1) {
+                    val candSeasonNum = extractSeasonNumber(cand.result.name)
+                    val candYear = extractYear(cand.result.name)
+                    if (targetSeasonNum != null && candSeasonNum != null && candSeasonNum != targetSeasonNum) continue
+                    if (targetSeasonNum == null && candSeasonNum != null && candSeasonNum > 1) continue
+                    if (year != null && candYear != null && Math.abs(candYear - year) > 1) continue
+                }
+                loadTried++
+                val loadResult = try {
+                    doLoad(cand.result.url)
+                } catch (e: Throwable) {
+                    if (e is CancellationException) throw e
+                    null
+                } ?: continue
+                openedAny = true
                 val map = episodeMap(loadResult.episodes?.get(epKey)) ?: continue
                 if (fallback == null) fallback = map
                 if (episode == null || map.containsKey(episode)) {
                     return SourceCache.Match(map, episode != null)
                 }
-            } catch (e: Throwable) {
-                if (e is CancellationException) throw e
-            }
-        }
-
-        for (cand in allCandidates) {
-            if (cand.titleScore == 2) continue
-            val candSeasonNum = extractSeasonNumber(cand.result.name)
-            val candYear = extractYear(cand.result.name)
-            if (targetSeasonNum != null && candSeasonNum != null && candSeasonNum != targetSeasonNum) continue
-            if (targetSeasonNum == null && candSeasonNum != null && candSeasonNum > 1) continue
-            if (year != null && candYear != null && Math.abs(candYear - year) > 1) continue
-            try {
-                val loadResult = doLoad(cand.result.url) ?: continue
-                val map = episodeMap(loadResult.episodes?.get(epKey)) ?: continue
-                if (fallback == null) fallback = map
-                if (episode == null || map.containsKey(episode)) {
-                    return SourceCache.Match(map, episode != null)
-                }
-            } catch (e: Throwable) {
-                if (e is CancellationException) throw e
             }
         }
 
         if (fallback != null) return SourceCache.Match(fallback, false)
-        if (searchTitles.isNotEmpty() && failedSearches == searchTitles.size) {
+        // nothing opened although matches existed: the site hiccuped, so let the
+        // caller retry instead of remembering the title as absent
+        if (loadTried > 0 && !openedAny) {
+            throw IllegalStateException("$sourceTag is unreachable right now")
+        }
+        if (searchTitles.isNotEmpty() && searches.all { it == null }) {
             throw IllegalStateException("$sourceTag is unreachable right now")
         }
         return null

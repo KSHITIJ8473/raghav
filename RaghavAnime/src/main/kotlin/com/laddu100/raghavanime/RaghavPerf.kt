@@ -65,9 +65,9 @@ object RaghavPerf {
     fun sourceConcurrency(): Int = userConcurrency() ?: 16
 
     fun prefetchConcurrency(): Int = when (profile()) {
-        DeviceProfile.LOW_END -> 2
-        DeviceProfile.MID_RANGE -> 3
-        DeviceProfile.HIGH_END -> 4
+        DeviceProfile.LOW_END -> 4
+        DeviceProfile.MID_RANGE -> 6
+        DeviceProfile.HIGH_END -> 8
     }
 
     suspend fun runLimitedAsync(concurrency: Int, tasks: List<suspend () -> Unit>) {

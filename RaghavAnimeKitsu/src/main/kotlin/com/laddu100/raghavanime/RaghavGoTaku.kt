@@ -9,6 +9,8 @@ import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.newExtractorLink
 import com.raghav.donation.DonationManager
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 
 class RaghavGoTaku : MainAPI() {
     override var mainUrl = "https://gotaku.to"
@@ -63,9 +65,13 @@ class RaghavGoTaku : MainAPI() {
         GoTakuApi.refreshDomain()
         mainUrl = GoTakuApi.site()
         val titleId = url.substringAfter("title/").substringBefore("?").takeIf { it.isNotBlank() } ?: return null
-        val detail = GoTakuApi.fetchTitleDetail(titleId) ?: return null
-        val title = detail.name ?: return null
-        val episodes = GoTakuApi.fetchEpisodes(titleId)
+        // the detail page and the episode list are separate calls, both go out together
+        val (detail, episodes) = coroutineScope {
+            val detailDeferred = async { GoTakuApi.fetchTitleDetail(titleId) }
+            val episodesDeferred = async { GoTakuApi.fetchEpisodes(titleId) }
+            detailDeferred.await() to episodesDeferred.await()
+        }
+        val title = detail?.name ?: return null
         if (episodes.isEmpty()) return null
 
         val poster = detail.poster_url

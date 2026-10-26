@@ -14,5 +14,5 @@ cloudstream {
         "AnimeMovie",
         "OVA"
     )
-    iconUrl = "https://gotaku.to/images/icons/logo.png"
+    iconUrl = "https://gotaku.to/images/icons/logo-white.png?v21"
 }

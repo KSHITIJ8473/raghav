@@ -17,5 +17,5 @@ cloudstream {
     status = 1
     tvTypes = listOf("Anime", "AnimeMovie")
     language = "en"
-    iconUrl = "https://www.google.com/s2/favicons?domain=anichan.net&sz=%size%"
+    iconUrl = "https://play-lh.googleusercontent.com/YxgDK6JP2h08FlpZs__vP2otL3HKp3IXfvb9jVUt0HgWy1V9xcWbIdkH8_o9Z6QQYnRVYPatjcPTcOIpeWtI"
 }

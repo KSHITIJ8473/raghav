@@ -20,5 +20,5 @@ cloudstream {
         "Live",
     )
 
-    iconUrl = "https://streamed.pk/favicon.png"
+    iconUrl = "https://i.ytimg.com/vi/qBCn0qRCRYE/mqdefault.jpg"
 }

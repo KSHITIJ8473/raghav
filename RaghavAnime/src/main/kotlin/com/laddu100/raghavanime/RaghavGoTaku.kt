@@ -184,8 +184,11 @@ class RaghavGoTaku : MainAPI() {
 
     private suspend fun resolveStream(embedUrl: String): ResolvedStream? {
         return try {
+            // the api now hands out full urls on its own download domain,
+            // older responses were site relative paths
+            val page = if (embedUrl.startsWith("http")) embedUrl else GoTakuApi.site() + embedUrl
             val html = app.get(
-                GoTakuApi.site() + embedUrl,
+                page,
                 headers = GoTakuApi.browserHeaders + mapOf("Referer" to "${GoTakuApi.site()}/")
             ).text
 

@@ -32,6 +32,7 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.widget.SwitchCompat
+import com.lagradost.api.Log
 import com.lagradost.cloudstream3.MainActivity
 
 object TorrentsSettings {
@@ -427,7 +428,9 @@ object TorrentsSettings {
             .setNegativeButton("Later") { _, _ ->
                 try {
                     MainActivity.reloadHomeEvent.invoke(true)
-                } catch (_: Throwable) {}
+                } catch (e: Throwable) {
+                    Log.d("TorrentsV1", "reload event failed: ${e.message}")
+                }
             }
             .show()
     }
@@ -443,7 +446,9 @@ object TorrentsSettings {
                 context.startActivity(restartIntent)
                 Runtime.getRuntime().exit(0)
             }
-        } catch (_: Throwable) {}
+        } catch (e: Throwable) {
+            Log.d("TorrentsV1", "restart failed: ${e.message}")
+        }
     }
 
     fun show(context: Context) {

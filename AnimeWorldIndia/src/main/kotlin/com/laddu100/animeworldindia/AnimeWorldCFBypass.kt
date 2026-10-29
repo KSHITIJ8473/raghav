@@ -28,6 +28,7 @@ import android.widget.ProgressBar
 import android.widget.TextView
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import com.lagradost.api.Log
 import com.lagradost.cloudstream3.CommonActivity
 import com.lagradost.cloudstream3.CloudStreamApp
 import com.lagradost.cloudstream3.app
@@ -73,7 +74,9 @@ internal object AnimeWorldCFStore {
             cachedUA = CloudStreamApp.getKey<String>(KEY_CF_UA)
             cachedHost = CloudStreamApp.getKey<String>(KEY_CF_HOST)
             cachedTimestamp = CloudStreamApp.getKey<String>(KEY_CF_TIMESTAMP)?.toLongOrNull() ?: 0L
-        } catch (_: Exception) {}
+        } catch (e: Exception) {
+            Log.d("AnimeWorld", "store load failed: ${e.message}")
+        }
     }
 
     fun getCookies(): String? {
@@ -99,7 +102,9 @@ internal object AnimeWorldCFStore {
             CloudStreamApp.setKey(KEY_CF_UA, userAgent)
             CloudStreamApp.setKey(KEY_CF_HOST, host)
             CloudStreamApp.setKey(KEY_CF_TIMESTAMP, cachedTimestamp.toString())
-        } catch (_: Exception) {}
+        } catch (e: Exception) {
+            Log.d("AnimeWorld", "store save failed: ${e.message}")
+        }
     }
 
     fun clear() {
@@ -112,7 +117,9 @@ internal object AnimeWorldCFStore {
             CloudStreamApp.setKey(KEY_CF_UA, "")
             CloudStreamApp.setKey(KEY_CF_HOST, "")
             CloudStreamApp.setKey(KEY_CF_TIMESTAMP, "")
-        } catch (_: Exception) {}
+        } catch (e: Exception) {
+            Log.d("AnimeWorld", "store clear failed: ${e.message}")
+        }
     }
 }
 
@@ -170,7 +177,9 @@ private class AnimeWorldCFDialog(
             if (cookieStr.contains("cf_clearance")) {
                 finishSuccess(cookieStr)
             }
-        } catch (_: Exception) {}
+        } catch (e: Exception) {
+            Log.d("AnimeWorld", "cookie check failed: ${e.message}")
+        }
     }
 
     private fun finishSuccess(cookieStr: String) {
@@ -181,8 +190,10 @@ private class AnimeWorldCFDialog(
         try {
             webView?.destroy()
             (webView?.getTag() as? Dialog)?.dismiss()
-        } catch (_: Exception) {}
-        try { onFinished?.invoke(true) } catch (_: Exception) {}
+        } catch (e: Exception) {
+            Log.d("AnimeWorld", "webview teardown failed: ${e.message}")
+        }
+        try { onFinished?.invoke(true) } catch (e: Exception) { Log.d("AnimeWorld", "finish callback failed: ${e.message}") }
     }
 
     private fun finishFailure() {
@@ -191,8 +202,10 @@ private class AnimeWorldCFDialog(
         try {
             webView?.destroy()
             dialog?.dismiss()
-        } catch (_: Exception) {}
-        try { onFinished?.invoke(false) } catch (_: Exception) {}
+        } catch (e: Exception) {
+            Log.d("AnimeWorld", "webview teardown failed: ${e.message}")
+        }
+        try { onFinished?.invoke(false) } catch (e: Exception) { Log.d("AnimeWorld", "finish callback failed: ${e.message}") }
     }
 
     private val cookiePollRunnable = object : Runnable {
@@ -326,8 +339,8 @@ private class AnimeWorldCFDialog(
             handler.removeCallbacksAndMessages(null)
             if (!resolved.get()) {
                 resolved.set(true)
-                try { webView?.destroy() } catch (_: Exception) {}
-                try { onFinished?.invoke(false) } catch (_: Exception) {}
+                try { webView?.destroy() } catch (e: Exception) { Log.d("AnimeWorld", "webview destroy failed: ${e.message}") }
+                try { onFinished?.invoke(false) } catch (e: Exception) { Log.d("AnimeWorld", "finish callback failed: ${e.message}") }
             }
         }
         dialog?.show()
@@ -364,7 +377,9 @@ private class AnimeWorldCFDialog(
         try {
             wv.dispatchTouchEvent(down)
             wv.dispatchTouchEvent(up)
-        } catch (_: Exception) {} finally {
+        } catch (e: Exception) {
+            Log.d("AnimeWorld", "touch dispatch failed: ${e.message}")
+        } finally {
             down.recycle()
             up.recycle()
         }
@@ -407,9 +422,11 @@ private class AnimeWorldCFDialog(
         handler.removeCallbacksAndMessages(null)
         try {
             webView?.apply { stopLoading(); destroy() }
-        } catch (_: Exception) {}
+        } catch (e: Exception) {
+            Log.d("AnimeWorld", "webview teardown failed: ${e.message}")
+        }
         webView = null
-        try { dialog?.dismiss() } catch (_: Exception) {}
+        try { dialog?.dismiss() } catch (e: Exception) { Log.d("AnimeWorld", "dialog dismiss failed: ${e.message}") }
         dialog = null
     }
 }

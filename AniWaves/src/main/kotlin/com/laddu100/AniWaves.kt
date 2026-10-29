@@ -1,5 +1,6 @@
 package com.laddu100
 
+import com.lagradost.api.Log
 import com.lagradost.cloudstream3.DubStatus
 import com.lagradost.cloudstream3.Episode
 import com.lagradost.cloudstream3.HomePageResponse
@@ -306,7 +307,9 @@ class AniWaves : MainAPI() {
                             foundAnySources = true
                         }
                     }
-                } catch (_: Exception) {}
+                } catch (e: Exception) {
+                    Log.d("AniWaves", "source load failed: ${e.message}")
+                }
             }
         }
 

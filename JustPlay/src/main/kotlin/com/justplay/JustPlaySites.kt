@@ -1,6 +1,7 @@
 package com.justplay
 
 import android.net.Uri
+import com.lagradost.api.Log
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import kotlinx.coroutines.Dispatchers
@@ -147,7 +148,9 @@ internal object DrivePages {
                     }
                 }
             }
-        } catch (_: Exception) {}
+        } catch (e: Exception) {
+            Log.d("JustPlay", "site emit failed: ${e.message}")
+        }
     }
 }
 
@@ -245,7 +248,9 @@ internal object HdHub4uSite {
                     emitResolved(href, el.text().trim(), domain, subtitleCallback, callback)
                 }
             }
-        } catch (_: Exception) {}
+        } catch (e: Exception) {
+            Log.d("JustPlay", "catalog emit failed: ${e.message}")
+        }
     }
 
     suspend fun invoke(
@@ -299,7 +304,9 @@ internal object HdHub4uSite {
                     }
                 }
             }
-        } catch (_: Exception) {}
+        } catch (e: Exception) {
+            Log.d("JustPlay", "post resolve failed: ${e.message}")
+        }
     }
 }
 
@@ -418,7 +425,9 @@ internal object FourKhdHubSite {
                     emitLinks(hrefs, doc.title(), domain, subtitleCallback, callback)
                 }
             }
-        } catch (_: Exception) {}
+        } catch (e: Exception) {
+            Log.d("JustPlay", "download emit failed: ${e.message}")
+        }
     }
 }
 
@@ -659,9 +668,13 @@ internal object Movies4uSite {
                             emitM4uLinks(href, label, res.episode, res.season, subtitleCallback, callback)
                         }
                     }
-                } catch (_: Exception) {}
+                } catch (e: Exception) {
+                    Log.d("JustPlay", "m4u links failed: ${e.message}")
+                }
             }
-        } catch (_: Exception) {}
+        } catch (e: Exception) {
+            Log.d("JustPlay", "m4u resolve failed: ${e.message}")
+        }
     }
 }
 
@@ -751,7 +764,9 @@ internal object TmfSite {
                     }
                 }
             }
-        } catch (_: Exception) {}
+        } catch (e: Exception) {
+            Log.d("JustPlay", "tmf emit failed: ${e.message}")
+        }
     }
 }
 
@@ -1080,11 +1095,15 @@ internal object MultimoviesSite {
                     async(Dispatchers.IO) {
                         try {
                             resolveServer(server, ids, isTv, season, episode, title, year, subCb, linkCb)
-                        } catch (_: Exception) {}
+                        } catch (e: Exception) {
+                            Log.d("JustPlay", "server resolve failed: ${e.message}")
+                        }
                     }
                 }
             }
-        } catch (_: Exception) {}
+        } catch (e: Exception) {
+            Log.d("JustPlay", "server sweep failed: ${e.message}")
+        }
     }
 
     private fun pickCard(cards: List<MmCard>, title: String, year: Int?): MmCard? {
@@ -1128,6 +1147,8 @@ internal object MultimoviesSite {
                 val href = episodeHref(domain, target.url, res.season, res.episode) ?: return
                 resolvePost(href, subtitleCallback, callback)
             }
-        } catch (_: Exception) {}
+        } catch (e: Exception) {
+            Log.d("JustPlay", "episode resolve failed: ${e.message}")
+        }
     }
 }

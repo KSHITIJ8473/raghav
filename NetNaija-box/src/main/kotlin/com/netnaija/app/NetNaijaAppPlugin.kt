@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.ContextWrapper
 import android.content.SharedPreferences
 import androidx.appcompat.app.AppCompatActivity
+import com.lagradost.api.Log
 import com.lagradost.cloudstream3.plugins.CloudstreamPlugin
 import com.lagradost.cloudstream3.plugins.Plugin
 import com.netnaija.app.settings.NetNaijaAppSettingsFragment
@@ -24,6 +25,7 @@ class NetNaijaAppPlugin : Plugin() {
                 } catch (e: Throwable) {
                     // a dead activity rejects the transaction, settings stay
                     // closed until the next open
+                    Log.d("NetNaijaApp", "settings show rejected: ${e.message}")
                 }
             }
         }

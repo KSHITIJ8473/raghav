@@ -1,5 +1,6 @@
 package com.gotaku
 
+import com.lagradost.api.Log
 import com.lagradost.cloudstream3.app
 import kotlinx.coroutines.runBlocking
 import java.io.BufferedReader
@@ -73,10 +74,14 @@ object GoTakuProxy {
                     try {
                         val conn = socket.accept()
                         pool.execute { handleRequest(conn) }
-                    } catch (_: Exception) {}
+                    } catch (e: Exception) {
+                        Log.d("GoTaku", "accept failed: ${e.message}")
+                    }
                 }
             }.start()
-        } catch (_: Exception) {}
+        } catch (e: Exception) {
+            Log.d("GoTaku", "server start failed: ${e.message}")
+        }
         return serverPort
     }
 
@@ -171,8 +176,10 @@ object GoTakuProxy {
                 }
                 else -> send404(conn)
             }
-        } catch (_: Exception) {} finally {
-            try { conn.close() } catch (_: Exception) {}
+        } catch (e: Exception) {
+            Log.d("GoTaku", "request failed: ${e.message}")
+        } finally {
+            try { conn.close() } catch (e: Exception) { Log.d("GoTaku", "close failed: ${e.message}") }
         }
     }
 
@@ -366,7 +373,9 @@ object GoTakuProxy {
                         return plain
                     }
                 }
-            } catch (_: Exception) {}
+            } catch (e: Exception) {
+                Log.d("GoTaku", "playlist decrypt failed: ${e.message}")
+            }
             refreshSession(session)
             url = rewriteWithToken(target, session.token, session.expiresAt)
         }
@@ -421,7 +430,9 @@ object GoTakuProxy {
             out.write(head.toByteArray(Charsets.ISO_8859_1))
             out.write(bytes)
             out.flush()
-        } catch (_: Exception) {}
+        } catch (e: Exception) {
+            Log.d("GoTaku", "send failed: ${e.message}")
+        }
     }
 
     private fun sendStatus(conn: Socket, code: Int) {
@@ -429,7 +440,9 @@ object GoTakuProxy {
             val out: OutputStream = conn.getOutputStream()
             out.write("HTTP/1.1 $code Status\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".toByteArray(Charsets.ISO_8859_1))
             out.flush()
-        } catch (_: Exception) {}
+        } catch (e: Exception) {
+            Log.d("GoTaku", "send failed: ${e.message}")
+        }
     }
 
     private fun send404(conn: Socket) {

@@ -2,6 +2,7 @@ package com.justplay
 
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.fasterxml.jackson.databind.ObjectMapper
+import com.lagradost.api.Log
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.base64Decode
@@ -89,7 +90,9 @@ class PlayHubCloud : ExtractorApi() {
                         timeout = 20L
                     ).document
                     if (emitGeneratedServers(genDoc, labelExtras, quality, subtitleCallback, callback)) return true
-                } catch (_: Exception) {}
+                } catch (e: Exception) {
+                    Log.d("JustPlay", "generated page failed: ${e.message}")
+                }
             }
 
             val inner = when {
@@ -104,7 +107,9 @@ class PlayHubCloud : ExtractorApi() {
                         timeout = 20L
                     ).document
                     if (emitHubServers(innerDoc, base, inner, subtitleCallback, callback)) return true
-                } catch (_: Exception) {}
+                } catch (e: Exception) {
+                    Log.d("JustPlay", "inner hub failed: ${e.message}")
+                }
             }
 
             val found = mutableListOf<Pair<String, String>>()
@@ -131,7 +136,9 @@ class PlayHubCloud : ExtractorApi() {
                             if (dlink.isNotBlank()) {
                                 found.add("BuzzServer [$labelExtras]" to PlayNet.absolute(dlink, PlayNet.getBaseUrl(abs)))
                             }
-                        } catch (_: Exception) {}
+                        } catch (e: Exception) {
+                            Log.d("JustPlay", "buzz server failed: ${e.message}")
+                        }
                     }
                     label.contains("10gbps") -> {
                         try {
@@ -142,7 +149,9 @@ class PlayHubCloud : ExtractorApi() {
                                     found.add("10Gbps [Download] [$labelExtras]" to direct)
                                 }
                             }
-                        } catch (_: Exception) {}
+                        } catch (e: Exception) {
+                            Log.d("JustPlay", "10gbps failed: ${e.message}")
+                        }
                     }
                     label.contains("instant download") || label.contains("instant dl") -> {
                         try {
@@ -158,7 +167,9 @@ class PlayHubCloud : ExtractorApi() {
                             if (direct != null) {
                                 found.add("Instant Download [$labelExtras]" to direct)
                             }
-                        } catch (_: Exception) {}
+                        } catch (e: Exception) {
+                            Log.d("JustPlay", "instant download failed: ${e.message}")
+                        }
                     }
                     label.contains("pixeldra") || label.contains("pixelserver") || label.contains("pixel server") || link.contains("pixeldra") -> {
                         pixelFileUrl(doc.toString(), link)?.let { found.add("Pixeldrain [$labelExtras]" to it) }
@@ -173,12 +184,16 @@ class PlayHubCloud : ExtractorApi() {
                         try {
                             PlayGofile().getUrl(abs, base, subtitleCallback, callback)
                             emitted = true
-                        } catch (_: Exception) {}
+                        } catch (e: Exception) {
+                            Log.d("JustPlay", "gofile failed: ${e.message}")
+                        }
                     }
                     abs.startsWith("http") -> {
                         try {
                             emitted = loadExtractor(abs, base, subtitleCallback, callback) || emitted
-                        } catch (_: Exception) {}
+                        } catch (e: Exception) {
+                            Log.d("JustPlay", "extractor failed: ${e.message}")
+                        }
                     }
                 }
             }
@@ -241,7 +256,9 @@ class PlayHubCloud : ExtractorApi() {
                                     found.add("10Gbps [Download] [$labelExtras]" to direct)
                                 }
                             }
-                        } catch (_: Exception) {}
+                        } catch (e: Exception) {
+                            Log.d("JustPlay", "10gbps failed: ${e.message}")
+                        }
                     }
                     text.contains("instant download") || text.contains("instant dl") -> {
                         try {
@@ -257,7 +274,9 @@ class PlayHubCloud : ExtractorApi() {
                             if (direct != null) {
                                 found.add("Instant Download [$labelExtras]" to direct)
                             }
-                        } catch (_: Exception) {}
+                        } catch (e: Exception) {
+                            Log.d("JustPlay", "instant download failed: ${e.message}")
+                        }
                     }
                     text.contains("download file") || text.contains("download now") || text.contains("download] ") -> {
                         found.add("Download File [$labelExtras]" to href)
@@ -266,7 +285,9 @@ class PlayHubCloud : ExtractorApi() {
                         try {
                             PlayGofile().getUrl(href, "", subtitleCallback, callback)
                             emitted = true
-                        } catch (_: Exception) {}
+                        } catch (e: Exception) {
+                            Log.d("JustPlay", "gofile failed: ${e.message}")
+                        }
                     }
                     href.contains(".workers.dev/") -> {
                         found.add("HubCloud Mirror [$labelExtras]" to href)
@@ -337,7 +358,9 @@ class PlayVCloud : ExtractorApi() {
                     }
                 )
             }
-        } catch (_: Exception) {}
+        } catch (e: Exception) {
+            Log.d("JustPlay", "link emit failed: ${e.message}")
+        }
     }
 
     private fun extractVCloudLink(doc: Document): String? {
@@ -404,7 +427,9 @@ class PlayVegaDrive : ExtractorApi() {
             if (telegram != null && telegram.contains("tgfiles")) {
                 callback(newExtractorLink(name, "V-Drive Telegram", telegram, ExtractorLinkType.VIDEO))
             }
-        } catch (_: Exception) {}
+        } catch (e: Exception) {
+            Log.d("JustPlay", "telegram failed: ${e.message}")
+        }
     }
 
     private suspend fun providerLink(base: String, token: String, provider: String): String? {
@@ -475,7 +500,9 @@ class PlayFilePress : ExtractorApi() {
                     }
                 }
             }
-        } catch (_: Exception) {}
+        } catch (e: Exception) {
+            Log.d("JustPlay", "filepress failed: ${e.message}")
+        }
     }
 
     private fun isArchiveName(name: String): Boolean =
@@ -702,7 +729,9 @@ class PlayHblinks : ExtractorApi() {
                 if (!href.startsWith("http") || !seen.add(href)) continue
                 loadExtractor(href, url, subtitleCallback, callback)
             }
-        } catch (_: Exception) {}
+        } catch (e: Exception) {
+            Log.d("JustPlay", "extractor sweep failed: ${e.message}")
+        }
     }
 }
 
@@ -732,7 +761,9 @@ class PlayHubdrive : ExtractorApi() {
                     loadExtractor(href, url, subtitleCallback, callback)
                 }
             }
-        } catch (_: Exception) {}
+        } catch (e: Exception) {
+            Log.d("JustPlay", "hubcloud failed: ${e.message}")
+        }
     }
 }
 
@@ -799,7 +830,9 @@ class PlayGofile : ExtractorApi() {
                     }
                 )
             }
-        } catch (_: Exception) {}
+        } catch (e: Exception) {
+            Log.d("JustPlay", "link emit failed: ${e.message}")
+        }
     }
 }
 
@@ -914,7 +947,9 @@ open class PlayGDFlix : ExtractorApi() {
                                 else -> loc
                             }?.takeIf { it.startsWith("http") }
                             if (direct != null) emit(direct, "Instant Download")
-                        } catch (_: Exception) {}
+                        } catch (e: Exception) {
+                            Log.d("JustPlay", "instant download failed: ${e.message}")
+                        }
                     }
                     text.contains("10GBPS", true) -> {
                         try {
@@ -923,7 +958,9 @@ open class PlayGDFlix : ExtractorApi() {
                                 val direct = if (target.contains("link=")) target.substringAfter("link=") else target
                                 emit(direct, "10Gbps")
                             }
-                        } catch (_: Exception) {}
+                        } catch (e: Exception) {
+                            Log.d("JustPlay", "10gbps failed: ${e.message}")
+                        }
                     }
                     text.contains("DRIVEBOT", true) || link.contains("drivebot") -> {
                         driveBot(abs, fileName, sizeText, quality, callback)
@@ -938,7 +975,9 @@ open class PlayGDFlix : ExtractorApi() {
                             ).document
                             cloudDoc.selectFirst("div.card-body a")?.attr("href")?.trim()
                                 ?.takeIf { it.startsWith("http") }?.let { emit(it, "Cloud") }
-                        } catch (_: Exception) {}
+                        } catch (e: Exception) {
+                            Log.d("JustPlay", "cloud failed: ${e.message}")
+                        }
                     }
                     text.contains("DIRECT DL", true) || text.contains("DIRECT SERVER", true) ->
                         emit(abs, "Direct")
@@ -953,7 +992,9 @@ open class PlayGDFlix : ExtractorApi() {
                         PlayGofile().getUrl(abs, res.url, subtitleCallback, callback)
                 }
             }
-        } catch (_: Exception) {}
+        } catch (e: Exception) {
+            Log.d("JustPlay", "link sweep failed: ${e.message}")
+        }
     }
 
     private suspend fun driveBot(
@@ -994,7 +1035,9 @@ open class PlayGDFlix : ExtractorApi() {
                     ) { this.quality = quality }
                 )
             }
-        } catch (_: Exception) {}
+        } catch (e: Exception) {
+            Log.d("JustPlay", "link emit failed: ${e.message}")
+        }
     }
 }
 
@@ -1151,7 +1194,9 @@ internal object PlayNxsha {
                         ?: sub.language?.takeIf { it.isNotBlank() } ?: "English"
                     subtitleCallback(newSubtitleFile(name, uri) {})
                 }
-            } catch (_: Exception) {}
+            } catch (e: Exception) {
+                Log.d("JustPlay", "subtitle emit failed: ${e.message}")
+            }
             any
         } catch (_: Exception) {
             false
@@ -1252,7 +1297,9 @@ internal object PlayVidout {
                     this.headers = mapOf("Referer" to REFERER)
                 })
             }
-        } catch (_: Exception) {}
+        } catch (e: Exception) {
+            Log.d("JustPlay", "subtitle emit failed: ${e.message}")
+        }
     }
 
     private suspend fun loadGithubSubtitles(
@@ -1272,6 +1319,8 @@ internal object PlayVidout {
             for (m in Regex(""""([a-z]{2})"\s*:\s*"(https?[^"]+)"""").findAll(body)) {
                 subtitleCallback(newSubtitleFile(m.groupValues[1].uppercase(), PlayNet.deEsc(m.groupValues[2])) {})
             }
-        } catch (_: Exception) {}
+        } catch (e: Exception) {
+            Log.d("JustPlay", "subtitle emit failed: ${e.message}")
+        }
     }
 }

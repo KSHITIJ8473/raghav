@@ -12,6 +12,7 @@ import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties
+import com.lagradost.api.Log
 import com.lagradost.cloudstream3.HomePageList
 import com.lagradost.cloudstream3.HomePageResponse
 import com.lagradost.cloudstream3.LoadResponse
@@ -521,7 +522,8 @@ object LiveSports {
                 } else {
                     emitPlainLink(serverName, resolved, headers, callback)
                 }
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                Log.d("JustPlay", "stream emit failed: ${e.message}")
             }
         }
         return true
@@ -604,7 +606,8 @@ object LiveSports {
                     resumed = true
                     try {
                         continuation.resume(result)
-                    } catch (_: Exception) {
+                    } catch (e: Exception) {
+                        Log.d("JustPlay", "resume dropped: ${e.message}")
                     }
                 }
 
@@ -630,7 +633,8 @@ object LiveSports {
                                 captured = true
                                 try {
                                     webView.destroy()
-                                } catch (_: Exception) {
+                                } catch (e: Exception) {
+                                    Log.d("JustPlay", "webview destroy failed: ${e.message}")
                                 }
                                 finishOnce(url)
                             }
@@ -650,7 +654,8 @@ object LiveSports {
                             Handler(Looper.getMainLooper()).post {
                                 try {
                                     webView.destroy()
-                                } catch (_: Exception) {
+                                } catch (e: Exception) {
+                                    Log.d("JustPlay", "webview destroy failed: ${e.message}")
                                 }
                                 finishOnce(requestUrl)
                             }
@@ -670,14 +675,16 @@ object LiveSports {
                                         "window.StreamBridge.onStreamUrlFound(playbackURL);}})();",
                                     null
                                 )
-                            } catch (_: Exception) {
+                            } catch (e: Exception) {
+                                Log.d("JustPlay", "bridge eval failed: ${e.message}")
                             }
                         }, 500)
                         Handler(Looper.getMainLooper()).postDelayed({
                             if (!captured) {
                                 try {
                                     webView.destroy()
-                                } catch (_: Exception) {
+                                } catch (e: Exception) {
+                                    Log.d("JustPlay", "webview destroy failed: ${e.message}")
                                 }
                                 finishOnce(null)
                             }
@@ -693,7 +700,8 @@ object LiveSports {
                     if (!captured) {
                         try {
                             webView.destroy()
-                        } catch (_: Exception) {
+                        } catch (e: Exception) {
+                            Log.d("JustPlay", "webview destroy failed: ${e.message}")
                         }
                         finishOnce(null)
                     }

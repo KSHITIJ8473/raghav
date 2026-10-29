@@ -1,5 +1,6 @@
 package com.laddu100
 
+import com.lagradost.api.Log
 import com.lagradost.cloudstream3.DubStatus
 import com.lagradost.cloudstream3.Episode
 import com.lagradost.cloudstream3.HomePageResponse
@@ -293,7 +294,9 @@ class AniPMProvider : MainAPI() {
             subtitleCallback.invoke(newSubtitleFile(label, url) {
                 this.headers = headers
             })
-        } catch (_: Exception) {}
+        } catch (e: Exception) {
+            Log.d("AniPM", "subtitle emit failed: ${e.message}")
+        }
     }
 
     private suspend fun emitSettlar(

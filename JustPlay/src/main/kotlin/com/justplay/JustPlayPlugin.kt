@@ -1,6 +1,7 @@
 package com.justplay
 
 import android.content.Context
+import com.lagradost.api.Log
 import com.lagradost.cloudstream3.plugins.CloudstreamPlugin
 import com.lagradost.cloudstream3.plugins.Plugin
 
@@ -24,7 +25,9 @@ class JustPlayPlugin : Plugin() {
         openSettings = { ctx ->
             try {
                 JustPlaySettings.show(ctx)
-            } catch (_: Exception) {}
+            } catch (e: Exception) {
+                Log.d("JustPlay", "settings open failed: ${e.message}")
+            }
         }
     }
 }

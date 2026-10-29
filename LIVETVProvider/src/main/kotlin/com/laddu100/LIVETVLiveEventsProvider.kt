@@ -9,6 +9,7 @@ import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import com.lagradost.api.Log
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.AppUtils.toJson
@@ -461,7 +462,8 @@ class LIVETVLiveEventsProvider(
                         )
                     }
                 }
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                Log.d("LIVETV", "live event links failed: ${e.message}")
             }
         }
 
@@ -515,7 +517,8 @@ class LIVETVLiveEventsProvider(
                                 Handler(Looper.getMainLooper()).post {
                                     try {
                                         webView.destroy()
-                                    } catch (_: Exception) {
+                                    } catch (e: Exception) {
+                                        Log.d("LIVETV", "webview destroy failed: ${e.message}")
                                     }
                                     continuation.resume(url)
                                 }
@@ -538,7 +541,8 @@ class LIVETVLiveEventsProvider(
                                     Handler(Looper.getMainLooper()).post {
                                         try {
                                             webView.destroy()
-                                        } catch (_: Exception) {
+                                        } catch (e: Exception) {
+                                            Log.d("LIVETV", "webview destroy failed: ${e.message}")
                                         }
                                         continuation.resume(requestUrl)
                                     }
@@ -561,7 +565,8 @@ class LIVETVLiveEventsProvider(
                                             })();
                                         """.trimIndent()
                                         webView.evaluateJavascript(jsCode, null)
-                                    } catch (_: Exception) {
+                                    } catch (e: Exception) {
+                                        Log.d("LIVETV", "bridge eval failed: ${e.message}")
                                     }
                                 }, 500)
                             }
@@ -571,7 +576,8 @@ class LIVETVLiveEventsProvider(
                                     if (!urlCaptured) {
                                         try {
                                             webView.destroy()
-                                        } catch (_: Exception) {
+                                        } catch (e: Exception) {
+                                            Log.d("LIVETV", "webview destroy failed: ${e.message}")
                                         }
                                         continuation.resume(null)
                                     }
@@ -587,11 +593,13 @@ class LIVETVLiveEventsProvider(
                         if (!urlCaptured && capturedUrl == null) {
                             try {
                                 webView.destroy()
-                            } catch (_: Exception) {
+                            } catch (e: Exception) {
+                                Log.d("LIVETV", "webview destroy failed: ${e.message}")
                             }
                             try {
                                 continuation.resume(null)
-                            } catch (_: Exception) {
+                            } catch (e: Exception) {
+                                Log.d("LIVETV", "resume dropped: ${e.message}")
                             }
                         }
                     }, 30000)
@@ -627,7 +635,8 @@ class LIVETVLiveEventsProvider(
                         }
                     }
                 }
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                Log.d("LIVETV", "events decrypt failed: ${e.message}")
             }
             null
         }

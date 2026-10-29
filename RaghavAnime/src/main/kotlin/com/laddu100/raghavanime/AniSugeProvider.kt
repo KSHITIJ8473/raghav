@@ -2,6 +2,7 @@ package com.laddu100.raghavanime
 
 import android.util.Base64
 import com.fasterxml.jackson.annotation.JsonProperty
+import com.lagradost.api.Log
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
@@ -414,7 +415,9 @@ class AniSugeProvider : MainAPI() {
                     ).text
                     val serverInfoJson = parseJson<ServerInfoResponse>(serverInfoText)
                     embedUrl = serverInfoJson.result?.url
-                } catch (_: Exception) {}
+                } catch (e: Exception) {
+                    Log.d("RaghavAniSuge", "server info unavailable: ${e.message}")
+                }
                 if (embedUrl.isNullOrBlank()) embedUrl = streamUrl
 
                 try {

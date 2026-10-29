@@ -1,5 +1,6 @@
 package com.laddu100.raghavanime
 
+import com.lagradost.api.Log
 import com.lagradost.cloudstream3.CommonActivity.activity
 import android.content.Context
 import android.app.AlertDialog
@@ -605,7 +606,7 @@ class RaghavAnime : MainAPI() {
         val isDub = linkData.isDub
 
         if (aniId > 0 && RaghavAnimeFeatures.isEnabled("watch_time")) {
-            try { RaghavAnimeFeatures.recordWatchTime(aniId, title, null, 24 * 60 * 1000L) } catch (_: Exception) {}
+            try { RaghavAnimeFeatures.recordWatchTime(aniId, title, null, 24 * 60 * 1000L) } catch (e: Exception) { Log.d("RaghavAnime", "watch time record failed: ${e.message}") }
         }
 
         val animeKey = (linkData.kitsuId.takeIf { it > 0 } ?: aniId).toString()
@@ -863,7 +864,9 @@ class RaghavAnime : MainAPI() {
             SourceCache.warm(provider, animeKey, isDub, resolve)
         } catch (e: CancellationException) {
             throw e
-        } catch (_: Exception) {}
+        } catch (e: Exception) {
+            Log.d("RaghavAnime", "source warm failed: ${e.message}")
+        }
     }
 
     private fun prefetchSources(animeKey: Int, aniId: Int, title: String, jpTitle: String?, year: Int?) {
@@ -876,7 +879,7 @@ class RaghavAnime : MainAPI() {
         prefetchJob = prefetchScope.launch {
             delay(750)
             launch {
-                try { RaghavSenshiVhost.warmup() } catch (e: CancellationException) { throw e } catch (_: Exception) {}
+                try { RaghavSenshiVhost.warmup() } catch (e: CancellationException) { throw e } catch (e: Exception) { Log.d("RaghavAnime", "warmup failed: ${e.message}") }
             }
             for (isDub in listOf(false, true)) {
                 if (!isActive) return@launch

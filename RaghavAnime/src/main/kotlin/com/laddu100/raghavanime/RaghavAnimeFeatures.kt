@@ -1,5 +1,6 @@
 package com.laddu100.raghavanime
 
+import com.lagradost.api.Log
 import com.lagradost.cloudstream3.CloudStreamApp.Companion.getKey
 import com.lagradost.cloudstream3.CloudStreamApp.Companion.setKey
 import com.lagradost.cloudstream3.app
@@ -48,7 +49,9 @@ object RaghavAnimeFeatures {
             setKey(PREFIX + "watch_history", list.take(100).toJson())
             setKey(PREFIX + "rec_reset", false)
             invalidateRecommendationsCache()
-        } catch (_: Exception) {}
+        } catch (e: Exception) {
+            Log.d("RaghavAnime", "watch history save failed: ${e.message}")
+        }
     }
 
     fun getWatchHistory(): List<WatchEntry> = try {
@@ -69,7 +72,7 @@ object RaghavAnimeFeatures {
     fun getAnimeWatchedCount(): Int = getWatchHistory().size
 
     fun resetWatchHistory() {
-        try { setKey(PREFIX + "watch_history", emptyList<WatchEntry>().toJson()) } catch (_: Exception) {}
+        try { setKey(PREFIX + "watch_history", emptyList<WatchEntry>().toJson()) } catch (e: Exception) { Log.d("RaghavAnime", "watch history clear failed: ${e.message}") }
         invalidateRecommendationsCache()
     }
 
@@ -118,7 +121,7 @@ object RaghavAnimeFeatures {
     suspend fun regenerateRecommendations(): List<RecommendationEntry> {
         val history = getWatchHistory()
         if (history.isEmpty()) {
-            try { setKey(PREFIX + "rec_cache", emptyList<RecommendationEntry>().toJson()) } catch (_: Exception) {}
+            try { setKey(PREFIX + "rec_cache", emptyList<RecommendationEntry>().toJson()) } catch (e: Exception) { Log.d("RaghavAnime", "rec cache clear failed: ${e.message}") }
             return emptyList()
         }
 
@@ -140,7 +143,7 @@ object RaghavAnimeFeatures {
             .sortedByDescending { it.score ?: 0 }
             .take(20)
 
-        try { setKey(PREFIX + "rec_cache", result.toJson()) } catch (_: Exception) {}
+        try { setKey(PREFIX + "rec_cache", result.toJson()) } catch (e: Exception) { Log.d("RaghavAnime", "rec cache save failed: ${e.message}") }
         return result
     }
 
@@ -162,7 +165,7 @@ object RaghavAnimeFeatures {
     } catch (_: Exception) { emptyList() }
 
     fun invalidateRecommendationsCache() {
-        try { setKey(PREFIX + "rec_cache", emptyList<RecommendationEntry>().toJson()) } catch (_: Exception) {}
+        try { setKey(PREFIX + "rec_cache", emptyList<RecommendationEntry>().toJson()) } catch (e: Exception) { Log.d("RaghavAnime", "rec cache clear failed: ${e.message}") }
     }
 
     private suspend fun anilistQuery(query: String, variables: Map<String, Any?>): String {

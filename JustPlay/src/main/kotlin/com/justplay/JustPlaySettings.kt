@@ -30,6 +30,7 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.widget.SwitchCompat
+import com.lagradost.api.Log
 import com.lagradost.cloudstream3.CloudStreamApp
 import com.lagradost.cloudstream3.MainActivity
 
@@ -400,7 +401,9 @@ object JustPlaySettings {
             .setNegativeButton("Later") { _, _ ->
                 try {
                     MainActivity.reloadHomeEvent.invoke(true)
-                } catch (_: Throwable) {}
+                } catch (e: Throwable) {
+                    Log.d("JustPlay", "reload event failed: ${e.message}")
+                }
             }
             .show()
     }
@@ -564,7 +567,9 @@ object JustPlaySettings {
                             "JUSTPLAY_SITE_${site.id}",
                             switches[site.id]?.isChecked ?: true
                         )
-                    } catch (_: Exception) {}
+                    } catch (e: Exception) {
+                        Log.d("JustPlay", "site switch save failed: ${e.message}")
+                    }
                 }
                 confirmRestart(ctx, "Sources saved. Restart CloudStream now to apply them?")
             })
@@ -852,6 +857,8 @@ object JustPlaySettings {
                 context.startActivity(restartIntent)
                 Runtime.getRuntime().exit(0)
             }
-        } catch (_: Throwable) {}
+        } catch (e: Throwable) {
+            Log.d("JustPlay", "restart failed: ${e.message}")
+        }
     }
 }

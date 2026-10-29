@@ -12,6 +12,7 @@ import android.widget.ImageView
 import android.widget.TextView
 import androidx.appcompat.app.AlertDialog
 import androidx.fragment.app.DialogFragment
+import com.lagradost.api.Log
 import com.netnaija.app.NetNaijaApp
 import com.netnaija.app.NetNaijaAppPlugin
 import com.netnaija.app.NetNaijaAppSources
@@ -147,6 +148,8 @@ class NetNaijaAppSettingsFragment(
                 context.startActivity(restartIntent)
                 Runtime.getRuntime().exit(0)
             }
-        } catch (_: Exception) {}
+        } catch (e: Exception) {
+            Log.d("NetNaijaApp", "restart failed: ${e.message}")
+        }
     }
 }

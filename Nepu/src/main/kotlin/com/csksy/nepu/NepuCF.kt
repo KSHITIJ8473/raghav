@@ -432,7 +432,9 @@ private class NepuSolverDialog(
                         if (value.isNotEmpty()) map[name] = value
                     }
                 }
-            } catch (_: Exception) {}
+            } catch (e: Exception) {
+                Log.e(TAG, "cookie merge: ${e.message}")
+            }
         }
         return map.entries.joinToString("; ") { "${it.key}=${it.value}" }
     }
@@ -458,18 +460,18 @@ private class NepuSolverDialog(
         handler.removeCallbacksAndMessages(null)
         val ua = webView?.settings?.userAgentString ?: DEFAULT_UA
         NepuSession.save(mergeCookieStrings(NepuSession.cookies() ?: "", cookieString), ua)
-        try { webView?.destroy() } catch (_: Exception) {}
-        try { dialog?.dismiss() } catch (_: Exception) {}
-        try { onFinished(true) } catch (_: Exception) {}
+        try { webView?.destroy() } catch (e: Exception) { Log.e(TAG, "destroy: ${e.message}") }
+        try { dialog?.dismiss() } catch (e: Exception) { Log.e(TAG, "dismiss: ${e.message}") }
+        try { onFinished(true) } catch (e: Exception) { Log.e(TAG, "finish callback: ${e.message}") }
     }
 
     private fun finishCancelled() {
         if (!resolved.compareAndSet(false, true)) return
         lastSolverFailureAt = System.currentTimeMillis()
         handler.removeCallbacksAndMessages(null)
-        try { webView?.destroy() } catch (_: Exception) {}
-        try { dialog?.dismiss() } catch (_: Exception) {}
-        try { onFinished(false) } catch (_: Exception) {}
+        try { webView?.destroy() } catch (e: Exception) { Log.e(TAG, "destroy: ${e.message}") }
+        try { dialog?.dismiss() } catch (e: Exception) { Log.e(TAG, "dismiss: ${e.message}") }
+        try { onFinished(false) } catch (e: Exception) { Log.e(TAG, "finish callback: ${e.message}") }
     }
 
     private val pollRunnable = object : Runnable {
@@ -578,7 +580,7 @@ private class NepuSolverDialog(
 
         CookieManager.getInstance().apply {
             setAcceptCookie(true)
-            try { setAcceptThirdPartyCookies(webView, true) } catch (_: Exception) {}
+            try { setAcceptThirdPartyCookies(webView, true) } catch (e: Exception) { Log.e(TAG, "third party cookies: ${e.message}") }
             flush()
         }
         // let the async cookie wipe land before the challenge page loads
@@ -688,9 +690,9 @@ private class NepuSolverDialog(
 
     fun dismiss() {
         handler.removeCallbacksAndMessages(null)
-        try { webView?.apply { stopLoading(); destroy() } } catch (_: Exception) {}
+        try { webView?.apply { stopLoading(); destroy() } } catch (e: Exception) { Log.e(TAG, "destroy: ${e.message}") }
         webView = null
-        try { dialog?.dismiss() } catch (_: Exception) {}
+        try { dialog?.dismiss() } catch (e: Exception) { Log.e(TAG, "dismiss: ${e.message}") }
         dialog = null
     }
 }

@@ -1,5 +1,6 @@
 package com.vegamovies
 
+import com.lagradost.api.Log
 import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.base64Decode
 import com.lagradost.cloudstream3.network.CloudflareKiller
@@ -42,7 +43,8 @@ internal object VegaNet {
         repeat(attempts) { i ->
             try {
                 block()?.let { return it }
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                Log.d("VegaMovies", "retry failed: ${e.message}")
             }
             if (i < attempts - 1) delay(gapMs)
         }
@@ -89,7 +91,8 @@ internal object VegaNet {
             val killer = killerFor(url)
             try {
                 killer.savedCookies.remove(URI(url).host)
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                Log.d("VegaMovies", "cookie clear failed: ${e.message}")
             }
             val solved = try {
                 app.get(url, headers = refererHeaders, interceptor = killer, timeout = 60L)

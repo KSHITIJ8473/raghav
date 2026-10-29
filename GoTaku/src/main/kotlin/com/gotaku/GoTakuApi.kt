@@ -1,6 +1,7 @@
 package com.gotaku
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties
+import com.lagradost.api.Log
 import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import kotlinx.coroutines.delay
@@ -53,7 +54,9 @@ object GoTakuApi {
                 if (response.code != 426) {
                     return null
                 }
-            } catch (_: Exception) {}
+            } catch (e: Exception) {
+                Log.d("GoTaku", "fetch failed: ${e.message}")
+            }
             delay(700L + attempt * 500L)
         }
         return null

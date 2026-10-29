@@ -145,7 +145,8 @@ internal object NetMirrorSite {
         try {
             CloudStreamApp.setKey(KEY_COOKIE, cookie)
             CloudStreamApp.setKey(KEY_COOKIE_AT, System.currentTimeMillis().toString())
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            Log.d(TAG, "cookie store failed: ${e.message}")
         }
     }
 
@@ -203,7 +204,8 @@ internal object NetMirrorSite {
                 "https://userver.net52.cc/?hee5=$addhash&a=y&t=${Math.random()}",
                 timeout = 15L
             ).close()
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            Log.d(TAG, "warmup get failed: ${e.message}")
         }
 
         val form = FormBody.Builder().addEncoded("verify", addhash).build()
@@ -375,7 +377,8 @@ internal object NetMirrorSite {
         cookieAt = 0L
         try {
             CloudStreamApp.setKey(KEY_COOKIE_AT, "0")
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            Log.d(TAG, "cookie reset failed: ${e.message}")
         }
         val fresh = solvedCookie() ?: return false
         val freshHeaders = playlistHeaders(fresh, ott.code)
@@ -572,12 +575,14 @@ internal object NetMirrorSite {
                     async(Dispatchers.IO) {
                         try {
                             resolveOtt(cookie, ott, res, subtitleCallback, callback)
-                        } catch (_: Exception) {
+                        } catch (e: Exception) {
+                            Log.d(TAG, "ott resolve failed: ${e.message}")
                         }
                     }
                 }
             }
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            Log.d(TAG, "ott catalogs failed: ${e.message}")
         }
     }
 
@@ -585,7 +590,8 @@ internal object NetMirrorSite {
     suspend fun prefetch() {
         try {
             solvedCookie()
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            Log.d(TAG, "prefetch failed: ${e.message}")
         }
     }
 }

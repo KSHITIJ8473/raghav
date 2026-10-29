@@ -111,7 +111,9 @@ internal object MMCFStore {
             CloudStreamApp.setKey(KEY_CF_COOKIES, "")
             CloudStreamApp.setKey(KEY_CF_UA, "")
             CloudStreamApp.setKey(KEY_CF_TIMESTAMP, "")
-        } catch (e: Exception) {}
+        } catch (e: Exception) {
+            Log.e(TAG, "clear: ${e.message}")
+        }
     }
 
     fun isRecentlyBypassed(): Boolean {
@@ -187,7 +189,9 @@ private class MMCFDialog(
                         finishSuccessForHost(altCookies)
                         return
                     }
-                } catch (e: Exception) {}
+                } catch (e: Exception) {
+                    Log.e(TAG, "alt cookies: ${e.message}")
+                }
             }
         } catch (e: Exception) {
             Log.e(TAG, "extract: ${e.message}")
@@ -203,17 +207,17 @@ private class MMCFDialog(
         handler.removeCallbacksAndMessages(null)
         val ua = webView?.settings?.userAgentString ?: ""
         MMCFStore.save(cookieStr, ua)
-        try { webView?.destroy() } catch (e: Exception) {}
-        try { (webView?.getTag() as? Dialog)?.dismiss() } catch (e: Exception) {}
-        try { onFinished?.invoke(true) } catch (e: Exception) {}
+        try { webView?.destroy() } catch (e: Exception) { Log.e(TAG, "destroy: ${e.message}") }
+        try { (webView?.getTag() as? Dialog)?.dismiss() } catch (e: Exception) { Log.e(TAG, "dismiss: ${e.message}") }
+        try { onFinished?.invoke(true) } catch (e: Exception) { Log.e(TAG, "finish callback: ${e.message}") }
     }
 
     private fun finishFailure() {
         if (!resolved.compareAndSet(false, true)) return
         handler.removeCallbacksAndMessages(null)
-        try { webView?.destroy() } catch (e: Exception) {}
-        try { dialog?.dismiss() } catch (e: Exception) {}
-        try { onFinished?.invoke(false) } catch (e: Exception) {}
+        try { webView?.destroy() } catch (e: Exception) { Log.e(TAG, "destroy: ${e.message}") }
+        try { dialog?.dismiss() } catch (e: Exception) { Log.e(TAG, "dismiss: ${e.message}") }
+        try { onFinished?.invoke(false) } catch (e: Exception) { Log.e(TAG, "finish callback: ${e.message}") }
     }
 
     private val cookiePollRunnable = object : Runnable {
@@ -347,8 +351,8 @@ private class MMCFDialog(
             handler.removeCallbacksAndMessages(null)
             if (!resolved.get()) {
                 resolved.set(true)
-                try { webView?.destroy() } catch (e: Exception) {}
-                try { onFinished?.invoke(false) } catch (e: Exception) {}
+                try { webView?.destroy() } catch (e: Exception) { Log.e(TAG, "destroy: ${e.message}") }
+                try { onFinished?.invoke(false) } catch (e: Exception) { Log.e(TAG, "finish callback: ${e.message}") }
             }
         }
         dialog?.show()
@@ -382,7 +386,7 @@ private class MMCFDialog(
         val t = SystemClock.uptimeMillis()
         val down = MotionEvent.obtain(t, t, MotionEvent.ACTION_DOWN, pos.x, pos.y, 0)
         val up = MotionEvent.obtain(t, t + 120, MotionEvent.ACTION_UP, pos.x, pos.y, 0)
-        try { wv.dispatchTouchEvent(down); wv.dispatchTouchEvent(up) } catch (e: Exception) {}
+        try { wv.dispatchTouchEvent(down); wv.dispatchTouchEvent(up) } catch (e: Exception) { Log.e(TAG, "touch: ${e.message}") }
         finally { down.recycle(); up.recycle() }
     }
 
@@ -421,9 +425,9 @@ private class MMCFDialog(
 
     fun dismiss() {
         handler.removeCallbacksAndMessages(null)
-        try { webView?.apply { stopLoading(); destroy() } } catch (e: Exception) {}
+        try { webView?.apply { stopLoading(); destroy() } } catch (e: Exception) { Log.e(TAG, "destroy: ${e.message}") }
         webView = null
-        try { dialog?.dismiss() } catch (e: Exception) {}
+        try { dialog?.dismiss() } catch (e: Exception) { Log.e(TAG, "dismiss: ${e.message}") }
         dialog = null
     }
 }

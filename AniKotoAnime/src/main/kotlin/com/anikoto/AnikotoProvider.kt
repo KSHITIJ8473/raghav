@@ -2,6 +2,7 @@ package com.anikoto
 
 import android.util.Base64
 import com.google.gson.JsonParser
+import com.lagradost.api.Log
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 
@@ -112,7 +113,9 @@ class AnikotoProvider : MainAPI() {
                         })
                     }
                 }
-            } catch (_: Exception) {}
+            } catch (e: Exception) {
+                Log.d("AniKoto", "episode list failed: ${e.message}")
+            }
         }
 
         // last resort when the ajax list never answered: walk the episode links
@@ -257,7 +260,9 @@ class AnikotoProvider : MainAPI() {
                 if (resolveEmbedInline(embedUrl, referer, audioType, serverName, subtitleCallback, callback)) {
                     found = true
                 }
-            } catch (_: Exception) {}
+            } catch (e: Exception) {
+                Log.d("AniKoto", "embed resolve failed: ${e.message}")
+            }
         }
         return found
     }

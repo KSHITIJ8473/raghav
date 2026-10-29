@@ -1,5 +1,6 @@
 package com.justplay
 
+import com.lagradost.api.Log
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.utils.ExtractorLink
@@ -646,8 +647,8 @@ internal object MmCineverse {
         for (server in ordered) {
             try {
                 any = resolveMirror(server, labelPrefix, callback) || any
-            } catch (_: Exception) {
-
+            } catch (e: Exception) {
+                Log.d("JustPlay", "mirror resolve failed: ${e.message}")
             }
         }
         return any
@@ -1091,8 +1092,8 @@ internal object MmGdMirror {
             for (mirror in mirrors) {
                 try {
                     any = dispatchMirror(mirror, "$labelPrefix $fileLabel", callback) || any
-                } catch (_: Exception) {
-
+                } catch (e: Exception) {
+                    Log.d("JustPlay", "mirror dispatch failed: ${e.message}")
                 }
             }
         }
@@ -1123,8 +1124,8 @@ internal object MmGdMirror {
         for (mirror in mirrors) {
             try {
                 any = dispatchMirror(mirror, "$labelPrefix $sid", callback) || any
-            } catch (_: Exception) {
-
+            } catch (e: Exception) {
+                Log.d("JustPlay", "mirror dispatch failed: ${e.message}")
             }
         }
         return any
@@ -1249,8 +1250,8 @@ internal object MmVidout {
                             }
                         }
                     }
-                } catch (_: Exception) {
-
+                } catch (e: Exception) {
+                    Log.d("JustPlay", "subtitles failed: ${e.message}")
                 }
             }
         } else if (season != null) {

@@ -1,6 +1,7 @@
 package com.justplay
 
 import android.net.Uri
+import com.lagradost.api.Log
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.base64Decode
@@ -772,7 +773,8 @@ internal object VegaMoviesSite {
                     }
                 }
             }
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            Log.d("JustPlay", "server walk failed: ${e.message}")
         }
     }
 }

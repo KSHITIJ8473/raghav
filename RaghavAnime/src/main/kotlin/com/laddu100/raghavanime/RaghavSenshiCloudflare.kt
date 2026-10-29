@@ -26,6 +26,7 @@ import androidx.appcompat.app.AppCompatActivity
 import com.google.android.material.bottomsheet.BottomSheetBehavior
 import com.google.android.material.bottomsheet.BottomSheetDialog
 import com.google.android.material.bottomsheet.BottomSheetDialogFragment
+import com.lagradost.api.Log
 import com.lagradost.cloudstream3.CommonActivity
 import com.lagradost.cloudstream3.app
 import com.lagradost.nicehttp.NiceResponse
@@ -361,7 +362,9 @@ internal fun senshiHeaders(base: Map<String, String>, url: String): Map<String, 
 internal fun initSenshiCFBypass(context: Context) {
     try {
         SenshiCookieStore.init(context)
-    } catch (_: Exception) {}
+    } catch (e: Exception) {
+        Log.d("RaghavAnime", "cookie store init failed: ${e.message}")
+    }
 }
 
 internal suspend fun cfGet(

@@ -1,6 +1,5 @@
 package com.laddu100.raghavanime
 
-import com.lagradost.api.Log
 import java.io.BufferedReader
 import java.io.InputStream
 import java.io.InputStreamReader
@@ -66,14 +65,10 @@ object RaghavSenshiProxy {
                     try {
                         val conn = socket.accept()
                         pool.execute { handleRequest(conn) }
-                    } catch (e: Exception) {
-                        Log.d("RaghavAnime", "accept failed: ${e.message}")
-                    }
+                    } catch (_: Exception) {}
                 }
             }.start()
-        } catch (e: Exception) {
-            Log.d("RaghavAnime", "server start failed: ${e.message}")
-        }
+        } catch (_: Exception) {}
         return serverPort
     }
 
@@ -153,10 +148,8 @@ object RaghavSenshiProxy {
                 }
                 else -> send404(conn)
             }
-        } catch (e: Exception) {
-            Log.d("RaghavAnime", "request failed: ${e.message}")
-        } finally {
-            try { conn.close() } catch (e: Exception) { Log.d("RaghavAnime", "close failed: ${e.message}") }
+        } catch (_: Exception) {} finally {
+            try { conn.close() } catch (_: Exception) {}
         }
     }
 
@@ -480,9 +473,7 @@ object RaghavSenshiProxy {
             out.write(head.toByteArray(Charsets.ISO_8859_1))
             out.write(bytes)
             out.flush()
-        } catch (e: Exception) {
-            Log.d("RaghavAnime", "send failed: ${e.message}")
-        }
+        } catch (_: Exception) {}
     }
 
     private fun sendEmpty(conn: Socket, code: Int) {
@@ -491,9 +482,7 @@ object RaghavSenshiProxy {
             val head = "HTTP/1.1 $code Status\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
             out.write(head.toByteArray(Charsets.ISO_8859_1))
             out.flush()
-        } catch (e: Exception) {
-            Log.d("RaghavAnime", "send failed: ${e.message}")
-        }
+        } catch (_: Exception) {}
     }
 
     private fun send404(conn: Socket) {
@@ -502,8 +491,6 @@ object RaghavSenshiProxy {
             val head = "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
             out.write(head.toByteArray(Charsets.ISO_8859_1))
             out.flush()
-        } catch (e: Exception) {
-            Log.d("RaghavAnime", "send failed: ${e.message}")
-        }
+        } catch (_: Exception) {}
     }
 }

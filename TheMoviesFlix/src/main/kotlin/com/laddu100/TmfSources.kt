@@ -1,6 +1,5 @@
 package com.laddu100
 
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.base64Decode
@@ -455,9 +454,7 @@ object TmfSources {
                 ).document
                 val nested = hubStreams(genDoc, base, pageUrl, depth + 1)
                 if (nested.isNotEmpty()) return nested
-            } catch (e: Exception) {
-                Log.d("TheMoviesFlix", "hub fetch failed: ${e.message}")
-            }
+            } catch (_: Exception) {}
         }
 
         if (pageUrl.contains("/video/") && depth < 3) {
@@ -471,9 +468,7 @@ object TmfSources {
                     ).document
                     val nested = hubStreams(innerDoc, base, inner, depth + 1)
                     if (nested.isNotEmpty()) return nested
-                } catch (e: Exception) {
-                    Log.d("TheMoviesFlix", "hub fetch failed: ${e.message}")
-                }
+                } catch (_: Exception) {}
             }
         }
 
@@ -605,9 +600,7 @@ object TmfSources {
                                 callback.invoke(link)
                                 emitted.set(true)
                             }
-                        } catch (e: Exception) {
-                            Log.d("TheMoviesFlix", "extractor load failed: ${e.message}")
-                        }
+                        } catch (_: Exception) {}
                     }
                 }
             }.awaitAll()

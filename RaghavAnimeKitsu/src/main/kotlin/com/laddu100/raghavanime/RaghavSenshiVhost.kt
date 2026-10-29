@@ -140,9 +140,7 @@ object RaghavSenshiVhost {
                     .find(res.text)?.groupValues?.get(1)
                     ?.let { java.net.URI(origin).resolve(it).toString() }
             }
-        } catch (e: Exception) {
-            Log.d(TAG, "bundle probe failed: ${e.message}")
-        }
+        } catch (_: Exception) {}
         if (url.isNullOrBlank()) {
             url = bundleUrl ?: FALLBACK_BUNDLE
         }
@@ -350,9 +348,7 @@ object RaghavSenshiVhost {
         CookieManager.getInstance().setAcceptCookie(true)
         try {
             CookieManager.getInstance().setAcceptThirdPartyCookies(wv, true)
-        } catch (e: Exception) {
-            Log.d(TAG, "third party cookies rejected: ${e.message}")
-        }
+        } catch (_: Exception) {}
         wv.addJavascriptInterface(Bridge(), "SenshiBridge")
         wv.webViewClient = object : WebViewClient() {
             override fun shouldInterceptRequest(
@@ -409,9 +405,7 @@ object RaghavSenshiVhost {
             try {
                 wv.stopLoading()
                 wv.destroy()
-            } catch (e: Exception) {
-                Log.d(TAG, "webview teardown failed: ${e.message}")
-            }
+            } catch (_: Exception) {}
         }
     }
 

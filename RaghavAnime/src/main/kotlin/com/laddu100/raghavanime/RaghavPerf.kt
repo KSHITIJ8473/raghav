@@ -2,7 +2,6 @@ package com.laddu100.raghavanime
 
 import android.app.ActivityManager
 import android.content.Context
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.CloudStreamApp.Companion.getKey
 import com.lagradost.cloudstream3.CloudStreamApp.Companion.setKey
 import com.lagradost.cloudstream3.CommonActivity
@@ -50,9 +49,7 @@ object RaghavPerf {
     fun setUserConcurrency(value: Int) {
         try {
             setKey(USER_CONCURRENCY_KEY, value.coerceIn(0, 40))
-        } catch (e: Exception) {
-            Log.d("RaghavAnime", "concurrency save failed: ${e.message}")
-        }
+        } catch (_: Exception) {}
     }
 
     fun userConcurrency(): Int? {
@@ -88,9 +85,7 @@ object RaghavPerf {
                             task()
                         } catch (c: CancellationException) {
                             throw c
-                        } catch (e: Throwable) {
-                            Log.d("RaghavAnime", "prefetch task failed: ${e.message}")
-                        }
+                        } catch (_: Throwable) {}
                     }
                 }
             }.awaitAll()

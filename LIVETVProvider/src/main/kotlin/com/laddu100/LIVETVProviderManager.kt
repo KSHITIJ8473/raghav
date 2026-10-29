@@ -1,6 +1,5 @@
 package com.laddu100
 
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -192,9 +191,7 @@ object LIVETVProviderManager {
                         }
                     }
                 }
-            } catch (e: Exception) {
-                Log.d("LIVETV", "fallback providers failed: ${e.message}")
-            }
+            } catch (_: Exception) {}
             fallbackProviders
         }
     }
@@ -220,9 +217,7 @@ object LIVETVProviderManager {
                         }
                     }
                 }
-            } catch (e: Exception) {
-                Log.d("LIVETV", "live events failed: ${e.message}")
-            }
+            } catch (_: Exception) {}
             emptyList()
         }
     }
@@ -292,9 +287,7 @@ object LIVETVProviderManager {
                         }
                     }
                 }
-            } catch (e: Exception) {
-                Log.d("LIVETV", "live events failed: ${e.message}")
-            }
+            } catch (_: Exception) {}
             emptyList()
         }
     }

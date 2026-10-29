@@ -6,7 +6,6 @@ import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.databind.node.ArrayNode
 import com.fasterxml.jackson.databind.node.ObjectNode
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
 import com.lagradost.cloudstream3.app
@@ -103,9 +102,7 @@ class NetNaija : MainAPI() {
                 jwtToken = token
                 return token
             }
-        } catch (e: Exception) {
-            Log.d("NetNaija", "token parse failed: ${e.message}")
-        }
+        } catch (_: Exception) {}
         return null
     }
 
@@ -171,9 +168,7 @@ class NetNaija : MainAPI() {
         CoroutineScope(Dispatchers.IO).launch {
             try {
                 homeSections()
-            } catch (e: Exception) {
-                Log.d("NetNaija", "home sections failed: ${e.message}")
-            } finally {
+            } catch (_: Exception) {} finally {
                 homeRowsFuture = null
                 future.complete(Unit)
             }
@@ -186,9 +181,7 @@ class NetNaija : MainAPI() {
         if (homeRowsFresh()) return
         try {
             refreshHomeRowsAsync().get(4000, TimeUnit.MILLISECONDS)
-        } catch (e: Exception) {
-            Log.d("NetNaija", "home rows wait failed: ${e.message}")
-        }
+        } catch (_: Exception) {}
     }
 
     private fun buildDynamicRows(byTitle: Map<String, List<NetNaijaSubject>>): List<MainPageData> {
@@ -775,9 +768,7 @@ class NetNaija : MainAPI() {
                 val lang = caption.lanName ?: caption.lan ?: "Unknown"
                 subtitleCallback.invoke(newSubtitleFile(lang, url))
             }
-        } catch (e: Exception) {
-            Log.d("NetNaija", "captions failed: ${e.message}")
-        }
+        } catch (_: Exception) {}
     }
 
     private fun NetNaijaSubject.toSearchResponse(): SearchResponse? {

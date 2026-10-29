@@ -1,6 +1,5 @@
 package com.laddu100
 
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
@@ -72,9 +71,7 @@ class DamiTVProvider : MainAPI() {
                     }
                 }
             }
-        } catch (e: Exception) {
-            Log.d("DamiTV", "dns resolve failed: ${e.message}")
-        }
+        } catch (_: Exception) {}
         return emptyList()
     }
 
@@ -99,9 +96,7 @@ class DamiTVProvider : MainAPI() {
                 val rewritten = url.replace("//$domain", "//$ip")
                 return rewritten
             }
-        } catch (e: Exception) {
-            Log.d("DamiTV", "dns rewrite failed: ${e.message}")
-        }
+        } catch (_: Exception) {}
         return url
     }
 
@@ -124,9 +119,7 @@ class DamiTVProvider : MainAPI() {
                 mainUrl = url.removeSuffix("/")
                 isUrlLoaded = true
             }
-        } catch (e: Exception) {
-            Log.d("DamiTV", "domain load failed: ${e.message}")
-        }
+        } catch (_: Exception) {}
     }
 
     private val apiHeaders: Map<String, String>
@@ -263,9 +256,7 @@ class DamiTVProvider : MainAPI() {
                 val text = apiGet("$mainUrl/papi/extract-url/$id", apiHeaders)
                 val resp = parseJson<ExtractUrlResponse>(text)
                 if (resp.success) return resp
-            } catch (e: Exception) {
-                Log.d("DamiTV", "extract url failed: ${e.message}")
-            }
+            } catch (_: Exception) {}
         }
         return null
     }
@@ -367,9 +358,7 @@ class DamiTVProvider : MainAPI() {
                 val items = channels.map { matchToSearchResponse(it) }
                 lists.add(HomePageList("24/7 Channels & Live TV", items, isHorizontalImages = true))
             }
-        } catch (e: Exception) {
-            Log.d("DamiTV", "channels load failed: ${e.message}")
-        }
+        } catch (_: Exception) {}
 
         return newHomePageResponse(lists, hasNext = false)
     }
@@ -434,9 +423,7 @@ class DamiTVProvider : MainAPI() {
                     streamsList.add(StreamInfo(name = subName, url = sub.id))
                 }
             }
-        } catch (e: Exception) {
-            Log.d("DamiTV", "subscriptions load failed: ${e.message}")
-        }
+        } catch (_: Exception) {}
 
         val streamedSourcesList = eventData.sources ?: eventData.streamedSources
         var addedStreamedSources = false
@@ -462,9 +449,7 @@ class DamiTVProvider : MainAPI() {
                         streamsList.add(StreamInfo(name = stName, url = customUrl))
                         addedStreamedSources = true
                     }
-                } catch (e: Exception) {
-                    Log.d("DamiTV", "streamed source failed: ${e.message}")
-                }
+                } catch (_: Exception) {}
             }
         }
 
@@ -593,23 +578,17 @@ class DamiTVProvider : MainAPI() {
                                     )
                                     foundAny = true
                                 }
-                            } catch (e: Exception) {
-                                Log.d("DamiTV", "link emit failed: ${e.message}")
-                            }
+                            } catch (_: Exception) {}
 
                             // embedindia.st resolves its real m3u8 inside a WASM
                             // module, only the extractor registry can play it
                             if (fallbackUrl.isNotEmpty()) {
                                 try {
                                     loadExtractor(fallbackUrl, "$mainUrl/", subtitleCallback, callback)
-                                } catch (e: Exception) {
-                                    Log.d("DamiTV", "extractor load failed: ${e.message}")
-                                }
+                                } catch (_: Exception) {}
                             }
                         }
-                    } catch (e: Exception) {
-                        Log.d("DamiTV", "link sweep failed: ${e.message}")
-                    }
+                    } catch (_: Exception) {}
                 }
                 // 3. Standard PPV extraction
                 else {
@@ -659,15 +638,11 @@ class DamiTVProvider : MainAPI() {
                         if (!response.embedUrl.isNullOrBlank()) {
                             try {
                                 loadExtractor(response.embedUrl, "$mainUrl/", subtitleCallback, callback)
-                            } catch (e: Exception) {
-                                Log.d("DamiTV", "extractor load failed: ${e.message}")
-                            }
+                            } catch (_: Exception) {}
                         }
                     }
                 }
-            } catch (e: Exception) {
-                Log.d("DamiTV", "embed sweep failed: ${e.message}")
-            }
+            } catch (_: Exception) {}
         }
 
         return foundAny

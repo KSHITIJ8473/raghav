@@ -1,6 +1,5 @@
 package com.justplay
 
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.base64Decode
@@ -655,9 +654,7 @@ internal object PlayTmfSources {
                 ).document
                 val nested = hubStreams(genDoc, base, pageUrl, depth + 1)
                 if (nested.isNotEmpty()) return nested
-            } catch (e: Exception) {
-                Log.d("JustPlay", "hub fetch failed: ${e.message}")
-            }
+            } catch (_: Exception) {}
         }
 
         if (pageUrl.contains("/video/") && depth < 3) {
@@ -671,9 +668,7 @@ internal object PlayTmfSources {
                     ).document
                     val nested = hubStreams(innerDoc, base, inner, depth + 1)
                     if (nested.isNotEmpty()) return nested
-                } catch (e: Exception) {
-                    Log.d("JustPlay", "hub fetch failed: ${e.message}")
-                }
+                } catch (_: Exception) {}
             }
         }
 

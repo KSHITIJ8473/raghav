@@ -1,6 +1,5 @@
 package com.netnaija.app
 
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.CloudStreamApp.Companion.getKey
 import com.lagradost.cloudstream3.CloudStreamApp.Companion.setKey
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
@@ -32,9 +31,7 @@ object NetNaijaAppSources {
     fun setDisabled(labels: Set<String>) {
         try {
             setKey(DISABLED_KEY, labels.toJson())
-        } catch (e: Exception) {
-            Log.d("NetNaijaApp", "disabled save failed: ${e.message}")
-        }
+        } catch (_: Exception) {}
     }
 
     fun isEnabled(label: String): Boolean = label !in disabled()
@@ -57,9 +54,7 @@ object NetNaijaAppSources {
             if (known.addAll(labels)) {
                 setKey(KNOWN_KEY, known.toJson())
             }
-        } catch (e: Exception) {
-            Log.d("NetNaijaApp", "known save failed: ${e.message}")
-        }
+        } catch (_: Exception) {}
     }
 
     // "Hindi dub" -> Hindi Dub, "esla dub" -> ES-LA Dub, "Original dub" -> Original

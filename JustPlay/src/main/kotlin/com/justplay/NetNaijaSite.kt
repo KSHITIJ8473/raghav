@@ -2,7 +2,6 @@ package com.justplay
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties
 import com.fasterxml.jackson.annotation.JsonProperty
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.utils.AppUtils
@@ -129,9 +128,7 @@ internal object NetNaijaSite {
             val xUser = response.headers["x-user"] ?: return
             if (xUser.isBlank()) return
             JSONObject(xUser).optString("token").takeIf { it.isNotBlank() }?.let { token = it }
-        } catch (e: Exception) {
-            Log.d("JustPlay", "token read failed: ${e.message}")
-        }
+        } catch (_: Exception) {}
     }
 
     private suspend fun ensureToken(site: String): String? {
@@ -410,18 +407,12 @@ internal object NetNaijaSite {
                                             )
                                         }
                                     }
-                                } catch (e: Exception) {
-                                    Log.d("JustPlay", "captions failed: ${e.message}")
-                                }
+                                } catch (_: Exception) {}
                             }
-                        } catch (e: Exception) {
-                            Log.d("JustPlay", "caption sweep failed: ${e.message}")
-                        }
+                        } catch (_: Exception) {}
                     }
                 }
             }
-        } catch (e: Exception) {
-            Log.d("JustPlay", "subtitle sweep failed: ${e.message}")
-        }
+        } catch (_: Exception) {}
     }
 }

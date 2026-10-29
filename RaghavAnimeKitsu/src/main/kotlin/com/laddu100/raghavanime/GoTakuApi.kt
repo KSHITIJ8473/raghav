@@ -1,7 +1,6 @@
 package com.laddu100.raghavanime
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import kotlinx.coroutines.delay
@@ -54,9 +53,7 @@ object GoTakuApi {
                 if (response.code != 426) {
                     return null
                 }
-            } catch (e: Exception) {
-                Log.d("RaghavAnime", "fetch failed: ${e.message}")
-            }
+            } catch (_: Exception) {}
             delay(700L + attempt * 500L)
         }
         return null

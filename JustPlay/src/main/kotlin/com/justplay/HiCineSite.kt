@@ -2,7 +2,6 @@ package com.justplay
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties
 import com.fasterxml.jackson.annotation.JsonProperty
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
@@ -400,8 +399,6 @@ internal object HiCineSite {
                     }
                 }
             }
-        } catch (e: Exception) {
-            Log.d("JustPlay", "entries emit failed: ${e.message}")
-        }
+        } catch (_: Exception) {}
     }
 }

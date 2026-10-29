@@ -21,7 +21,6 @@ import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.widget.SwitchCompat
 import androidx.fragment.app.DialogFragment
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.MainActivity
 import com.netnaija.NetNaijaSources
 
@@ -175,7 +174,7 @@ class SourceSettingsFragment : DialogFragment() {
             .setMessage("Sources saved. Restart CloudStream now to apply them?")
             .setPositiveButton("Restart") { _, _ -> restartApp() }
             .setNegativeButton("Later") { _, _ ->
-                try { MainActivity.reloadHomeEvent.invoke(true) } catch (e: Throwable) { Log.d("NetNaija", "reload event failed: ${e.message}") }
+                try { MainActivity.reloadHomeEvent.invoke(true) } catch (_: Throwable) {}
                 dismiss()
             }
             .show()
@@ -193,7 +192,7 @@ class SourceSettingsFragment : DialogFragment() {
                 Runtime.getRuntime().exit(0)
             }
         } catch (_: Throwable) {
-            try { MainActivity.reloadHomeEvent.invoke(true) } catch (e: Throwable) { Log.d("NetNaija", "reload event failed: ${e.message}") }
+            try { MainActivity.reloadHomeEvent.invoke(true) } catch (_: Throwable) {}
         }
     }
 

@@ -1,6 +1,5 @@
 package com.laddu100
 
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
@@ -282,9 +281,7 @@ class AnidapProvider : MainAPI() {
                         ep1HasSub = sRoot.path("subProviders").size() > 0
                         ep1HasDub = sRoot.path("dubProviders").size() > 0
                     }
-                } catch (e: Exception) {
-                    Log.d("Anidap", "server flags failed: ${e.message}")
-                }
+                } catch (_: Exception) {}
             }
 
             val totalEps = episodes?.maxOfOrNull { it.number }
@@ -512,9 +509,7 @@ class AnidapProvider : MainAPI() {
                 subtitleCallback.invoke(newSubtitleFile(label, url) {
                     this.headers = subHeaders
                 })
-            } catch (e: Exception) {
-                Log.d("Anidap", "subtitle emit failed: ${e.message}")
-            }
+            } catch (_: Exception) {}
         }
     }
 
@@ -656,9 +651,7 @@ class AnidapProvider : MainAPI() {
                                 }
                             }
                         }
-                    } catch (e: Exception) {
-                        Log.d("Anidap", "source resolve failed: ${e.message}")
-                    }
+                    } catch (_: Exception) {}
                 }
             }.forEach { it.await() }
         }

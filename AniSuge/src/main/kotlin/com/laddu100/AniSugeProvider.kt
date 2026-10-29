@@ -2,7 +2,6 @@ package com.laddu100
 
 import android.util.Base64
 import com.fasterxml.jackson.annotation.JsonProperty
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
@@ -295,18 +294,14 @@ class AniSugeProvider : MainAPI() {
             if (loadLegacyServers(baseUrl, dataIds, selectedType, subtitleCallback, callback)) {
                 anyLoaded = true
             }
-        } catch (e: Exception) {
-            Log.d("AniSuge", "legacy servers failed: ${e.message}")
-        }
+        } catch (_: Exception) {}
 
         if (!malId.isNullOrBlank() && !timestamp.isNullOrBlank()) {
             try {
                 if (loadMapperSources(baseUrl, malId, slug, timestamp, selectedType, subtitleCallback, callback)) {
                     anyLoaded = true
                 }
-            } catch (e: Exception) {
-                Log.d("AniSuge", "mapper sources failed: ${e.message}")
-            }
+            } catch (_: Exception) {}
         }
 
         anyLoaded
@@ -380,9 +375,7 @@ class AniSugeProvider : MainAPI() {
                     if (resolveEmbed(playerUrl, baseUrl, serverName, subtitleCallback, wrappedCallback)) {
                         loadedSingle = true
                     }
-                } catch (e: Exception) {
-                    Log.d("AniSuge", "embed resolve failed: ${e.message}")
-                }
+                } catch (_: Exception) {}
                 loadedSingle
             }
         }.awaitAll()
@@ -423,7 +416,6 @@ class AniSugeProvider : MainAPI() {
                     embedUrl = serverInfoJson.result?.url
                 } catch (e: Exception) {
                     // the site may not wrap this one, use the mapper url directly
-                    Log.d("AniSuge", "server info unavailable: ${e.message}")
                 }
                 if (embedUrl.isNullOrBlank()) embedUrl = streamUrl
 
@@ -431,9 +423,7 @@ class AniSugeProvider : MainAPI() {
                     if (resolveEmbed(embedUrl, baseUrl, displayName, subtitleCallback, callback)) {
                         anyLoaded = true
                     }
-                } catch (e: Exception) {
-                    Log.d("AniSuge", "embed resolve failed: ${e.message}")
-                }
+                } catch (_: Exception) {}
             }
 
             for ((qualityLabel, paheUrl) in entry.downloads) {
@@ -455,9 +445,7 @@ class AniSugeProvider : MainAPI() {
                         }
                     )
                     anyLoaded = true
-                } catch (e: Exception) {
-                    Log.d("AniSuge", "kwik emit failed: ${e.message}")
-                }
+                } catch (_: Exception) {}
             }
         }
         return anyLoaded
@@ -553,9 +541,7 @@ class AniSugeProvider : MainAPI() {
                         return true
                     }
                 }
-            } catch (e: Exception) {
-                Log.d("AniSuge", "server resolve failed: ${e.message}")
-            }
+            } catch (_: Exception) {}
         }
         return loaded
     }

@@ -28,7 +28,6 @@ import android.widget.ProgressBar
 import android.widget.TextView
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.CommonActivity
 import com.lagradost.cloudstream3.CloudStreamApp
 import com.lagradost.cloudstream3.ui.settings.Globals
@@ -87,9 +86,7 @@ internal object RAICFStore {
                     if (parts.size == 2 && t != null) timeMap[parts[0]] = t
                 }
             }
-        } catch (e: Exception) {
-            Log.d("RareAnimes", "store load failed: ${e.message}")
-        }
+        } catch (_: Exception) {}
     }
 
     private fun persist() {
@@ -97,9 +94,7 @@ internal object RAICFStore {
             CloudStreamApp.setKey(KEY_COOKIES, cookiesMap.entries.joinToString("|||") { "${it.key}::=${it.value}" })
             CloudStreamApp.setKey(KEY_UA, uaMap.entries.joinToString("|||") { "${it.key}::=${it.value}" })
             CloudStreamApp.setKey(KEY_TIME, timeMap.entries.joinToString("|||") { "${it.key}::=${it.value}" })
-        } catch (e: Exception) {
-            Log.d("RareAnimes", "store persist failed: ${e.message}")
-        }
+        } catch (_: Exception) {}
     }
 
     fun getCookies(host: String): String? {
@@ -193,9 +188,7 @@ private class RAICFDialog(
             if (cookieStr.contains("cf_clearance")) {
                 finishSuccess(cookieStr)
             }
-        } catch (e: Exception) {
-            Log.d("RareAnimes", "cookie check failed: ${e.message}")
-        }
+        } catch (_: Exception) {}
     }
 
     private fun finishSuccess(cookieStr: String) {
@@ -203,17 +196,17 @@ private class RAICFDialog(
         handler.removeCallbacksAndMessages(null)
         val ua = webView?.settings?.userAgentString ?: ""
         RAICFStore.save(Uri.parse(targetHost).host ?: "", cookieStr, ua)
-        try { webView?.destroy() } catch (e: Exception) { Log.d("RareAnimes", "webview destroy failed: ${e.message}") }
-        try { (webView?.getTag() as? Dialog)?.dismiss() } catch (e: Exception) { Log.d("RareAnimes", "dialog dismiss failed: ${e.message}") }
-        try { onFinished?.invoke(true) } catch (e: Exception) { Log.d("RareAnimes", "finish callback failed: ${e.message}") }
+        try { webView?.destroy() } catch (_: Exception) {}
+        try { (webView?.getTag() as? Dialog)?.dismiss() } catch (_: Exception) {}
+        try { onFinished?.invoke(true) } catch (_: Exception) {}
     }
 
     private fun finishFailure() {
         if (!resolved.compareAndSet(false, true)) return
         handler.removeCallbacksAndMessages(null)
-        try { webView?.destroy() } catch (e: Exception) { Log.d("RareAnimes", "webview destroy failed: ${e.message}") }
-        try { dialog?.dismiss() } catch (e: Exception) { Log.d("RareAnimes", "dialog dismiss failed: ${e.message}") }
-        try { onFinished?.invoke(false) } catch (e: Exception) { Log.d("RareAnimes", "finish callback failed: ${e.message}") }
+        try { webView?.destroy() } catch (_: Exception) {}
+        try { dialog?.dismiss() } catch (_: Exception) {}
+        try { onFinished?.invoke(false) } catch (_: Exception) {}
     }
 
     private val cookiePollRunnable = object : Runnable {
@@ -330,13 +323,13 @@ private class RAICFDialog(
         btnContainer.addView(Button(activity).apply {
             text = "Back"
             setOnClickListener {
-                try { webView?.goBack() } catch (e: Exception) { Log.d("RareAnimes", "goBack failed: ${e.message}") }
+                try { webView?.goBack() } catch (_: Exception) {}
             }
         })
         btnContainer.addView(Button(activity).apply {
             text = "Reload"
             setOnClickListener {
-                try { webView?.reload() } catch (e: Exception) { Log.d("RareAnimes", "webview reload failed: ${e.message}") }
+                try { webView?.reload() } catch (_: Exception) {}
             }
         })
         btnContainer.addView(Button(activity).apply {
@@ -357,7 +350,7 @@ private class RAICFDialog(
         webView?.setTag(dialog)
         dialog?.setOnKeyListener { _, keyCode, _ ->
             if (keyCode == KeyEvent.KEYCODE_BACK) {
-                try { webView?.goBack() } catch (e: Exception) { Log.d("RareAnimes", "goBack failed: ${e.message}") }
+                try { webView?.goBack() } catch (_: Exception) {}
                 true
             } else {
                 false
@@ -367,8 +360,8 @@ private class RAICFDialog(
             handler.removeCallbacksAndMessages(null)
             if (!resolved.get()) {
                 resolved.set(true)
-                try { webView?.destroy() } catch (e: Exception) { Log.d("RareAnimes", "webview destroy failed: ${e.message}") }
-                try { onFinished?.invoke(false) } catch (e: Exception) { Log.d("RareAnimes", "finish callback failed: ${e.message}") }
+                try { webView?.destroy() } catch (_: Exception) {}
+                try { onFinished?.invoke(false) } catch (_: Exception) {}
             }
         }
         dialog?.show()
@@ -402,7 +395,7 @@ private class RAICFDialog(
         val t = SystemClock.uptimeMillis()
         val down = MotionEvent.obtain(t, t, MotionEvent.ACTION_DOWN, pos.x, pos.y, 0)
         val up = MotionEvent.obtain(t, t + 120, MotionEvent.ACTION_UP, pos.x, pos.y, 0)
-        try { wv.dispatchTouchEvent(down); wv.dispatchTouchEvent(up) } catch (e: Exception) { Log.d("RareAnimes", "touch dispatch failed: ${e.message}") }
+        try { wv.dispatchTouchEvent(down); wv.dispatchTouchEvent(up) } catch (_: Exception) {}
         finally { down.recycle(); up.recycle() }
     }
 
@@ -441,9 +434,9 @@ private class RAICFDialog(
 
     fun dismiss() {
         handler.removeCallbacksAndMessages(null)
-        try { webView?.apply { stopLoading(); destroy() } } catch (e: Exception) { Log.d("RareAnimes", "webview teardown failed: ${e.message}") }
+        try { webView?.apply { stopLoading(); destroy() } } catch (_: Exception) {}
         webView = null
-        try { dialog?.dismiss() } catch (e: Exception) { Log.d("RareAnimes", "dialog dismiss failed: ${e.message}") }
+        try { dialog?.dismiss() } catch (_: Exception) {}
         dialog = null
     }
 }

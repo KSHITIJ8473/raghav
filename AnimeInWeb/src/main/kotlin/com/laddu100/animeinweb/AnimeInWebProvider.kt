@@ -1,7 +1,6 @@
 package com.laddu100.animeinweb
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.DubStatus
 import com.lagradost.cloudstream3.Episode
 import com.lagradost.cloudstream3.LoadResponse
@@ -376,9 +375,7 @@ class AnimeInWebProvider : MainAPI() {
                     if (host == "www.blogger.com" || host == "gdplayer.to") {
                         try {
                             if (loadExtractor(link, "$mainUrl/", subtitleCallback, callback)) found = true
-                        } catch (e: Exception) {
-                            Log.d("AnimeInWeb", "extractor load failed: ${e.message}")
-                        }
+                        } catch (_: Exception) {}
                     }
                 }
             }

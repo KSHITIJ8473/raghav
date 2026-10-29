@@ -1,6 +1,5 @@
 package com.laddu100
 
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.USER_AGENT
 import com.lagradost.cloudstream3.app
@@ -205,9 +204,7 @@ open class MegaPlayBaseExtractor(
                     }
                 )
             }
-        } catch (e: Exception) {
-            Log.d("NineAnime", "subtitle emit failed: ${e.message}")
-        }
+        } catch (_: Exception) {}
     }
 }
 

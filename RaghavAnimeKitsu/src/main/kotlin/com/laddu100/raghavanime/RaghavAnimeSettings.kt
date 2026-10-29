@@ -34,7 +34,6 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.widget.SwitchCompat
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.MainActivity
 import com.lagradost.cloudstream3.app
 import kotlinx.coroutines.CoroutineScope
@@ -513,9 +512,7 @@ object RaghavAnimeSettings {
             .setNegativeButton("Later") { _, _ ->
                 try {
                     MainActivity.reloadHomeEvent.invoke(true)
-                } catch (e: Throwable) {
-                    Log.d("RaghavAnime", "reload event failed: ${e.message}")
-                }
+                } catch (_: Throwable) {}
             }
             .show()
     }
@@ -531,9 +528,7 @@ object RaghavAnimeSettings {
                 context.startActivity(restartIntent)
                 Runtime.getRuntime().exit(0)
             }
-        } catch (e: Throwable) {
-            Log.d("RaghavAnime", "restart failed: ${e.message}")
-        }
+        } catch (_: Throwable) {}
     }
 
     private fun openFeatures(ctx: Context) {

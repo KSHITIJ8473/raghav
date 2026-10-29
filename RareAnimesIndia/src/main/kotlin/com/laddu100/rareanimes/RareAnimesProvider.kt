@@ -2,7 +2,6 @@ package com.laddu100.rareanimes
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties
 import com.fasterxml.jackson.annotation.JsonProperty
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.HomePageResponse
 import com.lagradost.cloudstream3.LoadResponse
 import com.lagradost.cloudstream3.MainAPI
@@ -1225,9 +1224,7 @@ class RareAnimesProvider : MainAPI() {
                 )
                 found = true
             }
-        } catch (e: Exception) {
-            Log.d("RareAnimes", "link emit failed: ${e.message}")
-        }
+        } catch (_: Exception) {}
         return found
     }
 
@@ -1354,9 +1351,7 @@ class RareAnimesProvider : MainAPI() {
                 )
                 found = true
             }
-        } catch (e: Exception) {
-            Log.d("RareAnimes", "link emit failed: ${e.message}")
-        }
+        } catch (_: Exception) {}
         return found
     }
 
@@ -1456,9 +1451,7 @@ class RareAnimesProvider : MainAPI() {
                     }
                 }
             }
-        } catch (e: Exception) {
-            Log.d("RareAnimes", "server emit failed: ${e.message}")
-        }
+        } catch (_: Exception) {}
         return found
     }
 
@@ -1559,9 +1552,7 @@ class RareAnimesProvider : MainAPI() {
                 )
                 found = true
             }
-        } catch (e: Exception) {
-            Log.d("RareAnimes", "link emit failed: ${e.message}")
-        }
+        } catch (_: Exception) {}
         return found
     }
 
@@ -1589,9 +1580,7 @@ class RareAnimesProvider : MainAPI() {
                 }
             )
             found = true
-        } catch (e: Exception) {
-            Log.d("RareAnimes", "link emit failed: ${e.message}")
-        }
+        } catch (_: Exception) {}
         return found
     }
 
@@ -1674,9 +1663,7 @@ class RareAnimesProvider : MainAPI() {
                             break
                         }
                     }
-                } catch (e: Exception) {
-                    Log.d("RareAnimes", "mirror probe failed: ${e.message}")
-                }
+                } catch (_: Exception) {}
             }
 
             Regex("""https?://pixel(?:drain|dra)\.[a-z]+/u/([A-Za-z0-9]+)""")
@@ -1691,9 +1678,7 @@ class RareAnimesProvider : MainAPI() {
                         found = true
                     }
                 }
-        } catch (e: Exception) {
-            Log.d("RareAnimes", "pixeldrain failed: ${e.message}")
-        }
+        } catch (_: Exception) {}
         return found
     }
 
@@ -1784,13 +1769,9 @@ class RareAnimesProvider : MainAPI() {
                         try {
                             val t2 = CodedewResolver.resolveUrl(epUrl)
                             if (resolveTarget(t2, label, callback)) emitted = true
-                        } catch (e: Exception) {
-                            Log.d("RareAnimes", "codedew resolve failed: ${e.message}")
-                        }
+                        } catch (_: Exception) {}
                     }
-                } catch (e: Exception) {
-                    Log.d("RareAnimes", "archive resolve failed: ${e.message}")
-                }
+                } catch (_: Exception) {}
                 emitted
             }
             is ResolvedTarget.Direct -> {
@@ -1828,9 +1809,7 @@ class RareAnimesProvider : MainAPI() {
         for (v in variants) {
             try {
                 if (resolveTarget(CodedewResolver.resolveUrl(v.u), v.n, callback)) any = true
-            } catch (e: Exception) {
-                Log.d("RareAnimes", "codedew resolve failed: ${e.message}")
-            }
+            } catch (_: Exception) {}
         }
 
         if (!any) {

@@ -1,6 +1,5 @@
 package com.laddu100
 
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
@@ -314,9 +313,7 @@ class StreamedPkProvider : MainAPI() {
                     }
                 )
             }
-        } catch (e: Exception) {
-            Log.d("StreamedPk", "live search failed: ${e.message}")
-        }
+        } catch (_: Exception) {}
         return results
     }
 
@@ -346,9 +343,7 @@ class StreamedPkProvider : MainAPI() {
                 dateVal = freshMatch.date
                 posterUrl = getPosterForMatch(freshMatch.category, freshMatch.poster)
             }
-        } catch (e: Exception) {
-            Log.d("StreamedPk", "match refresh failed: ${e.message}")
-        }
+        } catch (_: Exception) {}
 
         val isUpcoming = sources.isNullOrEmpty()
         val dateStr = formatMatchDate(dateVal)
@@ -372,9 +367,7 @@ class StreamedPkProvider : MainAPI() {
 
                         streamsList.add(StreamInfo(name = serverName, url = customUrl))
                     }
-                } catch (e: Exception) {
-                    Log.d("StreamedPk", "streamed source failed: ${e.message}")
-                }
+                } catch (_: Exception) {}
             }
         }
 
@@ -419,9 +412,7 @@ class StreamedPkProvider : MainAPI() {
                     if (captured.compareAndSet(false, true)) {
                         try {
                             webView?.destroy()
-                        } catch (e: Exception) {
-                            Log.d("StreamedPk", "webview destroy failed: ${e.message}")
-                        }
+                        } catch (_: Exception) {}
                         continuation.resume(null)
                     }
                 }
@@ -463,9 +454,7 @@ class StreamedPkProvider : MainAPI() {
                                         Handler(Looper.getMainLooper()).post {
                                             try {
                                                 webView?.destroy()
-                                            } catch (e: Exception) {
-                                                Log.d("StreamedPk", "webview destroy failed: ${e.message}")
-                                            }
+                                            } catch (_: Exception) {}
                                         }
                                         continuation.resume(reqUrl)
                                     }
@@ -495,9 +484,7 @@ class StreamedPkProvider : MainAPI() {
                         if (captured.compareAndSet(false, true)) {
                             try {
                                 webView.destroy()
-                            } catch (e: Exception) {
-                                Log.d("StreamedPk", "webview destroy failed: ${e.message}")
-                            }
+                            } catch (_: Exception) {}
                             continuation.resume(null)
                         }
                     }, 30000)
@@ -640,14 +627,10 @@ class StreamedPkProvider : MainAPI() {
                                 foundAny = true
                             } else {
                             }
-                        } catch (e: Exception) {
-                            Log.d("StreamedPk", "link emit failed: ${e.message}")
-                        }
+                        } catch (_: Exception) {}
                     }
                 }
-            } catch (e: Exception) {
-                Log.d("StreamedPk", "link sweep failed: ${e.message}")
-            }
+            } catch (_: Exception) {}
         }
 
         return foundAny

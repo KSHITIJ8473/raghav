@@ -3,7 +3,6 @@ package com.laddu100
 import android.util.Base64
 import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.newSubtitleFile
@@ -472,9 +471,7 @@ class KwikExtractor : ExtractorApi() {
                 )
                 code = res.code
                 if (code == 302) location = res.headers["location"] ?: ""
-            } catch (e: Exception) {
-                Log.d("AniSuge", "token post failed: ${e.message}")
-            }
+            } catch (_: Exception) {}
             tries++
         }
         return location.takeIf { it.startsWith("http") }?.let { it to pageUrl }

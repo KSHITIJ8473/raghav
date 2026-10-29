@@ -1,7 +1,6 @@
 package com.laddu100.raghavanime
 
 import android.content.Context
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.plugins.CloudstreamPlugin
 import com.lagradost.cloudstream3.plugins.Plugin
 
@@ -33,9 +32,7 @@ class RaghavAnimePlugin : Plugin() {
         this.openSettings = { ctx ->
             try {
                 RaghavAnimeSettings.show(ctx)
-            } catch (e: Exception) {
-                Log.d("RaghavAnime", "settings open failed: ${e.message}")
-            }
+            } catch (_: Exception) {}
         }
     }
 }

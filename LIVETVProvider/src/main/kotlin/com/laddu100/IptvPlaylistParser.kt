@@ -1,7 +1,6 @@
 package com.laddu100
 
 import android.util.Base64
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import java.io.InputStream
 import org.json.JSONObject
@@ -150,9 +149,7 @@ class IptvPlaylistParser {
                             if (map.containsKey("user-agent")) {
                                 bufferedUserAgent = map["user-agent"]
                             }
-                        } catch (e: Exception) {
-                            Log.d("LIVETV", "ext attr parse failed: ${e.message}")
-                        }
+                        } catch (_: Exception) {}
                     }
                     line.startsWith(LIVETV.EXT_VLC_OPT) -> {
                         val userAgent = line.getTagValue("http-user-agent")

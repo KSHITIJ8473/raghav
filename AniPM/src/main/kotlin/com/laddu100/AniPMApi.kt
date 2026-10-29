@@ -1,6 +1,5 @@
 package com.laddu100
 
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import java.net.URLEncoder
@@ -130,9 +129,7 @@ object AniPMApi {
                 if (res.code == 200 && res.text.startsWith("#EXTM3U")) {
                     return masterUrl
                 }
-            } catch (e: Exception) {
-                Log.d("AniPM", "master probe failed: ${e.message}")
-            }
+            } catch (_: Exception) {}
         }
         return null
     }

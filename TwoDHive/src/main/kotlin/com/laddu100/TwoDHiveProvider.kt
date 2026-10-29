@@ -2,7 +2,6 @@ package com.laddu100
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.databind.JsonNode
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.network.WebViewResolver
 import com.lagradost.cloudstream3.utils.*
@@ -286,9 +285,7 @@ class TwoDHiveProvider : MainAPI() {
                             }
                         }
                     }
-                } catch (e: Exception) {
-                    Log.d("TwoDHive", "episode map failed: ${e.message}")
-                }
+                } catch (_: Exception) {}
             }
         }
 

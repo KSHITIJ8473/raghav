@@ -28,7 +28,6 @@ import android.widget.ProgressBar
 import android.widget.TextView
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.CommonActivity
 import com.lagradost.cloudstream3.ui.settings.Globals
 import kotlinx.coroutines.Dispatchers
@@ -135,10 +134,10 @@ private class RAIResolverDialog(
     private fun finishWithCapture() {
         if (!resolved.compareAndSet(false, true)) return
         handler.removeCallbacksAndMessages(null)
-        try { webView?.stopLoading() } catch (e: Exception) { Log.d("RareAnimes", "webview stop failed: ${e.message}") }
-        try { webView?.destroy() } catch (e: Exception) { Log.d("RareAnimes", "webview destroy failed: ${e.message}") }
-        try { dialog?.dismiss() } catch (e: Exception) { Log.d("RareAnimes", "dialog dismiss failed: ${e.message}") }
-        try { onFinished?.invoke(captured) } catch (e: Exception) { Log.d("RareAnimes", "finish callback failed: ${e.message}") }
+        try { webView?.stopLoading() } catch (_: Exception) {}
+        try { webView?.destroy() } catch (_: Exception) {}
+        try { dialog?.dismiss() } catch (_: Exception) {}
+        try { onFinished?.invoke(captured) } catch (_: Exception) {}
     }
 
     private fun finishManual() {
@@ -147,10 +146,10 @@ private class RAIResolverDialog(
         } else {
             if (!resolved.compareAndSet(false, true)) return
             handler.removeCallbacksAndMessages(null)
-            try { webView?.stopLoading() } catch (e: Exception) { Log.d("RareAnimes", "webview stop failed: ${e.message}") }
-            try { webView?.destroy() } catch (e: Exception) { Log.d("RareAnimes", "webview destroy failed: ${e.message}") }
-            try { dialog?.dismiss() } catch (e: Exception) { Log.d("RareAnimes", "dialog dismiss failed: ${e.message}") }
-            try { onFinished?.invoke(null) } catch (e: Exception) { Log.d("RareAnimes", "finish callback failed: ${e.message}") }
+            try { webView?.stopLoading() } catch (_: Exception) {}
+            try { webView?.destroy() } catch (_: Exception) {}
+            try { dialog?.dismiss() } catch (_: Exception) {}
+            try { onFinished?.invoke(null) } catch (_: Exception) {}
         }
     }
 
@@ -158,10 +157,10 @@ private class RAIResolverDialog(
         captured = null
         if (!resolved.compareAndSet(false, true)) return
         handler.removeCallbacksAndMessages(null)
-        try { webView?.stopLoading() } catch (e: Exception) { Log.d("RareAnimes", "webview stop failed: ${e.message}") }
-        try { webView?.destroy() } catch (e: Exception) { Log.d("RareAnimes", "webview destroy failed: ${e.message}") }
-        try { dialog?.dismiss() } catch (e: Exception) { Log.d("RareAnimes", "dialog dismiss failed: ${e.message}") }
-        try { onFinished?.invoke(null) } catch (e: Exception) { Log.d("RareAnimes", "finish callback failed: ${e.message}") }
+        try { webView?.stopLoading() } catch (_: Exception) {}
+        try { webView?.destroy() } catch (_: Exception) {}
+        try { dialog?.dismiss() } catch (_: Exception) {}
+        try { onFinished?.invoke(null) } catch (_: Exception) {}
     }
 
     private fun smartBack() {
@@ -173,14 +172,12 @@ private class RAIResolverDialog(
             } else {
                 statusText?.text = "Already at the first page"
             }
-        } catch (e: Exception) {
-            Log.d("RareAnimes", "goBack failed: ${e.message}")
-        }
+        } catch (_: Exception) {}
     }
 
     private fun reloadPage() {
         statusText?.text = "Reloading..."
-        try { webView?.reload() } catch (e: Exception) { Log.d("RareAnimes", "webview reload failed: ${e.message}") }
+        try { webView?.reload() } catch (_: Exception) {}
     }
 
     private fun navButton(
@@ -364,8 +361,8 @@ private class RAIResolverDialog(
             handler.removeCallbacksAndMessages(null)
             if (!resolved.get()) {
                 resolved.set(true)
-                try { webView?.destroy() } catch (e: Exception) { Log.d("RareAnimes", "webview destroy failed: ${e.message}") }
-                try { onFinished?.invoke(captured) } catch (e: Exception) { Log.d("RareAnimes", "finish callback failed: ${e.message}") }
+                try { webView?.destroy() } catch (_: Exception) {}
+                try { onFinished?.invoke(captured) } catch (_: Exception) {}
             }
         }
         dialog?.show()
@@ -395,7 +392,7 @@ private class RAIResolverDialog(
         val t = SystemClock.uptimeMillis()
         val down = MotionEvent.obtain(t, t, MotionEvent.ACTION_DOWN, pos.x, pos.y, 0)
         val up = MotionEvent.obtain(t, t + 120, MotionEvent.ACTION_UP, pos.x, pos.y, 0)
-        try { wv.dispatchTouchEvent(down); wv.dispatchTouchEvent(up) } catch (e: Exception) { Log.d("RareAnimes", "touch dispatch failed: ${e.message}") }
+        try { wv.dispatchTouchEvent(down); wv.dispatchTouchEvent(up) } catch (_: Exception) {}
         finally { down.recycle(); up.recycle() }
     }
 
@@ -464,9 +461,9 @@ private class RAIResolverDialog(
 
     fun dismiss() {
         handler.removeCallbacksAndMessages(null)
-        try { webView?.apply { stopLoading(); destroy() } } catch (e: Exception) { Log.d("RareAnimes", "webview teardown failed: ${e.message}") }
+        try { webView?.apply { stopLoading(); destroy() } } catch (_: Exception) {}
         webView = null
-        try { dialog?.dismiss() } catch (e: Exception) { Log.d("RareAnimes", "dialog dismiss failed: ${e.message}") }
+        try { dialog?.dismiss() } catch (_: Exception) {}
         dialog = null
     }
 }

@@ -1,7 +1,6 @@
 package com.justplay
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.AppUtils.toJson
@@ -78,9 +77,7 @@ class JustPlay : MainAPI() {
                 // live sports resolve beside site scrapes, both need room in the queue
                 if (dispatcher.maxRequestsPerHost < 40) dispatcher.maxRequestsPerHost = 40
                 if (dispatcher.maxRequests < 200) dispatcher.maxRequests = 200
-            } catch (e: Exception) {
-                Log.d("JustPlay", "client widen failed: ${e.message}")
-            }
+            } catch (_: Exception) {}
         }
 
         fun siteEnabled(id: String): Boolean = try {
@@ -126,9 +123,7 @@ class JustPlay : MainAPI() {
         fun setConcurrency(value: Int) {
             try {
                 CloudStreamApp.setKey(KEY_CONCURRENCY, value.coerceIn(6, 40))
-            } catch (e: Exception) {
-                Log.d("JustPlay", "concurrency save failed: ${e.message}")
-            }
+            } catch (_: Exception) {}
         }
 
         fun liveSportsEnabled(): Boolean = try {
@@ -146,33 +141,25 @@ class JustPlay : MainAPI() {
         fun setLiveSports(on: Boolean) {
             try {
                 CloudStreamApp.setKey(KEY_LIVE_SPORTS, on)
-            } catch (e: Exception) {
-                Log.d("JustPlay", "setting save failed: ${e.message}")
-            }
+            } catch (_: Exception) {}
         }
 
         fun setLiveSportsTop(onTop: Boolean) {
             try {
                 CloudStreamApp.setKey(KEY_LIVE_SPORTS_TOP, onTop)
-            } catch (e: Exception) {
-                Log.d("JustPlay", "setting save failed: ${e.message}")
-            }
+            } catch (_: Exception) {}
         }
 
         fun setDownloadOnly(on: Boolean) {
             try {
                 CloudStreamApp.setKey(KEY_DL_ONLY, on)
-            } catch (e: Exception) {
-                Log.d("JustPlay", "setting save failed: ${e.message}")
-            }
+            } catch (_: Exception) {}
         }
 
         fun setStreamOnly(on: Boolean) {
             try {
                 CloudStreamApp.setKey(KEY_STREAM_ONLY, on)
-            } catch (e: Exception) {
-                Log.d("JustPlay", "setting save failed: ${e.message}")
-            }
+            } catch (_: Exception) {}
         }
     }
 
@@ -597,9 +584,7 @@ class JustPlay : MainAPI() {
                                 site.invoke(res, subtitleCallback, guardedCallback)
                             }
                         }
-                    } catch (e: Exception) {
-                        Log.d("JustPlay", "site invoke failed: ${e.message}")
-                    }
+                    } catch (_: Exception) {}
                 }
             }
             val timer = launch {

@@ -212,7 +212,7 @@ object TgTvApi {
                     "Accept" to "application/json",
                     "Referer" to "https://jjtvxweb.pages.dev/"
                 ),
-                timeout = 15L
+                timeout = 5L
             ).text
             if (text.isNotBlank()) {
                 endpointCache[url] = text to now

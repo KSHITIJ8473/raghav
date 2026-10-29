@@ -1,6 +1,5 @@
 package com.justplay
 
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.utils.ExtractorLink
@@ -647,9 +646,7 @@ internal object MmCineverse {
         for (server in ordered) {
             try {
                 any = resolveMirror(server, labelPrefix, callback) || any
-            } catch (e: Exception) {
-                Log.d("JustPlay", "mirror resolve failed: ${e.message}")
-            }
+            } catch (_: Exception) {}
         }
         return any
     }
@@ -1092,9 +1089,7 @@ internal object MmGdMirror {
             for (mirror in mirrors) {
                 try {
                     any = dispatchMirror(mirror, "$labelPrefix $fileLabel", callback) || any
-                } catch (e: Exception) {
-                    Log.d("JustPlay", "mirror dispatch failed: ${e.message}")
-                }
+                } catch (_: Exception) {}
             }
         }
         return any
@@ -1124,9 +1119,7 @@ internal object MmGdMirror {
         for (mirror in mirrors) {
             try {
                 any = dispatchMirror(mirror, "$labelPrefix $sid", callback) || any
-            } catch (e: Exception) {
-                Log.d("JustPlay", "mirror dispatch failed: ${e.message}")
-            }
+            } catch (_: Exception) {}
         }
         return any
     }
@@ -1250,9 +1243,7 @@ internal object MmVidout {
                             }
                         }
                     }
-                } catch (e: Exception) {
-                    Log.d("JustPlay", "subtitles failed: ${e.message}")
-                }
+                } catch (_: Exception) {}
             }
         } else if (season != null) {
             val body = MmNet.get("$RAW/hls/tv/$tmdbId/S$season.json", referer = "https://vidout.pages.dev/")

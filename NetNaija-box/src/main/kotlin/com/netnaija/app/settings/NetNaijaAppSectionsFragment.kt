@@ -19,7 +19,6 @@ import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.widget.SwitchCompat
 import androidx.fragment.app.DialogFragment
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.MainActivity
 import com.netnaija.app.NetNaijaApp
 import org.json.JSONArray
@@ -175,7 +174,7 @@ class NetNaijaAppSectionsFragment(private val sharedPref: SharedPreferences) : D
             Toast.makeText(ctx, "Could not save the section layout", Toast.LENGTH_SHORT).show()
             return
         }
-        try { MainActivity.reloadHomeEvent.invoke(true) } catch (e: Throwable) { Log.d("NetNaijaApp", "reload event failed: ${e.message}") }
+        try { MainActivity.reloadHomeEvent.invoke(true) } catch (_: Throwable) {}
         Toast.makeText(ctx, "Home page updated", Toast.LENGTH_SHORT).show()
         dismiss()
     }

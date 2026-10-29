@@ -1,7 +1,6 @@
 package com.elitestreams
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.CloudStreamApp
 import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
@@ -142,9 +141,7 @@ object EsFeeds {
         hotstarWriteAt = System.currentTimeMillis()
         try {
             CloudStreamApp.setKey(KEY_HOTSTAR_FEED, channels.toJson())
-        } catch (e: Exception) {
-            Log.d("EliteStreams", "hotstar cache write failed: ${e.message}")
-        }
+        } catch (_: Exception) {}
     }
 
     private fun cachedHotstarFeed(): List<ChannelData> = try {
@@ -269,9 +266,7 @@ object EsFeeds {
                             }
                             cur.headers[proper] = v
                         }
-                    } catch (e: Exception) {
-                        Log.d("EliteStreams", "header mapping failed: ${e.message}")
-                    }
+                    } catch (_: Exception) {}
                 }
                 line.isNotEmpty() && !line.startsWith("#") -> {
                     cur.url = cleanUrl(line.substringBefore("|"))

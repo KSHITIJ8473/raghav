@@ -1,6 +1,5 @@
 package com.justplay
 
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.base64Decode
@@ -32,9 +31,7 @@ internal const val PLAY_UA =
 internal fun NiceResponse.close() {
     try {
         okhttpResponse.close()
-    } catch (e: Exception) {
-        Log.d("JustPlay", "response close failed: ${e.message}")
-    }
+    } catch (_: Exception) {}
 }
 
 internal object PlayNet {
@@ -55,9 +52,7 @@ internal object PlayNet {
         repeat(attempts) { i ->
             try {
                 block()?.let { return it }
-            } catch (e: Exception) {
-                Log.d("JustPlay", "retry failed: ${e.message}")
-            }
+            } catch (_: Exception) {}
             if (i < attempts - 1) delay(gapMs)
         }
         return null
@@ -556,9 +551,7 @@ internal object PlayNet {
                 collected.add(link)
             }
             emitChecked(site, label, quality, collected, callback)
-        } catch (e: Exception) {
-            Log.d("JustPlay", "extractor failed: ${e.message}")
-        }
+        } catch (_: Exception) {}
     }
 
     suspend fun emitOwnLink(
@@ -596,9 +589,7 @@ internal object PlayNet {
             val collected = mutableListOf<ExtractorLink>()
             resolver(referer, subtitleCallback) { collected.add(it) }
             emitChecked(site, label, quality, collected, callback)
-        } catch (e: Exception) {
-            Log.d("JustPlay", "resolver failed: ${e.message}")
-        }
+        } catch (_: Exception) {}
     }
 
     private suspend fun emitChecked(

@@ -1,7 +1,6 @@
 package com.laddu100.raghavanime
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 
@@ -32,9 +31,7 @@ object FirebaseDomainHelper {
                 }
                 strVal?.takeIf { it.isNotBlank() }?.let { k to it.removeSuffix("/") }
             }.toMap()
-        } catch (e: Exception) {
-            Log.d("RaghavAnime", "domains parse failed: ${e.message}")
-        }
+        } catch (_: Exception) {}
         lastLoadTime = now
     }
 

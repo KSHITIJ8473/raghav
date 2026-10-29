@@ -29,7 +29,7 @@ class RaghavAniChan : MainAPI() {
     suspend fun warm() {
         RaghavAniChanWeb.refreshDomain()
         mainUrl = RaghavAniChanWeb.url()
-        try { RaghavAniChanWeb.warmPage() } catch (e: Exception) { Log.d("RaghavAniChan", "warm page failed: ${e.message}") }
+        try { RaghavAniChanWeb.warmPage() } catch (_: Exception) {}
     }
 
     suspend fun loadLinksByAnilistId(
@@ -422,9 +422,7 @@ internal object RaghavAniChanKiwi {
                 if (res.code == 302) {
                     res.headers["location"]?.takeIf { it.startsWith("http") }?.let { return it to pageUrl }
                 }
-            } catch (e: Exception) {
-                Log.d("RaghavAniChan", "token post failed: ${e.message}")
-            }
+            } catch (_: Exception) {}
         }
         return null
     }

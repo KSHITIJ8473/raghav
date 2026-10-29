@@ -196,7 +196,7 @@ class LiveTgTvProvider : MainAPI() {
 
         // one link per distinct url in the site's own order, so two servers
         // handing out the same stream do not double up in the picker
-        val byUrl = LinkedHashMap<String, Map<String, String>>()
+        val byUrl = LinkedHashMap<String, Pair<Map<String, String>, Map<String, String>>>()
 
         fun offer(rawUrl: String, cookie: String, extraKeys: Map<String, String>) {
             var u = rawUrl.trim()
@@ -213,8 +213,16 @@ class LiveTgTvProvider : MainAPI() {
             }
             // no token of the right class - keep the query it came with, it may still work
             val finalUrl = if (token.isBlank()) u else "$path?$token"
+            // exoplayer drops the manifest query when it resolves the relative
+            // segment paths, so the token also rides as a cookie on every request
+            val headers = if (token.isBlank()) {
+                TgTvApi.playerHeaders
+            } else {
+                val value = token.substringAfter('=')
+                TgTvApi.playerHeaders + mapOf("Cookie" to "$token; hdnea=$value")
+            }
             if (finalUrl !in byUrl) {
-                byUrl[finalUrl] = if (extraKeys.isEmpty()) chanKeys else chanKeys + extraKeys
+                byUrl[finalUrl] = headers to (if (extraKeys.isEmpty()) chanKeys else chanKeys + extraKeys)
             }
         }
 
@@ -254,9 +262,9 @@ class LiveTgTvProvider : MainAPI() {
         var emitted = false
         for ((index, entry) in byUrl.entries.withIndex()) {
             val url = entry.key
-            val keys = entry.value
+            val headers = entry.value.first
+            val keys = entry.value.second
             val label = "Server ${index + 1}"
-            val headers = TgTvApi.playerHeaders
             val encoded = keys.entries
                 .mapNotNull { (kid, key) ->
                     val k = hexToBase64Url(kid)

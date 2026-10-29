@@ -9,7 +9,6 @@ import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.AppUtils.toJson
@@ -462,9 +461,7 @@ class LIVETVLiveEventsProvider(
                         )
                     }
                 }
-            } catch (e: Exception) {
-                Log.d("LIVETV", "live event links failed: ${e.message}")
-            }
+            } catch (_: Exception) {}
         }
 
         return true
@@ -517,9 +514,7 @@ class LIVETVLiveEventsProvider(
                                 Handler(Looper.getMainLooper()).post {
                                     try {
                                         webView.destroy()
-                                    } catch (e: Exception) {
-                                        Log.d("LIVETV", "webview destroy failed: ${e.message}")
-                                    }
+                                    } catch (_: Exception) {}
                                     continuation.resume(url)
                                 }
                             }
@@ -541,9 +536,7 @@ class LIVETVLiveEventsProvider(
                                     Handler(Looper.getMainLooper()).post {
                                         try {
                                             webView.destroy()
-                                        } catch (e: Exception) {
-                                            Log.d("LIVETV", "webview destroy failed: ${e.message}")
-                                        }
+                                        } catch (_: Exception) {}
                                         continuation.resume(requestUrl)
                                     }
                                 }
@@ -565,9 +558,7 @@ class LIVETVLiveEventsProvider(
                                             })();
                                         """.trimIndent()
                                         webView.evaluateJavascript(jsCode, null)
-                                    } catch (e: Exception) {
-                                        Log.d("LIVETV", "bridge eval failed: ${e.message}")
-                                    }
+                                    } catch (_: Exception) {}
                                 }, 500)
                             }
 
@@ -576,9 +567,7 @@ class LIVETVLiveEventsProvider(
                                     if (!urlCaptured) {
                                         try {
                                             webView.destroy()
-                                        } catch (e: Exception) {
-                                            Log.d("LIVETV", "webview destroy failed: ${e.message}")
-                                        }
+                                        } catch (_: Exception) {}
                                         continuation.resume(null)
                                     }
                                 }, 3000)
@@ -593,14 +582,10 @@ class LIVETVLiveEventsProvider(
                         if (!urlCaptured && capturedUrl == null) {
                             try {
                                 webView.destroy()
-                            } catch (e: Exception) {
-                                Log.d("LIVETV", "webview destroy failed: ${e.message}")
-                            }
+                            } catch (_: Exception) {}
                             try {
                                 continuation.resume(null)
-                            } catch (e: Exception) {
-                                Log.d("LIVETV", "resume dropped: ${e.message}")
-                            }
+                            } catch (_: Exception) {}
                         }
                     }, 30000)
                 } catch (_: Exception) {
@@ -635,9 +620,7 @@ class LIVETVLiveEventsProvider(
                         }
                     }
                 }
-            } catch (e: Exception) {
-                Log.d("LIVETV", "events decrypt failed: ${e.message}")
-            }
+            } catch (_: Exception) {}
             null
         }
     }

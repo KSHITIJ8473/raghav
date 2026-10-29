@@ -2,7 +2,6 @@ package com.netnaija.app
 
 import android.content.SharedPreferences
 import com.fasterxml.jackson.databind.JsonNode
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.Actor
 import com.lagradost.cloudstream3.ActorData
 import com.lagradost.cloudstream3.Episode
@@ -342,9 +341,7 @@ class NetNaijaApp(private val sharedPref: SharedPreferences?) : MainAPI() {
         try {
             val token = JSONObject(xUserHeader).optString("token")
             if (token.isNotBlank()) saveToken(token)
-        } catch (e: Exception) {
-            Log.d("NetNaijaApp", "token persist failed: ${e.message}")
-        }
+        } catch (_: Exception) {}
     }
 
     private suspend fun buildAuthHeaders(
@@ -648,9 +645,7 @@ class NetNaijaApp(private val sharedPref: SharedPreferences?) : MainAPI() {
                     }
                 }
             }
-        } catch (e: Exception) {
-            Log.d("NetNaijaApp", "search failed: ${e.message}")
-        }
+        } catch (_: Exception) {}
 
         // first page also matches running sports events so live matches
         // surface straight from search
@@ -711,9 +706,7 @@ class NetNaijaApp(private val sharedPref: SharedPreferences?) : MainAPI() {
                         }
                     }
                 }
-            } catch (e: Exception) {
-                Log.d("NetNaijaApp", "live search failed: ${e.message}")
-            }
+            } catch (_: Exception) {}
         }
         return results.toNewSearchResponseList()
     }
@@ -842,9 +835,7 @@ class NetNaijaApp(private val sharedPref: SharedPreferences?) : MainAPI() {
                 val uri = URI(detailUrl)
                 detailDomain = "${uri.scheme}://${uri.host}"
                 detailPath = detailUrl.trimEnd('/').substringBefore('?').substringAfterLast('/')
-            } catch (e: Exception) {
-                Log.d("NetNaijaApp", "detail url parse failed: ${e.message}")
-            }
+            } catch (_: Exception) {}
         }
         if (detailPath.isNullOrBlank()) {
             detailPath = data.get("detailPath")?.asText()
@@ -1013,9 +1004,7 @@ class NetNaijaApp(private val sharedPref: SharedPreferences?) : MainAPI() {
                 this.backgroundPosterUrl = Background ?: backgroundUrl ?: Poster
                 try {
                     this.logoUrl = logoUrl
-                } catch (e: Throwable) {
-                    Log.d("NetNaijaApp", "logo set failed: ${e.message}")
-                }
+                } catch (_: Throwable) {}
                 this.plot = Description ?: description
                 this.year = year
                 this.tags = tags
@@ -1038,9 +1027,7 @@ class NetNaijaApp(private val sharedPref: SharedPreferences?) : MainAPI() {
             this.backgroundPosterUrl = Background ?: backgroundUrl
             try {
                 this.logoUrl = logoUrl
-            } catch (e: Throwable) {
-                Log.d("NetNaijaApp", "logo set failed: ${e.message}")
-            }
+            } catch (_: Throwable) {}
             this.plot = Description ?: description
             this.year = year
             this.tags = tags
@@ -1072,9 +1059,7 @@ class NetNaijaApp(private val sharedPref: SharedPreferences?) : MainAPI() {
                     emitCaption(seen, subtitleCallback, language, caption)
                 }
             }
-        } catch (e: Exception) {
-            Log.d("NetNaijaApp", "captions failed: ${e.message}")
-        }
+        } catch (_: Exception) {}
         try {
             val subLink = "$mainUrl/wefeed-mobile-bff/subject-api/get-ext-captions?subjectId=$subjectId&resourceId=$streamId&episode=0"
             val subHeaders = buildAuthHeaders("GET", subLink)
@@ -1085,9 +1070,7 @@ class NetNaijaApp(private val sharedPref: SharedPreferences?) : MainAPI() {
                     emitCaption(seen, subtitleCallback, language, caption)
                 }
             }
-        } catch (e: Exception) {
-            Log.d("NetNaijaApp", "captions failed: ${e.message}")
-        }
+        } catch (_: Exception) {}
     }
 
     private suspend fun emitCaption(
@@ -1219,9 +1202,7 @@ class NetNaijaApp(private val sharedPref: SharedPreferences?) : MainAPI() {
                     continue
                 }
             }
-        } catch (e: Exception) {
-            Log.d("NetNaijaApp", "caption sweep failed: ${e.message}")
-        }
+        } catch (_: Exception) {}
     }
 
     override suspend fun loadLinks(
@@ -1311,13 +1292,9 @@ class NetNaijaApp(private val sharedPref: SharedPreferences?) : MainAPI() {
                                 this.quality = com.lagradost.cloudstream3.utils.Qualities.P720.value
                             }
                         )
-                    } catch (e: Exception) {
-                        Log.d("NetNaijaApp", "link emit failed: ${e.message}")
-                    }
+                    } catch (_: Exception) {}
                 }
-            } catch (e: Exception) {
-                Log.d("NetNaijaApp", "link sweep failed: ${e.message}")
-            }
+            } catch (_: Exception) {}
             return true
         }
 
@@ -1341,9 +1318,7 @@ class NetNaijaApp(private val sharedPref: SharedPreferences?) : MainAPI() {
                         this.quality = com.lagradost.cloudstream3.utils.Qualities.P1080.value
                     }
                 )
-            } catch (e: Exception) {
-                Log.d("NetNaijaApp", "link emit failed: ${e.message}")
-            }
+            } catch (_: Exception) {}
             return true
         }
 
@@ -1382,9 +1357,7 @@ class NetNaijaApp(private val sharedPref: SharedPreferences?) : MainAPI() {
                     val uri = URI(detailUrl)
                     mainDetailDomain = "${uri.scheme}://${uri.host}"
                     mainDetailPath = detailUrl.trimEnd('/').substringBefore('?').substringAfterLast('/')
-                } catch (e: Exception) {
-                    Log.d("NetNaijaApp", "detail url parse failed: ${e.message}")
-                }
+                } catch (_: Exception) {}
             }
             if (mainDetailPath.isNullOrBlank()) {
                 mainDetailPath = subjectData.get("detailPath")?.asText() ?: mainDetailPath
@@ -1431,9 +1404,7 @@ class NetNaijaApp(private val sharedPref: SharedPreferences?) : MainAPI() {
                                 dubPath = dubData?.get("detailPath")?.asText() ?: dubPath
                             }
                         }
-                    } catch (e: Exception) {
-                        Log.d("NetNaijaApp", "dub detail failed: ${e.message}")
-                    }
+                    } catch (_: Exception) {}
                 }
                 var dubDomain: String? = mainDetailDomain
                 if (!currentDetailUrl.isNullOrBlank()) {
@@ -1441,9 +1412,7 @@ class NetNaijaApp(private val sharedPref: SharedPreferences?) : MainAPI() {
                         val uri = URI(currentDetailUrl)
                         dubDomain = "${uri.scheme}://${uri.host}"
                         dubPath = currentDetailUrl.trimEnd('/').substringBefore('?').substringAfterLast('/')
-                    } catch (e: Exception) {
-                        Log.d("NetNaijaApp", "detail url parse failed: ${e.message}")
-                    }
+                    } catch (_: Exception) {}
                 }
 
                 val pathParam = dubPath ?: ""
@@ -1536,23 +1505,17 @@ class NetNaijaApp(private val sharedPref: SharedPreferences?) : MainAPI() {
                             if (dashItems != null && dashItems.isArray) {
                                 for (item in dashItems) emitWebStream(item, "DASH")
                             }
-                        } catch (e: Exception) {
-                            Log.d("NetNaijaApp", "dash streams failed: ${e.message}")
-                        }
+                        } catch (_: Exception) {}
                         try {
                             if (hlsItems != null && hlsItems.isArray) {
                                 for (item in hlsItems) emitWebStream(item, "HLS")
                             }
-                        } catch (e: Exception) {
-                            Log.d("NetNaijaApp", "hls streams failed: ${e.message}")
-                        }
+                        } catch (_: Exception) {}
                         try {
                             if (streamItems != null && streamItems.isArray) {
                                 for (item in streamItems) emitWebStream(item, "MP4")
                             }
-                        } catch (e: Exception) {
-                            Log.d("NetNaijaApp", "mp4 streams failed: ${e.message}")
-                        }
+                        } catch (_: Exception) {}
                         // the first domain carrying streams wins, native
                         // mobile streams only run when no web domain worked
                         webStreamsEmitted = true
@@ -1564,9 +1527,7 @@ class NetNaijaApp(private val sharedPref: SharedPreferences?) : MainAPI() {
                 if (!webStreamsEmitted) {
                     loadNativeMobileStreams(subjectId, language, season, episode, subtitleCallback, callback)
                 }
-            } catch (e: Exception) {
-                Log.d("NetNaijaApp", "web streams failed: ${e.message}")
-            }
+            } catch (_: Exception) {}
         }
         return true
     }

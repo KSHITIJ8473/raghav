@@ -1,6 +1,7 @@
 package com.gotaku
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties
+import com.lagradost.api.Log
 import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import kotlinx.coroutines.delay
@@ -53,7 +54,9 @@ object GoTakuApi {
                 if (response.code != 426) {
                     return null
                 }
-            } catch (_: Exception) {}
+            } catch (e: Exception) {
+                Log.d("GoTaku", "fetch failed: ${e.message}")
+            }
             delay(700L + attempt * 500L)
         }
         return null
@@ -61,7 +64,7 @@ object GoTakuApi {
 
     // k endpoints answer sealed, callers parse the text into their own type
     private suspend fun fetchText(url: String, k: Boolean = false): String? {
-        val fullUrl = if (k) "$url${if (url.contains('?')) '&' else '?'}k=6" else url
+        val fullUrl = if (k) "$url${if (url.contains('?')) '&' else '?'}k=8" else url
         val body = getBody(fullUrl, siteHeaders()) ?: return null
         val plain = GoTakuCrypto.unseal(body) ?: body
         return String(plain, Charsets.UTF_8)

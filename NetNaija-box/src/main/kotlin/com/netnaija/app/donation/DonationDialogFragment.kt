@@ -31,7 +31,7 @@ class DonationDialogFragment : DialogFragment() {
         private const val TAG = "RaghavDonation"
 
         private const val DONATE_URL = "https://buymeacoffee.com/raghav766"
-        private const val DISCORD_URL = "https://discord.gg/Bf4jzGBPh"
+        private const val DISCORD_URL = "https://discord.gg/XpxyxkKdUm"
         private const val REPO_URL = "https://github.com/KSHITIJ8473/raghav"
         private const val UPI_DONATE_URL = "https://kshitij8473.github.io/donate/"
 

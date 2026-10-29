@@ -323,10 +323,8 @@ class SenshiProvider : MainAPI() {
             if (masterText != null) break
         }
 
-        // A plain master plays as it is: its child playlists and segments are plain HLS that only
-        // need the Referer, and the master's token wants the same User-Agent the source was
-        // fetched with. No Origin: with it the CDN ignores byte ranges. Both audio tracks stay in
-        // the master (Japanese is the default), so the player's audio menu picks sub or dub.
+        // a plain master plays as it is, its token wants the source's User-Agent and
+        // no Origin (with it the CDN ignores byte ranges); both audio tracks stay
         if (masterText != null && masterText.trimStart().startsWith("#EXTM3U")) {
             val height = resolutionTag.findAll(masterText)
                 .mapNotNull { it.groupValues[2].toIntOrNull() }

@@ -552,9 +552,8 @@ class JustPlay : MainAPI() {
         val seenUrls = ConcurrentHashMap.newKeySet<String>()
         val sourceCounts = ConcurrentHashMap<String, AtomicInteger>()
 
-        // links go out in one batch, a stream of single links keeps the player rebuilding
-        // its source list while the first link is still starting and that churn is what
-        // breaks playback until the title is reopened
+        // links go out in one batch, a stream of single links keeps the player
+        // rebuilding its source list and that churn breaks playback when it starts
         val held = mutableListOf<ExtractorLink>()
         val heldLock = Any()
 

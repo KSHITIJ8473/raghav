@@ -131,10 +131,8 @@ object MovyApi {
         }
     }
 
-    // seeds are per media id and live for roughly 30 seconds, and the api nodes
-    // behind cloudflare often disagree about which seed is current, so a stale
-    // one gets retried before a fresh one is pulled. the endpoint also rate
-    // limits hard, so fetches are paced to one per second.
+    // seeds live for roughly 30 seconds and the nodes behind cloudflare often
+    // disagree about which one is current; the api rate limits hard so pace it
     class SeedPool(private val mediaId: String) {
         @Volatile private var seed: String? = null
         private var expiresAt = 0L
@@ -239,9 +237,8 @@ object MovyApi {
         return "$STREAM_BASE/${city.slug}/sources?$parts"
     }
 
-    // a 401 usually means the request landed on a node that knows a different
-    // seed, so the same seed gets a couple of retries before a new one is
-    // pulled, a 429 cools down, one transport retry covers slow extractors
+    // a 401 means the node knows a different seed so retry before pulling a new
+    // one, a 429 cools down, one transport retry covers slow extractors
     suspend fun citySources(
         city: City,
         request: SourcesRequest,

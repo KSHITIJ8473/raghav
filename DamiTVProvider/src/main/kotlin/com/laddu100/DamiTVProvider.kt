@@ -563,9 +563,8 @@ class DamiTVProvider : MainAPI() {
                         if (source.isNotEmpty() && streamId.isNotEmpty() && streamNo.isNotEmpty()) {
                             val playHeaders = hlsPlayHeaders
 
-                            // the sd-token endpoint is gone from the site, this
-                            // only works when it comes back so a failure must fall
-                            // through to the embed fallback
+                            // the sd-token endpoint is gone from the site, a failure
+                            // here has to fall through to the embed fallback
                             try {
                                 val tokenResponse = apiGet("$mainUrl/papi/sd-token", apiHeaders)
                                 val tokenData = parseJson<Map<String, Any>>(tokenResponse)

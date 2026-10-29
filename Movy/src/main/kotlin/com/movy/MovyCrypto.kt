@@ -2,9 +2,8 @@ package com.movy
 
 import java.util.Base64
 
-// movy.sx enc=2 wire format: base64url payload that starts with the literal
-// "mvm1", followed by json XORed with a keystream derived from the seed and
-// the tmdb media id. ported from the site bundle.
+// movy.sx enc=2 wire format: base64url payload starting with "mvm1", then json
+// XORed with a keystream derived from the seed and the tmdb media id
 object MovyCrypto {
 
     // 0x9e3779b9 written as its int32 form, the hex literal would be a long

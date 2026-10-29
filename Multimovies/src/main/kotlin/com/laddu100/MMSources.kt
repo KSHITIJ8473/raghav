@@ -15,8 +15,7 @@ object MMVidout {
     private const val RAW = "https://raw.githubusercontent.com/Watchout2025/api/refs/heads/main"
 
     // the index keeps pointing at cdn urls that expire without notice, so a link
-    // is only listed after the playlist itself answers; the probe runs on the
-    // same network the player will use which makes it an honest check
+    // is only listed after the playlist answers on the same network it will play
     private suspend fun addLink(url: String, label: String, callback: (ExtractorLink) -> Unit): Boolean {
         val alive = try {
             MMNet.get(url, referer = "https://vidout.pages.dev/") != null

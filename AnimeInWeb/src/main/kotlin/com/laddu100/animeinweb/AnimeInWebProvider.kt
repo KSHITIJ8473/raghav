@@ -66,9 +66,8 @@ class AnimeInWebProvider : MainAPI() {
     private val posterCache = ConcurrentHashMap<String, String>()
     private val posterSemaphore = Semaphore(POSTER_CONCURRENCY)
 
-    // app image loaders skip the plugin's poster headers and the site's hosts reject those,
-    // so posters come from kitsu whose cdn serves every client; the site url stays the
-    // fallback for titles kitsu does not know
+    // app image loaders skip the plugin's poster headers and the site's hosts
+    // reject those, so posters come from kitsu, the site url stays the fallback
     private suspend fun posterFor(title: String?, siteUrl: String?): String? {
         val fallback = fixPosterUrl(siteUrl) ?: return null
         val key = title?.trim()?.lowercase()?.takeIf { it.isNotEmpty() } ?: return fallback

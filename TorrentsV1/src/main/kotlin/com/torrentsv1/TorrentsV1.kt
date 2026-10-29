@@ -323,9 +323,8 @@ private val batchWords = Regex(
 )
 private val tildeRange = Regex("""\d\s*~\s*\d""")
 
-// a digit pair around a dash only reads as a range when it climbs and the
-// left number stands alone, "part 3 - 01" and "s2 - 12" are season tags in
-// front of an episode number and must survive the batch check
+// a digit pair around a dash only reads as a range when it climbs and the left
+// number stands alone, "part 3 - 01" and "s2 - 12" are tags that must survive
 private val dashRange = Regex(
     """(?<!season )(?<!part )(?<!cour )(?<!stage )(?<!phase )(?<!series )(?<![a-z0-9])(\d{1,4})\s*-\s*(\d{1,4})"""
 )
@@ -382,9 +381,8 @@ private fun titlePattern(title: String): Regex? {
     return words.joinToString("[^a-z0-9]*") { Regex.escape(it) }.toRegex()
 }
 
-// "One Piece - Gyojin Tou-hen - 01" is episode 1 of the fish-man island
-// re-edit and not of the show that was picked, the episode number has to sit
-// right behind the show name for a release to count
+// "One Piece - Gyojin Tou-hen - 01" is episode 1 of a re-edit, not of the show
+// picked, so the episode number has to sit right behind the show name to count
 private fun episodeAfterShowName(releaseTitle: String, marker: MatchResult, animeTitle: String): Boolean {
     val pattern = titlePattern(animeTitle) ?: return false
     val prefix = releaseTitle.lowercase().substring(0, marker.range.first)
@@ -766,10 +764,8 @@ class TorrentsV1 : MainAPI() {
         fetchStremioStreams("TorrentsDB", url, callback)
     }
 
-    // animetosho matches releases to episodes by name alone, so the feed of
-    // one episode still carries batches, specials and sub series of the same
-    // franchise, every release is checked against the show and episode that
-    // was actually picked
+    // animetosho matches by name alone so the feed still carries batches and
+    // specials, every release is checked against the show and episode picked
     private fun matchesRequestedEpisode(release: AnimetoshoRelease, linkData: LinkData): Boolean {
         val title = release.title ?: return false
         val names = (listOfNotNull(linkData.jpTitle, linkData.title) +
@@ -798,9 +794,8 @@ class TorrentsV1 : MainAPI() {
                 app.get("$ANIMETOSHO_API/json/v1/episodes/$anidbEid", timeout = 30L)
                     .parsedSafe<AnimetoshoEpisodeResponse>()
             } catch (_: Throwable) { null }
-            // the episode feed also picks up batches, specials and sub series
-            // of the same franchise, only releases that fit the picked show
-            // and episode reach the player
+            // the episode feed also picks up batches and specials of the same
+            // franchise, only releases that fit the picked episode get through
             val items = res?.data?.releases.orEmpty()
                 .filter { !it.magnet.isNullOrBlank() && it.is_batch != true && (it.seeders ?: 0) > 0 }
                 .filter { matchesRequestedEpisode(it, linkData) }

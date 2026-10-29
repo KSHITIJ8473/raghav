@@ -90,9 +90,8 @@ object TmfSources {
         }
     }
 
-    // older vcloud pages carry a div.main h4 a hop first, the current ones
-    // keep the target in a script variable that is either double base64 or a
-    // plain url, and when the target is not the file itself it is a hub page
+    // older vcloud pages carry a div.main h4 a hop first, the current ones keep
+    // the target in a script variable, double base64 or a plain url
     suspend fun resolveVCloud(url: String): List<Stream> {
         return try {
             val res = app.get(
@@ -163,10 +162,8 @@ object TmfSources {
             ?.takeIf { it.startsWith("http") }
     }
 
-    // the vegadrive share page lists one bridge provider per host, vegadrop
-    // (skydrop) streams the drive file itself and the rest land on their own
-    // partner pages, providers come and go so each result is checked against
-    // the host it is supposed to be on
+    // the vegadrive share page lists one bridge provider per host, they come and
+    // go so each result is checked against the host it is supposed to be on
     suspend fun resolveVegaDrive(url: String): List<Stream> {
         return try {
             val page = app.get(
@@ -234,11 +231,8 @@ object TmfSources {
     private val FILEPRESS_ID = Regex("""/file/([a-f0-9]{16,40})""")
     private const val FILEBEE_API = "https://filebee.xyz/api"
 
-    // filepress is a react app whose html pages sit behind an interactive
-    // turnstile while the json api is open: file/get describes the file (its
-    // name is the only reliable zip pack detector), downlaod/ queues a task
-    // or answers instantly depending on the method, downlaod2/ turns a
-    // finished task into the link
+    // filepress pages sit behind an interactive turnstile while the json api is
+    // open: file/get describes the file, downlaod/ queues, downlaod2/ resolves
     suspend fun resolveFilePress(url: String): List<Stream> {
         val id = FILEPRESS_ID.find(url)?.groupValues?.get(1) ?: return emptyList()
         return try {
@@ -363,9 +357,8 @@ object TmfSources {
         }
     }
 
-    // the dotflix share page carries a per file code in a btoa call, the
-    // reversed base64 of it is posted to the extract endpoint which answers
-    // with the drive file url
+    // the dotflix share page carries a per file code in a btoa call, its
+    // reversed base64 is posted to the extract endpoint for the drive file url
     private suspend fun resolveDotFlix(shareUrl: String): String? {
         return try {
             val page = app.get(
@@ -423,10 +416,8 @@ object TmfSources {
 
     private val pxlRegex = Regex("""var\s+pxl\s*=\s*["']([^"']+)["']""")
 
-    // the pixel button href is a dead placeholder that stays the same for
-    // every file, the real pixeldrain link sits in the pxl variable of the
-    // page, following the placeholder is what hands every quality the same
-    // dead file id
+    // the pixel button href is a dead placeholder shared by every file, the real
+    // pixeldrain link sits in the pxl variable of the page
     private fun pixelFileUrl(pageHtml: String, buttonHref: String): String? {
         val pxl = pxlRegex.find(pageHtml)?.groupValues?.get(1)
         val link = pxl?.takeIf { it.startsWith("http") } ?: buttonHref

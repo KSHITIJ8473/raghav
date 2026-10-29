@@ -263,9 +263,8 @@ class MovyProvider : MainAPI() {
                 val format = sub.type?.lowercase() ?: return@forEach
                 if (format != "vtt" && format != "srt") return@forEach
                 var label = sub.language?.takeIf { it.isNotBlank() } ?: sub.lang ?: return@forEach
-                // tampa style tracks hide behind bare two letter codes and point
-                // at dead relay tokens, real tracks are full language names
-                // (chinese shows up as "CMN - [Cmn] 7", so check before trimming)
+                // tampa style tracks hide behind bare two letter codes and point at
+                // dead relay tokens, real tracks are full language names
                 if (label.length < 4) return@forEach
                 val cut = label.indexOf(" - [")
                 if (cut > 0) label = label.substring(0, cut).trim()

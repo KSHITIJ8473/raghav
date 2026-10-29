@@ -25,11 +25,12 @@ object TgTvApi {
         "Referer" to "$SITE/"
     )
 
-    // the embedded fallback player (jjtvxweb) sends these to the cdns
+    // jiotvmblive refuses the old jiotv app headers, the same url and
+    // token only answers for a browser style request like the site's own
     val playerHeaders = mapOf(
-        "User-Agent" to "plaYtv/7.1.5",
+        "User-Agent" to UA,
         "Accept" to "*/*",
-        "Referer" to "https://www.jiotv.com/"
+        "Origin" to SITE
     )
 
     private const val CHANNELS_TTL = 10L * 60L * 1000L

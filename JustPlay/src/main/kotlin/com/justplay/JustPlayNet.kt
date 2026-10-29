@@ -265,9 +265,8 @@ internal object PlayNet {
         val postWords = wordsOf(postTitle)
         if (queryWords.isEmpty() || postWords.isEmpty()) return false
 
-        // the name is matched as whole words glued together, this keeps acronym spellings
-        // like k g f chapter 2 against kgf chapter 2 in step while a name that only
-        // overlaps the first word of a longer one, war inside war 2 or war path, fails
+        // the name is matched as whole words glued together, so k g f chapter 2 still
+        // lines up with kgf chapter 2 while war inside war 2 or war path does not
         for (start in nameStarts(postWords)) {
             val maxEnd = minOf(start + queryWords.size, postWords.size)
             for (end in start + 1..maxEnd) {

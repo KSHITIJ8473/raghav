@@ -266,9 +266,8 @@ class Anv : MainAPI() {
             for (source in variant.sources.orEmpty()) {
                 val stream = AnvApi.absolute(source.url) ?: continue
                 val label = source.label?.trim() ?: continue
-                // pear and banana share one stream and the player drops a
-                // link whose url was already handed in, so the repeats carry
-                // a marker the cdn ignores
+                // pear and banana share one stream and the player drops a link whose
+                // url was handed in already, so repeats carry a marker the cdn ignores
                 val repeat = seenUrls[stream] ?: 0
                 val url = if (repeat == 0) stream else stream + (if ('?' in stream) "&" else "?") + "f=$repeat"
                 seenUrls[stream] = repeat + 1

@@ -176,9 +176,6 @@ class LiveTgTvProvider : MainAPI() {
         }
     }
 
-    private fun tokenOf(url: String): String? =
-        Regex("[?&]__hdnea__=([^&]+)").find(url)?.groupValues?.get(1)
-
     private fun isPlLive(url: String): Boolean = url.contains("//jiotvpllive.cdn.jio.com/")
 
     override suspend fun loadLinks(
@@ -206,12 +203,11 @@ class LiveTgTvProvider : MainAPI() {
             if (!u.startsWith("http")) return
             u = u.replace("//bpk-tv/", "/bpk-tv/").replace("bpk-tv//", "bpk-tv/")
             val path = u.substringBefore('?')
-            // token class is fixed by the host the way the embedded player does
-            // it: jiotvpllive takes the per-channel star token only, every
-            // other cdn the global one
+            // jiotvpllive prefers the per channel star token, every cdn
+            // falls back to the config cookie then the global one
             val pllive = isPlLive(path)
             val token = when {
-                pllive -> starTok
+                pllive && starTok.isNotBlank() -> starTok
                 cookie.isNotBlank() -> cookie
                 else -> primTok
             }
@@ -260,10 +256,7 @@ class LiveTgTvProvider : MainAPI() {
             val url = entry.key
             val keys = entry.value
             val label = "Server ${index + 1}"
-            val token = tokenOf(url)
-            val headers = TgTvApi.playerHeaders + (
-                if (token != null) mapOf("Cookie" to "__hdnea__=$token") else emptyMap()
-                )
+            val headers = TgTvApi.playerHeaders
             val encoded = keys.entries
                 .mapNotNull { (kid, key) ->
                     val k = hexToBase64Url(kid)

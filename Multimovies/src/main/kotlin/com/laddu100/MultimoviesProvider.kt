@@ -116,9 +116,8 @@ class MultimoviesProvider : MainAPI() {
         }
     }
 
-    // watchlist and sync entries keep whatever host they were saved with; if
-    // that host is a dead mirror of the site, replay the same path on the live
-    // domain instead of walking into the cloudflare wall
+    // watchlist and sync entries keep whatever host they were saved with; a dead
+    // mirror replays the same path on the live domain instead of hitting the wall
     private fun normalizeUrl(url: String): String = try {
         val uri = URI(url)
         val host = (uri.host ?: "").lowercase()

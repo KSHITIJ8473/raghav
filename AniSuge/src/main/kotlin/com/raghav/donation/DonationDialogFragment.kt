@@ -6,7 +6,9 @@ import android.content.Context
 import android.content.DialogInterface
 import android.content.Intent
 import android.graphics.Typeface
+import android.graphics.drawable.ClipDrawable
 import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.LayerDrawable
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -19,6 +21,7 @@ import android.view.ViewGroup
 import android.view.Window
 import android.widget.Button
 import android.widget.LinearLayout
+import android.widget.ProgressBar
 import android.widget.TextView
 import androidx.fragment.app.DialogFragment
 import com.lagradost.api.Log
@@ -102,6 +105,7 @@ class DonationDialogFragment : DialogFragment() {
     ): View {
         val ctx = requireContext()
         val density = resources.displayMetrics.density
+        val goal = readGoal()
 
         val root = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
@@ -194,11 +198,13 @@ class DonationDialogFragment : DialogFragment() {
             orientation = LinearLayout.VERTICAL
             layoutParams = LinearLayout.LayoutParams(-1, -2)
         }
-        statsRow.addView(statChip(ctx, density, "100% Free", GREEN))
-        val fixChip = statChip(ctx, density, "Constant Fixes and Maintenance", CYAN)
+        statsRow.addView(chip(ctx, density, "100% Free", GREEN))
+        val fixChip = chip(ctx, density, "Constant Fixes and Maintenance", CYAN)
         (fixChip.layoutParams as LinearLayout.LayoutParams).topMargin = dp(density, 6)
         statsRow.addView(fixChip)
         hero.addView(statsRow)
+
+        hero.addView(goalCard(ctx, density, goal))
 
         root.addView(hero)
 
@@ -329,6 +335,116 @@ class DonationDialogFragment : DialogFragment() {
         return root
     }
 
+    private fun readGoal(): DonationManager.Goal {
+        val args = arguments ?: return DonationManager.Goal(0.0, 40.0, "$")
+        return DonationManager.Goal(
+            args.getDouble("raised", 0.0),
+            args.getDouble("target", 40.0),
+            args.getString("currency") ?: "$"
+        )
+    }
+
+    private fun goalCard(
+        ctx: Context,
+        density: Float,
+        goal: DonationManager.Goal
+    ): LinearLayout {
+        val card = LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(density, 14), dp(density, 12), dp(density, 14), dp(density, 12))
+            background = GradientDrawable().apply {
+                setColor(GLASS_RAISED)
+                cornerRadius = dp(density, 12f)
+                setStroke(dp(density, 1), EDGE_SOFT)
+            }
+            layoutParams = LinearLayout.LayoutParams(-1, -2).also {
+                it.topMargin = dp(density, 14)
+            }
+        }
+
+        val header = LinearLayout(ctx).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutParams = LinearLayout.LayoutParams(-1, -2).also {
+                it.bottomMargin = dp(density, 8)
+            }
+        }
+        header.addView(TextView(ctx).apply {
+            text = "Monthly Goal"
+            textSize = 11.5f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(TEXT_MID)
+            layoutParams = LinearLayout.LayoutParams(-2, -2)
+        })
+        header.addView(View(ctx).apply {
+            layoutParams = LinearLayout.LayoutParams(0, 1, 1f)
+        })
+        header.addView(TextView(ctx).apply {
+            text = "${money(goal.raised, goal.currency)} of ${money(goal.target, goal.currency)}"
+            textSize = 12.5f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(0xFFFFFFFF.toInt())
+            layoutParams = LinearLayout.LayoutParams(-2, -2)
+        })
+        card.addView(header)
+
+        card.addView(goalBar(ctx, density, goal))
+
+        card.addView(TextView(ctx).apply {
+            text = if (goal.achieved) {
+                "Goal reached this month, thank you!"
+            } else {
+                "${goal.percent}% funded so far"
+            }
+            textSize = 11f
+            setTextColor(if (goal.achieved) GREEN else TEXT_DIM)
+            layoutParams = LinearLayout.LayoutParams(-1, -2).also {
+                it.topMargin = dp(density, 8)
+            }
+        })
+        return card
+    }
+
+    private fun goalBar(
+        ctx: Context,
+        density: Float,
+        goal: DonationManager.Goal
+    ): ProgressBar {
+        val track = GradientDrawable().apply {
+            setColor(GLASS_FILL)
+            cornerRadius = dp(density, 6f)
+        }
+        val fill = GradientDrawable().apply {
+            if (goal.achieved) {
+                setColor(GREEN)
+            } else {
+                setColors(intArrayOf(BLUE, CYAN))
+                orientation = GradientDrawable.Orientation.LEFT_RIGHT
+            }
+            cornerRadius = dp(density, 6f)
+        }
+        val layers = LayerDrawable(
+            arrayOf(track, ClipDrawable(fill, Gravity.LEFT, ClipDrawable.HORIZONTAL))
+        )
+        layers.setId(0, android.R.id.background)
+        layers.setId(1, android.R.id.progress)
+        return ProgressBar(ctx, null, android.R.attr.progressBarStyleHorizontal).apply {
+            max = 100
+            progress = goal.percent
+            progressDrawable = layers
+            layoutParams = LinearLayout.LayoutParams(-1, dp(density, 10))
+        }
+    }
+
+    private fun money(amount: Double, currency: String): String {
+        val whole = amount.toLong()
+        return if (amount == whole.toDouble()) {
+            "$currency$whole"
+        } else {
+            currency + String.format(Locale.US, "%.2f", amount)
+        }
+    }
+
     private fun startDismissCountdown(dismissBtn: Button) {
         dismissButton = dismissBtn
         var secondsLeft = DISMISS_SECONDS
@@ -354,29 +470,19 @@ class DonationDialogFragment : DialogFragment() {
         dismissButton?.text = "Maybe Later"
     }
 
-    private fun statChip(
-        ctx: Context,
-        density: Float,
-        label: String,
-        color: Int
-    ): LinearLayout {
-        return LinearLayout(ctx).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(density, 10), dp(density, 6), dp(density, 12), dp(density, 6))
+    private fun chip(ctx: Context, density: Float, label: String, color: Int): TextView {
+        return TextView(ctx).apply {
+            text = label
+            textSize = 11.5f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(color)
+            setPadding(dp(density, 10), dp(density, 6), dp(density, 10), dp(density, 6))
             background = GradientDrawable().apply {
                 setColor(GLASS_FILL)
                 cornerRadius = dp(density, 9f)
                 setStroke(dp(density, 1), EDGE_SOFT)
             }
             layoutParams = LinearLayout.LayoutParams(-2, -2)
-            addView(TextView(ctx).apply {
-                text = label
-                textSize = 11.5f
-                typeface = Typeface.DEFAULT_BOLD
-                setTextColor(color)
-                layoutParams = LinearLayout.LayoutParams(-2, -2)
-            })
         }
     }
 

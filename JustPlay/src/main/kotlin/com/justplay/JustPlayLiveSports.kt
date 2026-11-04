@@ -357,14 +357,22 @@ object LiveSports {
         return if (a == b) a else "$a vs $b"
     }
 
+    // channel style entries set both teams to the same name, the card then shows one crest
+    private fun isSameTeam(a: String?, b: String?): Boolean {
+        if (a.isNullOrBlank() || b.isNullOrBlank()) return false
+        return a.trim().equals(b.trim(), ignoreCase = true)
+    }
+
     // wide match card with both crests and state, same style the live tv plugin uses
     private fun matchCardUrl(event: LiveEvent): String {
         val info = event.eventInfo
         val title = java.net.URLEncoder.encode(info?.eventName ?: event.title ?: "", "UTF-8")
         val teamA = java.net.URLEncoder.encode(info?.teamA ?: "Team A", "UTF-8")
         val teamB = java.net.URLEncoder.encode(info?.teamB ?: "Team B", "UTF-8")
-        val teamAImg = info?.teamAFlag ?: ""
-        val teamBImg = info?.teamBFlag ?: ""
+        val sameTeams = isSameTeam(info?.teamA, info?.teamB)
+        var teamAImg = info?.teamAFlag ?: ""
+        val teamBImg = if (sameTeams) "" else (info?.teamBFlag ?: "")
+        if (sameTeams) info?.teamBFlag?.let { teamAImg = it }
         val eventLogo = info?.eventLogo ?: ""
         val time = try {
             info?.startTime?.let { start ->
@@ -377,10 +385,10 @@ object LiveSports {
             ""
         }
         return buildString {
-            append("https://live-card-png.cricify.workers.dev/?")
+            append("https://card.cncverse.dpdns.org/?")
             append("title=$title")
             append("&teamA=$teamA")
-            append("&teamB=$teamB")
+            if (!sameTeams) append("&teamB=$teamB")
             if (teamAImg.isNotBlank()) append("&teamAImg=$teamAImg")
             if (teamBImg.isNotBlank()) append("&teamBImg=$teamBImg")
             if (eventLogo.isNotBlank()) append("&eventLogo=$eventLogo")

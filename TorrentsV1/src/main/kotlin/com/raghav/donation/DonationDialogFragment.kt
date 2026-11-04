@@ -38,7 +38,7 @@ class DonationDialogFragment : DialogFragment() {
         private const val REPO_URL = "https://github.com/KSHITIJ8473/raghav"
         private const val UPI_DONATE_URL = "https://kshitij8473.github.io/donate/"
 
-        private const val DISMISS_SECONDS = 9
+        private const val DISMISS_SECONDS = 16
 
         private const val PANEL_TOP = 0xE6222228.toInt()
         private const val PANEL_BOTTOM = 0xE016161A.toInt()

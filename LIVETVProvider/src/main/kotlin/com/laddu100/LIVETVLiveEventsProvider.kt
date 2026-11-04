@@ -148,14 +148,22 @@ class LIVETVLiveEventsProvider(
         }
     }
 
+    // channel style entries set both teams to the same name, the card then shows one crest
+    private fun isSameTeam(a: String?, b: String?): Boolean {
+        if (a.isNullOrBlank() || b.isNullOrBlank()) return false
+        return a.trim().equals(b.trim(), ignoreCase = true)
+    }
+
     private fun generateMatchCardUrl(event: LIVETVEventData): String {
         val eventInfo = event.eventInfo
 
         val title = java.net.URLEncoder.encode(eventInfo?.eventName ?: event.title, "UTF-8")
         val teamA = java.net.URLEncoder.encode(eventInfo?.teamA ?: "Team A", "UTF-8")
         val teamB = java.net.URLEncoder.encode(eventInfo?.teamB ?: "Team B", "UTF-8")
-        val teamAImg = eventInfo?.teamAFlag ?: ""
-        val teamBImg = eventInfo?.teamBFlag ?: ""
+        val sameTeams = isSameTeam(eventInfo?.teamA, eventInfo?.teamB)
+        var teamAImg = eventInfo?.teamAFlag ?: ""
+        val teamBImg = if (sameTeams) "" else (eventInfo?.teamBFlag ?: "")
+        if (sameTeams) eventInfo?.teamBFlag?.let { teamAImg = it }
         val eventLogo = eventInfo?.eventLogo ?: ""
         val isLive = isEventLive(event)
         val isEnded = isEventEnded(event)
@@ -173,10 +181,10 @@ class LIVETVLiveEventsProvider(
         }
 
         return buildString {
-            append("https://live-card-png.cricify.workers.dev/?")
+            append("https://card.cncverse.dpdns.org/?")
             append("title=$title")
             append("&teamA=$teamA")
-            append("&teamB=$teamB")
+            if (!sameTeams) append("&teamB=$teamB")
             if (teamAImg.isNotBlank()) append("&teamAImg=$teamAImg")
             if (teamBImg.isNotBlank()) append("&teamBImg=$teamBImg")
             if (eventLogo.isNotBlank()) append("&eventLogo=$eventLogo")

@@ -13,11 +13,11 @@ import java.io.ByteArrayInputStream
 object GoTakuCrypto {
 
     // the api answers 426 for older versions
-    private const val SEALED_VERSION = 8
+    private const val SEALED_VERSION = 10
 
     private val apiSeed = intArrayOf(
-        169, 97, 13, 229, 137, 106, 199, 91, 124, 53, 130, 103, 235, 216, 204, 41,
-        161, 207, 4, 157, 109, 106, 130, 5, 57, 176, 155, 55, 18, 148, 80, 128
+        30, 99, 206, 236, 176, 26, 228, 147, 55, 35, 152, 123, 6, 17, 126, 179,
+        40, 181, 197, 210, 194, 90, 232, 35, 247, 20, 130, 43, 71, 117, 123, 82
     ).map { it.toByte() }.toByteArray()
 
     // rotated by the site, current value lives in the embed player bundle

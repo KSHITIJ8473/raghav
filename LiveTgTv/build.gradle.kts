@@ -13,5 +13,5 @@ cloudstream {
         "Live",
     )
 
-    iconUrl = "https://jiotv.catchup.cdn.jio.com/dare_images/images/Star_Gold_HD.png"
+    iconUrl = "https://img.magnific.com/free-vector/live-webcast-broadcasting-symbol-online-events_1017-62406.jpg?semt=ais_hybrid&w=740&q=80"
 }

@@ -15,5 +15,5 @@ cloudstream {
         "AnimeMovie",
         "OVA"
     )
-    iconUrl = "https://animesuge.at/storage/media/2026/08/logo.png"
+    iconUrl = "https://animesuge.cz/animesuge/images/logo.png"
 }

@@ -194,7 +194,7 @@ internal object PlayDiscovery {
         val out = ArrayList<SearchResponse>(arr.length())
         for (i in 0 until arr.length()) {
             val item = arr.optJSONObject(i) ?: continue
-            if (imageUrl(item.optString("poster_path")) == null) continue
+            if (PlayTmdb.imageUrl(item.optString("poster_path")) == null) continue
             PlayTmdb.toSearchResponse(api, item, fallbackType)?.let(out::add)
         }
         return out

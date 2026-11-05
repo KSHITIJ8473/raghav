@@ -88,7 +88,7 @@ object MMCrypto {
         }
     }
 
-    // java emits ASN.1 DER, the byse endpoint expects the webcrypto raw r||s layout
+    // byse expects webcrypto raw r||s, not ASN.1 DER
     private fun derToRaw(der: ByteArray): ByteArray {
         var i = 2
         if ((der[1].toInt() and 0xff) > 0x7f) i = 3
@@ -111,7 +111,7 @@ object MMCrypto {
         return r + s
     }
 
-    // the byse proof of work uses a custom 256 bit digest over raw bytes
+    // custom 256 bit digest over raw bytes
     fun grHash(bytes: ByteArray): IntArray {
         val st = IntArray(4)
         st[0] = 1779033703; st[1] = 3144134277.toInt(); st[2] = 1013904242; st[3] = 2773480762.toInt()
@@ -181,7 +181,7 @@ object MMCrypto {
         return total
     }
 
-    // finds s where grHash(nonce + ":" + s) has at least difficulty leading zero bits
+    // grHash(nonce:s) needs difficulty zero bits
     fun solvePow(nonce: String, difficulty: Int, maxMillis: Long = 15_000): String? {
         if (difficulty <= 0) return "0"
         val prefix = nonce + ":"

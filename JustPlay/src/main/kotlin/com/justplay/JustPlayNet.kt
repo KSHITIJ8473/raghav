@@ -1,5 +1,6 @@
 package com.justplay
 
+import android.util.Log
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.base64Decode
@@ -26,8 +27,7 @@ import java.util.concurrent.ConcurrentHashMap
 internal const val PLAY_UA =
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 
-// nicehttp keeps the response body open unless text is read, status and header
-// only lookups have to close it or the connection never goes back to the pool
+// unread bodies never return to the pool
 internal fun NiceResponse.close() {
     try {
         okhttpResponse.close()
@@ -46,7 +46,9 @@ internal object PlayNet {
         cfLocks.getOrPut(hostOf(url)) { Mutex() }
 
     private val verifiedUrls: MutableSet<String> = ConcurrentHashMap.newKeySet()
-    private val verifyGate = Semaphore(8)
+
+    // a narrow gate serialises every site's checks
+    private val verifyGate = Semaphore(24)
 
     suspend fun <T> retry(attempts: Int = 2, gapMs: Long = 600L, block: suspend () -> T?): T? {
         repeat(attempts) { i ->
@@ -138,6 +140,21 @@ internal object PlayNet {
         ) ExtractorLinkType.VIDEO else ExtractorLinkType.M3U8
     }
 
+    private val imageSegment = Regex("""(?i)\.(png|jpe?g|gif|webp|bmp)(?:[?#].*)?$""")
+
+    // child uris resolve relative to the manifest
+    private fun resolveManifestChild(href: String, manifestUrl: String): String = when {
+        href.startsWith("http") -> href
+        href.startsWith("//") -> "https:$href"
+        !manifestUrl.contains("://") -> href
+        else -> {
+            val schemeHost = manifestUrl.substringBefore("://") + "://" +
+                manifestUrl.substringAfter("://").substringBefore("/")
+            if (href.startsWith("/")) schemeHost + href
+            else manifestUrl.substringBeforeLast("/") + "/" + href
+        }
+    }
+
     suspend fun m3u8Alive(url: String, headers: Map<String, String> = emptyMap()): Boolean {
         if (!url.startsWith("http")) return false
         return try {
@@ -146,9 +163,55 @@ internal object PlayNet {
                 res.close()
                 return false
             }
-            res.text.trimStart().startsWith("#EXTM3U")
-        } catch (_: Exception) {
+            val text = res.text
+            if (!text.trimStart().startsWith("#EXTM3U")) return false
+            playlistServesVideo(text, url, headers)
+        } catch (e: Exception) {
+            Log.d("PlayNet", "m3u8 probe failed ${e.javaClass.simpleName}")
             false
+        }
+    }
+
+    // image tiles prove a decoy, unfetchable proves nothing
+    private suspend fun playlistServesVideo(
+        text: String,
+        url: String,
+        headers: Map<String, String>
+    ): Boolean {
+        val entries = text.lineSequence()
+            .map { it.trim() }
+            .filter { it.isNotEmpty() && !it.startsWith("#") }
+            .toList()
+        if (entries.isEmpty()) return false
+        if (entries.any { imageSegment.containsMatchIn(it) }) return false
+
+        val variants = mutableListOf<String>()
+        val lines = text.lines()
+        for (i in lines.indices) {
+            if (lines[i].trim().startsWith("#EXT-X-STREAM-INF") && i + 1 < lines.size) {
+                lines[i + 1].trim().takeIf { it.isNotEmpty() && !it.startsWith("#") }
+                    ?.let { variants.add(it) }
+            }
+        }
+        val child = variants.firstOrNull() ?: return true
+        val childUrl = resolveManifestChild(child, url)
+        if (childUrl == url) return true
+        return try {
+            val res = app.get(childUrl, headers = headers, timeout = 12L)
+            if (res.code != 200) {
+                res.close()
+                return true
+            }
+            val childText = res.text
+            if (!childText.trimStart().startsWith("#EXTM3U")) return false
+            val childEntries = childText.lineSequence()
+                .map { it.trim() }
+                .filter { it.isNotEmpty() && !it.startsWith("#") }
+                .toList()
+            if (childEntries.isEmpty()) return false
+            childEntries.all { imageSegment.containsMatchIn(it) }
+        } catch (_: Exception) {
+            true
         }
     }
 
@@ -197,13 +260,12 @@ internal object PlayNet {
         s
     }
 
-    // words of a title the way the sites spell them, the ampersand reads as "and"
+    // site spelling, & reads as and
     private fun wordsOf(s: String): List<String> =
         foldAccents(s).lowercase().replace("&", " and ")
             .split(Regex("[^a-z0-9]+")).filter { it.isNotBlank() }
 
-    // the filler the sites pad after the movie name, a name that runs into one of
-    // these tokens has ended and everything beyond it is quality or audio metadata
+    // title ends where the filler tokens begin
     private val tailJunk = setOf(
         "480p", "720p", "1080p", "1440p", "2160p", "4k", "2k", "8k", "uhd", "qhd", "fhd",
         "bluray", "web", "webdl", "webrip", "webhd", "hdrip", "hdcam", "hdtc", "hdts",
@@ -232,7 +294,7 @@ internal object PlayNet {
 
     private val leadNoise = setOf("download", "watch", "online", "stream")
 
-    // the post may open with the site's own words or a rating tag before the name starts
+    // skip the site's own lead words
     private fun nameStarts(postWords: List<String>): Sequence<Int> = sequence {
         yield(0)
         var idx = 0
@@ -253,15 +315,14 @@ internal object PlayNet {
         if (normQuery.isBlank()) return false
         val normPost = normalizeTitle(postTitle)
         if (!normPost.contains(normQuery)) return false
-        // long names are unambiguous enough that a hit anywhere in the post is a real find
+        // long names are unambiguous anywhere in the post
         if (normQuery.length >= 10) return true
 
         val queryWords = wordsOf(query)
         val postWords = wordsOf(postTitle)
         if (queryWords.isEmpty() || postWords.isEmpty()) return false
 
-        // the name is matched as whole words glued together, so k g f chapter 2 still
-        // lines up with kgf chapter 2 while war inside war 2 or war path does not
+        // whole word match, k g f still lines up with kgf
         for (start in nameStarts(postWords)) {
             val maxEnd = minOf(start + queryWords.size, postWords.size)
             for (end in start + 1..maxEnd) {
@@ -273,8 +334,7 @@ internal object PlayNet {
         return false
     }
 
-    // series posts carry season or episode markers, a movie request never wants them
-    // unless its own name carries the same marker, four seasons, star wars episode one
+    // movie requests never want series markers
     fun isSeriesPost(text: String?): Boolean {
         if (text.isNullOrBlank()) return false
         if (seasonsOf(text) != null) return true
@@ -283,7 +343,6 @@ internal object PlayNet {
         ).containsMatchIn(text)
     }
 
-    // the full gate for a site post against the requested title
     fun titleMatchesFor(postTitle: String?, res: PlayLinkData): Boolean {
         val query = res.title ?: return false
         if (!titleMatches(postTitle, query)) return false
@@ -291,8 +350,7 @@ internal object PlayNet {
         return true
     }
 
-    // search rounds ordered from most to least specific, the title alone is a weak
-    // signal on catalogs flooded with name containing posts, war pulls every star wars
+    // most specific rounds first, bare title last
     fun searchQueries(res: PlayLinkData): List<String> {
         val title = res.title?.takeIf { it.isNotBlank() } ?: return emptyList()
         val out = LinkedHashSet<String>()
@@ -600,17 +658,17 @@ internal object PlayNet {
         callback: (ExtractorLink) -> Unit
     ) {
         if (links.isEmpty()) return
-        val checked = withTimeoutOrNull(45_000L) {
+        // emit each link as its check finishes
+        withTimeoutOrNull(45_000L) {
             coroutineScope {
                 links.map { link ->
                     async(Dispatchers.IO) {
-                        if (alive(link.url, link.type, link.headers, link.referer)) link else null
+                        if (alive(link.url, link.type, link.headers, link.referer)) {
+                            buildSiteLink(site, label, quality, link)?.let(callback)
+                        }
                     }
-                }.mapNotNull { runCatching { it.await() }.getOrNull() }
+                }.forEach { runCatching { it.await() } }
             }
-        } ?: return
-        for (link in checked) {
-            buildSiteLink(site, label, quality, link)?.let(callback)
         }
     }
 }

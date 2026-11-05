@@ -58,8 +58,7 @@ class PlayHubCloud : ExtractorApi() {
             if (link.contains("download", true)) return link
             val id = link.substringBefore("?").substringBefore("#").substringAfterLast("/")
             if (id.isBlank()) return null
-            // the bare file url serves identical bytes, the attachment form only
-            // invites players to treat the response oddly
+            // bare url, attachment form confuses players
             return "${PlayNet.getBaseUrl(link)}/api/file/$id"
         }
 

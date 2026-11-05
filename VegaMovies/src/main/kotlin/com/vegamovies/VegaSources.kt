@@ -11,7 +11,7 @@ import java.util.concurrent.ConcurrentHashMap
 
 internal object VegaSources {
 
-    // megaup hands out an html page instead of the file and vikingfile sits behind a turnstile captcha
+    // megaup serves html, vikingfile sits behind a turnstile
     private val deadHosts = Regex("""(?i)megaup|viking|vik1ng|telegram|t\.me""")
 
     private val buttonJunk = Regex(
@@ -38,7 +38,7 @@ internal object VegaSources {
             )
     }
 
-    // the middle hop every button leads to, it carries servers or one section per episode
+    // the middle hop carries servers or episode sections
     class DrivePage(
         val servers: List<Pair<String, String>>,
         val episodes: Map<Int, List<Pair<String, String>>>
@@ -96,10 +96,10 @@ internal object VegaSources {
         return DrivePage(servers.distinctBy { it.second }, episodes)
     }
 
-    // a resolved server ready for the picker, one row per name and quality
+    // one row per name and quality
     class Server(val name: String, val url: String, val headers: Map<String, String> = emptyMap())
 
-    // routes one button to its direct files, every server the target page offers comes back named
+    // every server on the target page comes back named
     suspend fun resolve(href: String): List<Server> {
         if (!href.startsWith("http") || deadHosts.containsMatchIn(href)) return emptyList()
         val host = hostOf(href)
@@ -126,7 +126,7 @@ internal object VegaSources {
         ""
     }
 
-    // a link that is already the file needs no hop, it only has to be named
+    // already the file, just name it
     private fun directServer(href: String): List<Server> {
         val h = href.lowercase()
         return when {
@@ -142,7 +142,7 @@ internal object VegaSources {
         return "${VegaNet.originOf(href)}/api/file/$id"
     }
 
-    // vcloud blocks plain clients, the site's own js sets this cookie on first visit
+    // vcloud blocks plain clients, this cookie is set on first visit
     private fun vcloudHeaders(referer: String?): Map<String, String> {
         val h = VegaNet.browserHeaders(referer).toMutableMap()
         h["Cookie"] = "xla=s4t"
@@ -152,7 +152,7 @@ internal object VegaSources {
     private val vcloudTokenRegex = Regex("""var\s+url\s*=\s*atob\s*\(\s*atob\s*\(\s*['"]([^'"]+)['"]""")
     private val plainUrlRegex = Regex("""var\s+url\s*=\s*['"]([^'"]+)['"]""")
 
-    // the share page hides the token page in a double base64 variable, the token page carries every server
+    // token page hides in double base64, it carries every server
     private suspend fun vcloudTarget(url: String): String? {
         val first = VegaNet.fetchWithCf(url, headers = vcloudHeaders(null), timeout = 25L) ?: return null
         val base = VegaNet.originOf(first.url)
@@ -169,7 +169,7 @@ internal object VegaSources {
         return target?.takeIf { it.startsWith("http") }
     }
 
-    // names the download buttons of a page after the server behind them
+    // name download buttons after their server
     private fun serverNameOf(label: String, href: String): String? {
         val low = label.lowercase()
         val h = href.lowercase()
@@ -211,7 +211,7 @@ internal object VegaSources {
             addServer(out, name, href)
         }
 
-        // the page hides a second pixeldrain behind a js variable, the button alone misses it
+        // a second pixeldrain hides in a js var
         Regex("""var\s+pxl\s*=\s*["']([^"']+)["']""").find(html)?.groupValues?.get(1)
             ?.takeIf { it.startsWith("http") && it.contains("pixeldrain") }
             ?.let { addServer(out, "PixelDrain", it) }
@@ -219,7 +219,7 @@ internal object VegaSources {
         return out.distinctBy { it.url }
     }
 
-    // turns a named button into its direct file, dead ones stay out of the list
+    // named button to its direct file, dead ones stay out
     private suspend fun addServer(out: MutableList<Server>, name: String, href: String) {
         when (name) {
             "10Gbps" -> gpdlDirect(href)?.let { out.add(Server(name, it)) }
@@ -260,7 +260,7 @@ internal object VegaSources {
         return out.distinctBy { it.url }
     }
 
-    // vegadrive only answers skydrop on the json api and mints the google mirror asynchronously
+    // vegadrive answers skydrop on the json api only
     private suspend fun vegadriveSkydrop(url: String): Server? {
         val page = try {
             app.get(url, headers = VegaNet.browserHeaders("https://nexdrive.beer/"), timeout = 20L)
@@ -290,7 +290,7 @@ internal object VegaSources {
         return null
     }
 
-    // the embed page wraps the google url in a redirect variable, the link= param is the file
+    // link= param is the file
     private suspend fun fastdlDirect(url: String): String? {
         return try {
             val res = app.get(url, headers = VegaNet.browserHeaders(), timeout = 20L)
@@ -314,12 +314,12 @@ internal object VegaSources {
 
     private val filePressId = Regex("""/file/([a-f0-9]{16,40})""")
 
-    // the react page only adds a turnstile, the whole api sits on the short domain
+    // api sits on the short domain
     private suspend fun filepressDirect(url: String): String? {
         val id = filePressId.find(url)?.groupValues?.get(1) ?: return null
         val base = "https://filebee.xyz"
 
-        // the dotflix route survives, the direct task worker hands out expiring links
+        // dotflix survives, worker hands out expiring links
         val share = filepressTask(id, "dotFlixDownlaod", base)
         if (share != null && share.startsWith("http")) {
             resolveDotFlix(share)?.let { return it }
@@ -387,7 +387,7 @@ internal object VegaSources {
         }
     }
 
-    // the share page carries a per file code in a btoa call, reversed base64 goes to the extract endpoint
+    // btoa file code, reversed base64 to the extract endpoint
     private suspend fun resolveDotFlix(shareUrl: String): String? {
         return try {
             val text = app.get(
@@ -425,7 +425,7 @@ internal object VegaSources {
         }
     }
 
-    // gofile folders hold sample files next to the video, the biggest child is the movie
+    // gofile folders hold samples, biggest child wins
     private suspend fun gofileDirect(url: String): String? {
         val code = url.substringAfterLast("/").substringBefore("#").substringBefore("?")
         if (code.isBlank()) return null
@@ -460,7 +460,7 @@ internal object VegaSources {
         }
     }
 
-    // the gpdl button bounces through a worker and a generator page that only names the file in its query
+    // gpdl bounces through a worker and a generator page
     private suspend fun gpdlDirect(url: String): String? {
         var cur = url
         try {
@@ -489,7 +489,7 @@ internal object VegaSources {
         pageCache.clear()
     }
 
-    // a link that answers a ranged get is a file the player can open, html pages and dead mirrors are not
+    // a ranged get that answers is a file the player can open
     suspend fun alive(url: String, headers: Map<String, String> = emptyMap()): Boolean {
         if (!url.startsWith("http")) return false
         if (url in verified) return true

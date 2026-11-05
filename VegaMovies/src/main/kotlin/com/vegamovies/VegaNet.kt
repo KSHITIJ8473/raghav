@@ -98,7 +98,7 @@ internal object VegaNet {
         }
     }
 
-    // only the number matters, the player groups links by it
+    // player groups links by number
     fun qualityOf(label: String): Int {
         if (label.isBlank()) return Qualities.Unknown.value
         Regex("""(\d{3,4})[pP]""").find(label)?.groupValues?.getOrNull(1)?.toIntOrNull()?.let { return it }
@@ -119,7 +119,7 @@ internal object VegaNet {
         }
     }
 
-    // poster u= params are single base64 while the drive tokens are double, take whichever decodes to a url
+    // u= is single base64, drive tokens double
     fun decodeParam(encoded: String): String? {
         val once = runCatching { base64Decode(encoded.trim()) }.getOrNull() ?: return null
         if (once.startsWith("http")) return once

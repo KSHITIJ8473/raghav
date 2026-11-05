@@ -62,14 +62,15 @@ class JustPlay : MainAPI() {
         private const val KEY_LIVE_SPORTS = "JUSTPLAY_LIVE_SPORTS"
         private const val KEY_LIVE_SPORTS_TOP = "JUSTPLAY_LIVE_SPORTS_TOP"
         private const val LIVE_ROW = "live_sports"
-        // vegamovies alone offers one link per server, quality and encode, the cap only stops junk floods
+        // the cap only stops junk floods
         private const val LINKS_PER_SOURCE = 40
 
-        // the app cancels loadLinks after 120s, every site gets cut off before that
+        // app cancels loadLinks at 120s, stay under it
         private const val SITE_BUDGET_MS = 90_000L
 
-        // one stuck site must not keep every other result off the screen
+        // fast sites first, then a steady release beat
         private const val FIRST_RELEASE_MS = 6_000L
+        private const val RELEASE_BEAT_MS = 1_500L
 
         private fun widenClient() {
             try {
@@ -177,12 +178,12 @@ class JustPlay : MainAPI() {
         Pair("/discover/tv&with_original_language=ko&sort_by=popularity.desc", "Korean Shows")
     )
 
-    // rows load one after another so low end devices don't stall on the burst
+    // keep the burst small for low end devices
     override var sequentialMainPage = true
     override var sequentialMainPageDelay = 150L
     override var sequentialMainPageScrollDelay = 250L
 
-    // rows are rebuilt on every access so settings changes only need a restart
+    // rebuilt per access so settings apply on restart
     override val mainPage: List<MainPageData>
         get() {
             val rows = ArrayList<MainPageData>(48)
@@ -208,7 +209,7 @@ class JustPlay : MainAPI() {
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         DonationManager.checkAndShow()
-        // netmirror needs a ~1 min cookie solve on cold start, get it going before the user opens anything
+        // cold solve takes ~1 min, start it early
         prefetchScope.launch { NetMirrorSite.prefetch() }
         val data = request.data
         if (data == LIVE_ROW) {
@@ -260,18 +261,23 @@ class JustPlay : MainAPI() {
         return items
     }
 
-    // svg logos are a last resort, the app's image loader cannot render them
+    // the image loader cannot render svg
     private fun pickTmdbLogo(logos: org.json.JSONArray?): String? {
         if (logos == null || logos.length() == 0) return null
-        fun urlOf(logo: org.json.JSONObject) =
-            "https://image.tmdb.org/t/p/w500" + logo.optString("file_path")
+
+        // optString turns a json null into the literal string, guard both cases
+        fun urlOf(logo: org.json.JSONObject): String? {
+            val fp = logo.optString("file_path")
+            if (fp.isBlank() || fp == "null") return null
+            return "https://image.tmdb.org/t/p/w500$fp"
+        }
 
         var svgFallback: org.json.JSONObject? = null
         for (i in 0 until logos.length()) {
             val logo = logos.optJSONObject(i) ?: continue
-            if (logo.optString("file_path").isBlank()) continue
+            if (urlOf(logo) == null) continue
             if (logo.optString("iso_639_1").equals("en", ignoreCase = true)) {
-                if (!logo.optString("file_path").endsWith(".svg", true)) return urlOf(logo)
+                if (urlOf(logo)?.endsWith(".svg", true) == false) return urlOf(logo)
                 if (svgFallback == null) svgFallback = logo
             }
         }
@@ -284,7 +290,7 @@ class JustPlay : MainAPI() {
         var bestSvg: org.json.JSONObject? = null
         for (i in 0 until logos.length()) {
             val logo = logos.optJSONObject(i) ?: continue
-            if (!voted(logo) || logo.optString("file_path").isBlank()) continue
+            if (!voted(logo) || urlOf(logo) == null) continue
             val isSvg = logo.optString("file_path").endsWith(".svg", true)
             val slot = if (isSvg) bestSvg else best
             if (slot == null || logo.optDouble("vote_average", 0.0) > slot.optDouble("vote_average", 0.0) ||
@@ -301,7 +307,7 @@ class JustPlay : MainAPI() {
 
     override suspend fun load(url: String): LoadResponse? {
         prefetchScope.launch { NetMirrorSite.prefetch() }
-        // live payloads always carry a slug, they are told apart from tmdb titles first
+        // live payloads carry a slug
         val live = try {
             parseJson<LiveLoadData>(url)
         } catch (_: Exception) {
@@ -336,7 +342,8 @@ class JustPlay : MainAPI() {
         val backdrop = PlayTmdb.imageUrl(detail.optString("backdrop_path"))
         val overview = detail.optString("overview")
         val runtime = detail.optInt("runtime", 0).takeIf { it > 0 }
-        val imdbId = detail.optJSONObject("external_ids")?.optString("imdb_id")?.takeIf { it.isNotBlank() }
+        val imdbId = detail.optJSONObject("external_ids")?.optString("imdb_id")
+            ?.takeIf { it.isNotBlank() && it != "null" }
         val logo = try {
             pickTmdbLogo(detail.optJSONObject("images")?.optJSONArray("logos"))
         } catch (_: Exception) {
@@ -539,8 +546,7 @@ class JustPlay : MainAPI() {
         val seenUrls = ConcurrentHashMap.newKeySet<String>()
         val sourceCounts = ConcurrentHashMap<String, AtomicInteger>()
 
-        // links go out in one batch, a stream of single links keeps the player
-        // rebuilding its source list and that churn breaks playback when it starts
+        // short batches, single links churn the player list
         val held = mutableListOf<ExtractorLink>()
         val heldLock = Any()
 
@@ -551,8 +557,7 @@ class JustPlay : MainAPI() {
                 held.clear()
                 out
             }
-            // streams go first so the link the app starts on its own is one that
-            // shows a frame fast, direct files sit behind them at the same quality
+            // streams first so autoplay shows a frame fast
             batch.sortedWith(compareBy({ it.type == ExtractorLinkType.VIDEO }, { -it.quality }))
                 .forEach(callback)
         }
@@ -565,8 +570,7 @@ class JustPlay : MainAPI() {
             val emitted = sourceCounts.computeIfAbsent(link.source) { AtomicInteger() }
             if (emitted.incrementAndGet() > LINKS_PER_SOURCE) return@label
             val out = if (treatAsDownload) PlaySourceFilter.taggedDownloadOnly(link) else link
-            // the app starts the highest ranked link on its own, a uhd remux takes ages
-            // before the first frame so the rank stays at 1080p, the label keeps the truth
+            // uhd remuxes are slow to first frame, cap the rank at 1080p
             if (!treatAsDownload && out.type == ExtractorLinkType.VIDEO && out.quality > Qualities.P1080.value) {
                 out.quality = Qualities.Unknown.value
             }
@@ -577,7 +581,7 @@ class JustPlay : MainAPI() {
             val gate = Semaphore(siteConcurrency())
             val jobs = active.map { site ->
                 async(Dispatchers.IO) {
-                    // the budget also covers the permit wait so a queued site never overruns the app's cancel
+                    // budget covers the permit wait too
                     try {
                         withTimeoutOrNull(SITE_BUDGET_MS) {
                             gate.withPermit {
@@ -587,12 +591,15 @@ class JustPlay : MainAPI() {
                     } catch (_: Exception) {}
                 }
             }
-            val timer = launch {
+            val flusher = launch {
                 delay(FIRST_RELEASE_MS)
-                release()
+                while (true) {
+                    release()
+                    delay(RELEASE_BEAT_MS)
+                }
             }
             jobs.forEach { runCatching { it.await() } }
-            timer.cancel()
+            flusher.cancel()
         }
         release()
         return true

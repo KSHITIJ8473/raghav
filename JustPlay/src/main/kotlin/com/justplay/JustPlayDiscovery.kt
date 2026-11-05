@@ -35,7 +35,7 @@ internal object PlayTmdb {
     }
 
     fun imageUrl(path: String?): String? {
-        if (path.isNullOrBlank()) return null
+        if (path.isNullOrBlank() || path == "null") return null
         return if (path.startsWith("http")) path else "https://image.tmdb.org/t/p/original$path"
     }
 
@@ -99,7 +99,7 @@ internal object PlayDiscovery {
         "/discover/movie&with_original_language=${row.code}" +
             "&sort_by=popularity.desc&vote_count.gte=${row.minVotes}"
 
-    // capped so the seen set never grows without bound, it just starts over
+    // bounded, starts over when full
     private val shownUrls = ConcurrentHashMap.newKeySet<String>()
     private const val SHOWN_CAP = 3000
     private const val SURPRISE_BATCH = 20
@@ -141,7 +141,7 @@ internal object PlayDiscovery {
         return out to hasNext
     }
 
-    // movie and tv calls run side by side, it halves the wait on every mixed row
+    // halves the wait on mixed rows
     private suspend fun mixedDiscover(
         api: MainAPI,
         moviePath: String,
@@ -194,7 +194,7 @@ internal object PlayDiscovery {
         val out = ArrayList<SearchResponse>(arr.length())
         for (i in 0 until arr.length()) {
             val item = arr.optJSONObject(i) ?: continue
-            if (item.optString("poster_path").isBlank()) continue
+            if (imageUrl(item.optString("poster_path")) == null) continue
             PlayTmdb.toSearchResponse(api, item, fallbackType)?.let(out::add)
         }
         return out

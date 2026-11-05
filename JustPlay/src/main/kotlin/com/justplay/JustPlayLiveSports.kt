@@ -124,7 +124,7 @@ private object LiveCrypto {
         }
     }
 
-    // text that does not come out as json means the wrong aes key was tried
+    // non json means the wrong aes key
     fun decrypt(payload: String): String? {
         return try {
             val ciphertext = base64DecodeArray(
@@ -160,7 +160,7 @@ private object LiveCrypto {
     }
 }
 
-// the host rotates whenever it gets blocked, the live one is read from remote config and cached
+// host rotates on blocks, cached from remote config
 private class RemoteDomain(
     private val ttlMs: Long = 1_800_000L,
     private val fallbackTtlMs: Long = 120_000L,
@@ -202,7 +202,7 @@ private class RemoteDomain(
                 expiresAt = now + ttlMs
                 return@withLock fetched
             }
-            // keep serving the stale host rather than hammering firebase with a broken network
+            // stale host beats hammering firebase offline
             if (current == null) {
                 val result = fallback()
                 value = result
@@ -214,7 +214,7 @@ private class RemoteDomain(
     }
 }
 
-// a dead mirror invalidates the cached host so the next call re-reads remote config
+// dead mirror invalidates the cached host
 private class StaleDomainInterceptor(private val domain: RemoteDomain) : okhttp3.Interceptor {
     override fun intercept(chain: okhttp3.Interceptor.Chain): okhttp3.Response {
         val host = chain.request().url.host
@@ -249,7 +249,7 @@ object LiveSports {
     @JsonIgnoreProperties(ignoreUnknown = true)
     private data class RemoteConfig(val entries: Map<String, String>? = null)
 
-    // cric_api2 is the working endpoint most of the time, cric_api1 is the spare
+    // cric_api2 first, cric_api1 is the spare
     private suspend fun baseUrlFromFirebase(): String? {
         return try {
             withContext(Dispatchers.IO) {
@@ -357,13 +357,13 @@ object LiveSports {
         return if (a == b) a else "$a vs $b"
     }
 
-    // channel style entries set both teams to the same name, the card then shows one crest
+    // channel entries show one crest for both teams
     private fun isSameTeam(a: String?, b: String?): Boolean {
         if (a.isNullOrBlank() || b.isNullOrBlank()) return false
         return a.trim().equals(b.trim(), ignoreCase = true)
     }
 
-    // wide match card with both crests and state, same style the live tv plugin uses
+    // wide card with both crests, live tv style
     private fun matchCardUrl(event: LiveEvent): String {
         val info = event.eventInfo
         val title = java.net.URLEncoder.encode(info?.eventName ?: event.title ?: "", "UTF-8")
@@ -474,7 +474,7 @@ object LiveSports {
         }
     }
 
-    // links can carry per stream headers after a pipe, url|Referer=..&Origin=..
+    // per stream headers after a pipe: url|Referer=..&Origin=..
     private fun parseStreamLink(link: String): Pair<String, Map<String, String>> {
         val headers = mutableMapOf<String, String>()
         if (!link.contains("|")) {
@@ -534,7 +534,7 @@ object LiveSports {
         return true
     }
 
-    // type 7 servers hand out clearkey dash, the kid and key ride along as hex kid:hex key
+    // type 7 is clearkey dash, hex kid:hex key
     private suspend fun emitDrmLink(
         serverName: String,
         url: String,
@@ -593,7 +593,7 @@ object LiveSports {
         return loadInWebView(url)
     }
 
-    // some servers only expose the stream inside their player page, a throwaway webview catches it
+    // some servers hide the stream in their player page
     private suspend fun loadInWebView(embedUrl: String): String? {
         return withContext(Dispatchers.Main) {
             suspendCoroutine { continuation ->
@@ -605,7 +605,7 @@ object LiveSports {
                 var captured = false
                 var resumed = false
 
-                // a late resume after the load was cancelled is dropped instead of thrown
+                // drop late resumes after cancel
                 fun finishOnce(result: String?) {
                     if (resumed) return
                     resumed = true

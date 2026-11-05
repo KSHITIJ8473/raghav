@@ -8,14 +8,13 @@ import com.lagradost.cloudstream3.utils.newExtractorLink
 import org.json.JSONObject
 import org.jsoup.Jsoup
 
-// the rozgarlelo hub fronts several mirror platforms; newer dropdown entries
-// carry their own target url, older ones still resolve through the hub proxy
+// newer entries carry their own url, older ones use the hub proxy
 object MMCineverse {
 
     private const val TAG = "MM_Cineverse"
     private const val HUB = "https://rozgarlelo.modiplay.xyz"
 
-    // hosts running the shared api v1 player with the static protocol derived cipher
+    // shared api v1 player, static cipher
     private val apiV1Hosts = mapOf(
         "multimovies.rpmhub.site" to "RPM Share",
         "multimovies.embedseek.xyz" to "Seek Streaming",
@@ -61,7 +60,7 @@ object MMCineverse {
             referer = "https://$host/",
         ) ?: return false
         val video = decryptApiV1(videoHex) ?: return false
-        // only the video payload carries the release name the quality is read from
+        // video payload carries the release name
         val title = video.optString("title")
 
         var added = false
@@ -146,8 +145,7 @@ object MMCineverse {
         return resolveProxyHtml(resp.text, "$labelPrefix $displayName", callback)
     }
 
-    // the hub relay player either hands a var src playlist (relative to the hub)
-    // or proxies the target page over with direct links in it
+    // relay hands a var src playlist or proxies the page
     private suspend fun resolveProxyHtml(html: String, label: String, callback: (ExtractorLink) -> Unit): Boolean {
         val src = Regex("var\\s+src=\"([^\"]+)\"").find(html)?.groupValues?.get(1)
         if (src != null) {
@@ -200,7 +198,7 @@ object MMCineverse {
             SubServer(MMNet.deEsc(m.groupValues[1]), m.groupValues[2], m.groupValues[3], m.groupValues[4])
         }.distinctBy { it.platform }
 
-        // the default frame mirrors the first dropdown entry, keep the order stable
+        // default frame mirrors the first entry
         val defaultFrame = doc.selectFirst("#playerFrame")?.attr("src")
         val ordered = if (defaultFrame != null) {
             val defaultPlatform = Regex("[?&]p=([^&]+)").find(defaultFrame)?.groupValues?.get(1)
@@ -219,8 +217,7 @@ object MMCineverse {
         return any
     }
 
-    // a full url goes straight to the resolver that owns the host, everything
-    // else falls back to the hub proxy which still knows every platform
+    // full urls go to the owning resolver
     private suspend fun resolveMirror(
         server: SubServer,
         labelPrefix: String,
@@ -254,7 +251,7 @@ object MMCineverse {
     }
 }
 
-// translates bysetayico file links into the shared player domain before the heavy flow
+// bysetayico links go through the shared player domain
 object MMFilemoonBridge {
 
     private const val TAG = "MM_Filemoon"

@@ -19,10 +19,10 @@ import java.net.URI
 import java.net.URLDecoder
 import java.util.concurrent.ConcurrentHashMap
 
-// both sites run the same theme, api and drive pages, one site object covers vegamovies and rogmovies
+// same theme and api, one object covers both sites
 internal object VegaMoviesSite {
 
-    private val domains = listOf("https://new1.vegamovies.lease", "https://rogmovies.one")
+    private val domains = listOf("https://vegamovies.lease", "https://rogmovies.im")
 
     private val deadHosts = Regex("""(?i)megaup|viking|vik1ng|telegram|t\.me""")
 
@@ -90,13 +90,12 @@ internal object VegaMoviesSite {
             }
             matched.firstOrNull { PlayNet.seasonsOf(it.post_title ?: "") == null }
         } else {
-            // a post from another year is a different movie, war 2007 is not war 2019
+            // wrong year is a different movie
             matched.firstOrNull { PlayNet.yearMatches(it.post_title ?: "", res.matchYear) }
         }
     }
 
-    // a spin off keeps its own words between the show name and the season tag, a post
-    // of the base show only ever continues with a season word, a part, a year or nothing
+    // spin offs keep their own words
     private fun sameShow(postTitle: String, title: String): Boolean {
         var stripped = PlayNet.normalizeTitle(postTitle)
         for (prefix in listOf("download", "watch")) {
@@ -123,7 +122,7 @@ internal object VegaMoviesSite {
         val movieGroups: List<QualityGroup>
     )
 
-    // a season headline followed by quality headlines whose paragraphs carry the server buttons
+    // season headline then quality headlines with server buttons
     private fun parsePost(html: String): PostDetail? {
         val doc = Jsoup.parse(html)
         val content = doc.selectFirst(".entry-content, .post-content, article") ?: doc
@@ -198,7 +197,7 @@ internal object VegaMoviesSite {
         }
     }
 
-    // the middle hop every button leads to, it carries servers or one section per episode
+    // the middle hop carries servers or episode sections
     class DrivePage(
         val servers: List<Pair<String, String>>,
         val episodes: Map<Int, List<Pair<String, String>>>
@@ -256,7 +255,7 @@ internal object VegaMoviesSite {
     // a resolved server ready for the picker
     class Server(val name: String, val url: String)
 
-    // routes one button to its direct files, every server the target page offers comes back named
+    // route one button to its direct files, named per server
     suspend fun resolve(href: String): List<Server> {
         if (!href.startsWith("http") || deadHosts.containsMatchIn(href)) return emptyList()
         val host = hostOf(href)
@@ -283,7 +282,7 @@ internal object VegaMoviesSite {
         ""
     }
 
-    // a link that is already the file needs no hop, it only has to be named
+    // already the file, just name it
     private fun directServer(href: String): List<Server> {
         val h = href.lowercase()
         return when {
@@ -299,7 +298,7 @@ internal object VegaMoviesSite {
         return "${PlayNet.getBaseUrl(href)}/api/file/$id"
     }
 
-    // vcloud blocks plain clients, the site's own js sets this cookie on first visit
+    // vcloud blocks plain clients, this cookie is set on first visit
     private fun vcloudHeaders(referer: String?): Map<String, String> {
         val h = PlayNet.browserHeaders(referer).toMutableMap()
         h["Cookie"] = "xla=s4t"
@@ -317,7 +316,7 @@ internal object VegaMoviesSite {
     private val vcloudTokenRegex = Regex("""var\s+url\s*=\s*atob\s*\(\s*atob\s*\(\s*['"]([^'"]+)['"]""")
     private val plainUrlRegex = Regex("""var\s+url\s*=\s*['"]([^'"]+)['"]""")
 
-    // the share page hides the token page in a double base64 variable, the token page carries every server
+    // token page hides in double base64, it carries every server
     private suspend fun vcloudTarget(url: String): Pair<String, String>? {
         val first = vcloudGet(url, "https://nexdrive.beer/") ?: return null
         var target = vcloudTokenRegex.find(first)?.groupValues?.get(1)
@@ -333,7 +332,7 @@ internal object VegaMoviesSite {
         return target?.takeIf { it.startsWith("http") }?.let { hopUrl to it }
     }
 
-    // names the download buttons of a page after the server behind them
+    // name download buttons after their server
     private fun serverNameOf(label: String, href: String): String? {
         val low = label.lowercase()
         val h = href.lowercase()
@@ -373,7 +372,7 @@ internal object VegaMoviesSite {
             addServer(out, name, href)
         }
 
-        // the page hides a second pixeldrain behind a js variable, the button alone misses it
+        // a second pixeldrain hides in a js var
         Regex("""var\s+pxl\s*=\s*["']([^"']+)["']""").find(html)?.groupValues?.get(1)
             ?.takeIf { it.startsWith("http") && it.contains("pixeldrain") }
             ?.let { addServer(out, "PixelDrain", it) }
@@ -381,7 +380,7 @@ internal object VegaMoviesSite {
         return out.distinctBy { it.url }
     }
 
-    // turns a named button into its direct file, dead ones stay out of the list
+    // named button to its direct file, dead ones stay out
     private suspend fun addServer(out: MutableList<Server>, name: String, href: String) {
         when (name) {
             "10Gbps" -> gpdlDirect(href)?.let { out.add(Server(name, it)) }
@@ -391,7 +390,7 @@ internal object VegaMoviesSite {
         }
     }
 
-    // a hubcloud share page only names the real servers on its generate page
+    // a share page names its servers on the generate page
     private suspend fun hubcloudServers(url: String): List<Server> {
         val res = try {
             app.get(url, headers = PlayNet.browserHeaders(), timeout = 20L)
@@ -423,7 +422,7 @@ internal object VegaMoviesSite {
         return out.distinctBy { it.url }
     }
 
-    // vegadrive only answers skydrop on the json api and mints the google mirror asynchronously
+    // vegadrive answers skydrop on the json api only
     private suspend fun vegadriveSkydrop(url: String): Server? {
         val page = try {
             app.get(url, headers = PlayNet.browserHeaders("https://nexdrive.beer/"), timeout = 20L)
@@ -453,7 +452,7 @@ internal object VegaMoviesSite {
         return null
     }
 
-    // the embed page wraps the google url in a redirect variable, the link= param is the file
+    // link= param is the file
     private suspend fun fastdlDirect(url: String): String? {
         return try {
             val res = app.get(url, headers = PlayNet.browserHeaders(), timeout = 20L)
@@ -477,12 +476,12 @@ internal object VegaMoviesSite {
 
     private val filePressId = Regex("""/file/([a-f0-9]{16,40})""")
 
-    // the react page only adds a turnstile, the whole api sits on the short domain
+    // api sits on the short domain
     private suspend fun filepressDirect(url: String): String? {
         val id = filePressId.find(url)?.groupValues?.get(1) ?: return null
         val base = "https://filebee.xyz"
 
-        // the dotflix route survives, the direct task worker hands out expiring links
+        // dotflix survives, worker hands out expiring links
         val share = filepressTask(id, "dotFlixDownlaod", base)
         if (share != null && share.startsWith("http")) {
             resolveDotFlix(share)?.let { return it }
@@ -550,7 +549,7 @@ internal object VegaMoviesSite {
         }
     }
 
-    // the share page carries a per file code in a btoa call, reversed base64 goes to the extract endpoint
+    // btoa file code, reversed base64 to the extract endpoint
     private suspend fun resolveDotFlix(shareUrl: String): String? {
         return try {
             val text = app.get(
@@ -588,7 +587,7 @@ internal object VegaMoviesSite {
         }
     }
 
-    // gofile folders hold sample files next to the video, the biggest child is the movie
+    // gofile folders hold samples, biggest child wins
     private suspend fun gofileDirect(url: String): String? {
         val code = url.substringAfterLast("/").substringBefore("#").substringBefore("?")
         if (code.isBlank()) return null
@@ -623,7 +622,7 @@ internal object VegaMoviesSite {
         }
     }
 
-    // the gpdl button bounces through a worker and a generator page that only names the file in its query
+    // gpdl bounces through a worker and a generator page
     private suspend fun gpdlDirect(url: String): String? {
         var cur = url
         try {
@@ -645,7 +644,7 @@ internal object VegaMoviesSite {
         return null
     }
 
-    // the post buttons all read download now, the quality headline above them is the real label
+    // buttons read download now, headline is the real label
     private fun infoFrom(groupLabel: String): String =
         groupLabel.replace(Regex("""(?i)\bdownload\s+now\b|\bdownload\b"""), "")
             .replace(Regex("""\s+"""), " ").trim()
@@ -668,8 +667,7 @@ internal object VegaMoviesSite {
                 }.flatMap { it.await() }
             }
 
-            // the year keeps the lookup on the right post, the bare title alone buries
-            // it under every war named series and movie the two catalogs carry
+            // year first, bare title buries the pick
             var post: VegaDoc? = null
             for (query in PlayNet.searchQueries(res)) {
                 val posts = searchRound(query)
@@ -679,7 +677,7 @@ internal object VegaMoviesSite {
             }
             val post0 = post ?: return
             val permalink = post0.permalink?.takeIf { it.isNotBlank() } ?: return
-            // permalinks come back relative, the domain the search ran on is the only reliable origin
+            // permalinks come back relative
             val domain = post0.domain.ifBlank {
                 domains.firstOrNull { permalink.contains(it.removePrefix("https://"), true) }
                     ?: domains.first()
@@ -698,8 +696,7 @@ internal object VegaMoviesSite {
                     inSeason.isNotEmpty() -> inSeason
                     detail.seasons.isNotEmpty() ->
                         detail.seasons.filter { s -> PlayNet.seasonsOf(s.title) == null }.flatMap { it.groups }
-                    // a one season post keeps every quality block under the post title and
-                    // the title names the season, so the blocks are that season's files
+                    // one season post, blocks are that season's files
                     PlayNet.seasonsOf(post0.post_title ?: "")?.contains(res.season) == true -> detail.movieGroups
                     else -> emptyList()
                 }
@@ -711,7 +708,7 @@ internal object VegaMoviesSite {
             val claimed = ConcurrentHashMap.newKeySet<String>()
             val seenUrls = ConcurrentHashMap.newKeySet<String>()
 
-            // the picker fills up as servers come in, one slot per server, quality and encode
+            // one slot per server, quality and encode
             suspend fun offer(server: Server, tier: Int, info: String, dv: Boolean) {
                 if (!seenUrls.add(server.url)) return
                 val key = "${server.name}|$tier|${if (dv) "dv" else ""}"

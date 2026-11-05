@@ -8,8 +8,7 @@ import kotlinx.coroutines.sync.withLock
 import org.json.JSONArray
 import org.json.JSONObject
 
-// byse powered file hosts: challenge, ecdsa attestation, proof of work, then an
-// AES-GCM sealed playback payload whose key halves hide in a version indexed pair
+// byse hosts: challenge, ecdsa, pow, sealed payload
 object MMFilemoon {
 
     private data class Fingerprint(
@@ -21,7 +20,7 @@ object MMFilemoon {
 
     private data class PlaybackSource(val url: String, val label: String, val height: Int)
 
-    // one cold session per host, the pow is too costly to repeat for every file
+    // one cold session per host, pow is costly
     private val sessionCache = HashMap<String, Fingerprint>()
     private val sessionMutex = Mutex()
 
@@ -152,7 +151,7 @@ object MMFilemoon {
         return out
     }
 
-    // resolve every playable file hosted under a byse frontend, code is the file id
+    // code is the file id
     suspend fun resolve(
         embedFrameUrl: String,
         code: String,

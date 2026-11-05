@@ -31,7 +31,7 @@ import java.util.concurrent.ConcurrentHashMap
 
 private const val TAG = "Multimovies"
 
-// how often the live domain is re-validated, the check is one homepage fetch
+// one homepage fetch decides the live domain
 private const val DOMAIN_CHECK_TTL_MS = 5L * 60 * 1000
 
 class MultimoviesProvider : MainAPI() {
@@ -61,8 +61,7 @@ class MultimoviesProvider : MainAPI() {
         "Accept-Language" to "en-US,en;q=0.9",
     )
 
-    // the live domain first, then whatever the firebase registry says, then the
-    // historical ones; garden is kept last because it is challenge walled today
+    // live domain, then firebase, then history; garden last
     private val domainFallbacks = listOf(
         "https://m1.multimovies.courses",
         "https://multimovies.garden",
@@ -79,8 +78,7 @@ class MultimoviesProvider : MainAPI() {
 
     @Volatile private var domainCheckAt = 0L
 
-    // every catalog page renders poster-card rows, the old player.js probe hit a
-    // script that only detail pages load and blocked every domain switch
+    // probe on catalog pages, not just detail
     private suspend fun refreshDomain(force: Boolean = false) {
         val now = System.currentTimeMillis()
         if (!force && now - domainCheckAt < DOMAIN_CHECK_TTL_MS) return
@@ -116,8 +114,7 @@ class MultimoviesProvider : MainAPI() {
         }
     }
 
-    // watchlist and sync entries keep whatever host they were saved with; a dead
-    // mirror replays the same path on the live domain instead of hitting the wall
+    // saved entries replay their path on the live domain
     private fun normalizeUrl(url: String): String = try {
         val uri = URI(url)
         val host = (uri.host ?: "").lowercase()
@@ -221,7 +218,7 @@ class MultimoviesProvider : MainAPI() {
         return out
     }
 
-    // line ending agnostic json block reader, the site mixes crlf and lf
+    // the site mixes crlf and lf
     private fun extractBracedObject(html: String, marker: String): String {
         val start = html.indexOf(marker)
         if (start < 0) return ""
@@ -291,14 +288,12 @@ class MultimoviesProvider : MainAPI() {
     }
 
     private fun parseSeasons(doc: Document): List<Int> {
-        // the range select shares the cinejoy-season-select class, only the
-        // pill dropdown lists real seasons
+        // cinejoy class here, read the rendered one
         val select = doc.selectFirst(".cinejoy-season-pill-dropdown select") ?: return emptyList()
         return select.select("option").mapNotNull { it.attr("value").toIntOrNull() }.sorted()
     }
 
-    // seasons past 24 episodes come as ep_range pages, the selected range is
-    // the one already rendered on the page
+    // past 24 episodes come as ep_range pages
     private fun parseEpisodeRanges(doc: Document): List<Int> {
         val select = doc.selectFirst("select.episode-range-select") ?: return emptyList()
         return select.select("option")

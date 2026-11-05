@@ -152,7 +152,7 @@ internal object DrivePages {
 }
 
 internal object HdHub4uSite {
-    private const val DEFAULT_DOMAIN = "https://new6.hdhub4u.cl"
+    private const val DEFAULT_DOMAIN = "https://new11.hdhub4u.cl"
 
     private data class HubPost(val title: String, val url: String, val imdbId: String)
 
@@ -259,14 +259,13 @@ internal object HdHub4uSite {
                 ?: DEFAULT_DOMAIN
             if (res.title.isNullOrBlank()) return
 
-            // the catalog holds a flood of name containing posts, the year narrows the
-            // search before the matcher even runs, the bare title is the last resort
+            // year narrows the flood before matching
             var chosen: List<HubPost> = emptyList()
             for (query in PlayNet.searchQueries(res)) {
                 val posts = typesenseSearch(domain, query)
                 if (posts.isEmpty()) continue
 
-                // an imdb twin settles the pick even when the post spells the name oddly
+                // an imdb twin settles odd spellings
                 res.imdbId?.takeIf { it.isNotBlank() }?.let { id ->
                     posts.firstOrNull { it.imdbId.equals(id, ignoreCase = true) }?.let { hit ->
                         chosen = listOf(hit)
@@ -283,7 +282,7 @@ internal object HdHub4uSite {
                             if (seasonPosts.isNotEmpty()) seasonPosts
                             else matched.filter { PlayNet.seasonsOf(it.title) == null }
                         } else {
-                            // a post from another year is a different movie, war 2007 is not war 2019
+                            // wrong year is a different movie
                             matched.filter { PlayNet.yearMatches(it.title, res.matchYear) }
                         }.take(2)
                     }
@@ -374,7 +373,7 @@ internal object FourKhdHubSite {
                 val elements = searchDoc.select("div.card-grid > a.movie-card")
                 fun contentOf(el: Element): String = el.selectFirst("div.movie-card-content")?.text()?.lowercase() ?: ""
 
-                // a card from another year is a different title, war 2007 is not war 2019
+                // wrong year is a different title
                 matched = elements.firstOrNull { el ->
                     val content = contentOf(el)
                     PlayNet.titleMatchesFor(content, res) && PlayNet.yearMatches(content, res.year)
@@ -614,8 +613,7 @@ internal object Movies4uSite {
             if (res.title.isNullOrBlank()) return
             var chosen: List<Pair<String, String>> = emptyList()
 
-            // the year keeps the lookup away from every name containing post, the
-            // matcher gets a short list and the right one is on it
+            // year keeps the short list honest
             for (query in PlayNet.searchQueries(res)) {
                 val posts = findPosts(query)
                 if (posts.isEmpty()) continue
@@ -629,7 +627,7 @@ internal object Movies4uSite {
                     if (seasonPosts.isNotEmpty()) seasonPosts
                     else matched.filter { (postTitle, _) -> PlayNet.seasonsOf(postTitle) == null }
                 } else {
-                    // a post from another year is a different movie, war 2007 is not war 2019
+                    // wrong year is a different movie
                     matched.filter { (postTitle, _) -> PlayNet.yearMatches(postTitle, res.matchYear) }
                 }.take(2)
                 if (chosen.isNotEmpty()) break
@@ -717,7 +715,7 @@ internal object TmfSite {
                     if (res.season != null) PlayNet.seasonsOf(t)?.contains(res.season) == true
                     else PlayNet.yearMatches(t, res.matchYear)
                 } ?: matched.firstOrNull { (t, _) ->
-                    // a season request may also live in a post that never names a season
+                    // a season request may sit in a seasonless post
                     res.season != null && PlayNet.seasonsOf(t) == null
                 }
                 if (target != null) break
@@ -775,7 +773,7 @@ internal object MultimoviesSite {
     @Volatile private var domainCheckAt = 0L
     @Volatile private var resolvedDomain: String? = null
 
-    // probe a page every catalog renders, the old player.js hit only loaded on detail pages
+    // probe a page every catalog renders
     private suspend fun currentDomain(): String {
         val now = System.currentTimeMillis()
         if (now - domainCheckAt < DOMAIN_CHECK_TTL_MS) {
@@ -960,7 +958,7 @@ internal object MultimoviesSite {
         val linkCb: (ExtractorLink) -> Unit = { link ->
             if (seenLinks.add(link.url)) {
                 val name = "[Multimovies] - " + link.name.replace(Regex("\\s+"), " ").trim()
-                // multimovies servers rarely tag quality on the link, the label usually carries it
+                // labels usually carry the quality
                 val quality = if (link.quality != Qualities.Unknown.value) {
                     link.quality
                 } else {

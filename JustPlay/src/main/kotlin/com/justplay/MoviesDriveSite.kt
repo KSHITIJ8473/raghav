@@ -91,7 +91,7 @@ internal object MoviesDriveSite {
             }
             return matched.firstOrNull { PlayNet.seasonsOf(it.title) == null }
         }
-        // a post from another year is a different movie, war 2007 is not war 2019
+        // wrong year is a different movie
         return matched.firstOrNull { PlayNet.yearMatches(it.title, res.matchYear) }
     }
 
@@ -204,8 +204,7 @@ internal object MoviesDriveSite {
 
             var chosen: DrivePost? = null
             outer@ for (domain in candidates()) {
-                // the year keeps the lookup on the right post, the bare title alone
-                // buries it under every war named series and movie
+                // year first, bare title buries the pick
                 for (query in PlayNet.searchQueries(res)) {
                     val found = searchPosts(domain, query)
                     if (found.isEmpty()) continue

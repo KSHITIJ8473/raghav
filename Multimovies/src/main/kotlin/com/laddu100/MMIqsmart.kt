@@ -7,8 +7,7 @@ import com.lagradost.cloudstream3.utils.newExtractorLink
 import org.json.JSONObject
 import java.net.URI
 
-// the gd mirror lists the same film on several file hosts and exposes one
-// file id per host, each id then resolves through that host own pipeline
+// same film on several hosts, one file id each
 object MMIqsmart {
 
     private const val TAG = "MM_Iqsmart"
@@ -156,8 +155,7 @@ object MMIqsmart {
         return any
     }
 
-    // filesforever links are iqsmart file ids in disguise, the landing page only
-    // confirms the id before the shared mirror helper takes over
+    // filesforever links are iqsmart ids in disguise
     suspend fun resolveFilesforever(
         embedUrl: String,
         labelPrefix: String,
@@ -192,7 +190,7 @@ object MMIqsmart {
     }
 }
 
-// xvidstyle frontends expose their playlist through a dean edwards packed jw setup
+// packed jw setup
 object MMXvidStyle {
 
     private const val TAG = "MM_XvidStyle"
@@ -218,7 +216,7 @@ object MMXvidStyle {
         for (m in Regex("https?://[^\"'\\s\\\\]+\\.m3u8[^\"'\\s\\\\]*").findAll(unpacked)) {
             absolute.add(MMNet.deEsc(m.groupValues.first()))
         }
-        // the cdn copies outlive the same origin stream tokens, list them first
+        // cdn copies outlive the stream tokens, list them first
         return (absolute + relative).filter { it.startsWith("http") }
     }
 

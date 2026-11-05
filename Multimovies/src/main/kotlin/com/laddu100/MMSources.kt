@@ -7,15 +7,14 @@ import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.newExtractorLink
 import org.json.JSONObject
 
-// vidout is a thin wrapper over a github hosted index of direct hls links
+// vidout wraps a github index of direct hls links
 object MMVidout {
 
     private const val TAG = "MM_Vidout"
 
     private const val RAW = "https://raw.githubusercontent.com/Watchout2025/api/refs/heads/main"
 
-    // the index keeps pointing at cdn urls that expire without notice, so a link
-    // is only listed after the playlist answers on the same network it will play
+    // links expire without notice, list only what answers
     private suspend fun addLink(url: String, label: String, callback: (ExtractorLink) -> Unit): Boolean {
         val alive = try {
             MMNet.get(url, referer = "https://vidout.pages.dev/") != null
@@ -86,7 +85,7 @@ object MMVidout {
     }
 }
 
-// vidsync publishes a plain embed, a best effort m3u8 grep keeps it usable when it is up
+// plain embed, best effort m3u8 grep
 object MMVidsync {
     suspend fun resolve(
         url: String,
@@ -105,8 +104,7 @@ object MMVidsync {
     }
 }
 
-// vidrift embeds carry the whole source list inline, the orion playlist origin
-// answers 403 without the embed referer
+// vidrift carries sources inline, orion needs the embed referer
 object MMVidrift {
 
     private const val TAG = "MM_Vidrift"
@@ -153,8 +151,7 @@ object MMVidrift {
         labelPrefix: String,
         callback: (ExtractorLink) -> Unit,
     ): Boolean {
-        // the origin sits behind a fingerprint sensitive cloudflare wall, mmGet
-        // falls back to the in app solver when plain requests get challenged
+        // origin behind a cloudflare wall
         val resp = try {
             mmGet(
                 embedUrl,
@@ -343,7 +340,7 @@ object MMBingr {
     }
 }
 
-// filmu exposes one singularity endpoint per media type with a plain source list
+// one singularity endpoint per media type
 object MMFilmu {
 
     private const val TAG = "MM_Filmu"
@@ -505,8 +502,7 @@ object MMVidbolt {
     ): Boolean {
         var any = false
 
-        // the site player now resolves everything through one json endpoint per
-        // media type, it answers with a ready made source list
+        // everything resolves through one json endpoint
         val resolveUrl = if (isTv) {
             if (season == null || episode == null) null
             else "$HOST/api/resolve?type=tv&id=$tmdbId&season=$season&episode=$episode"

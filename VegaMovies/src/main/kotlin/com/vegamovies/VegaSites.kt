@@ -14,15 +14,25 @@ import org.jsoup.nodes.Element
 
 internal object VegaSites {
 
-    class Site(val id: String, val label: String, val base: String) {
+    // hosts hop, retired ones stay listed for old urls
+    class Site(val id: String, val label: String, val base: String, val aliases: List<String> = emptyList()) {
         val host: String get() = base.substringAfter("://")
+        val knownHosts: List<String> get() = listOf(host) + aliases
     }
 
-    val VEGA = Site("v", "Vegamovies", "https://new1.vegamovies.lease")
-    val ROG = Site("r", "Rogmovies", "https://rogmovies.one")
+    val VEGA = Site(
+        "v", "Vegamovies", "https://vegamovies.lease",
+        listOf("new1.vegamovies.lease", "vegamovies.lease")
+    )
+    val ROG = Site(
+        "r", "Rogmovies", "https://rogmovies.im",
+        listOf("rogmovies.one", "rogmovies.im")
+    )
     val ALL = listOf(VEGA, ROG)
 
-    fun siteOf(url: String): Site? = ALL.firstOrNull { url.contains(it.host, true) }
+    fun siteOf(url: String): Site? = ALL.firstOrNull { site ->
+        site.knownHosts.any { url.contains(it, true) }
+    }
 
     class Row(val site: Site, val path: String, val title: String)
 
@@ -167,7 +177,7 @@ internal object VegaSites {
         return parseCards(api, site, html)
     }
 
-    // the typesense proxy throws 5xx under load, a few retries keep it usable
+    // typesense throws 5xx under load, retry
     suspend fun tsSearch(api: MainAPI, site: Site, query: String, page: Int): List<SearchResponse> {
         val url = "${site.base}/ts-search.php?q=${java.net.URLEncoder.encode(query, "UTF-8")}&page=$page"
         val text = VegaNet.retry(attempts = 3, gapMs = 800L) {
@@ -231,7 +241,7 @@ internal object VegaSites {
             .replace("&quot;", "\"").replace("&lt;", "<").replace("&gt;", ">")
     }
 
-    // the og:image proxy host does not resolve on most networks, the u= param carries the real poster
+    // proxy host rarely resolves, u= has the poster
     private fun posterFromUrl(raw: String): String? {
         val unescaped = htmlUnescape(raw)
         if (!unescaped.startsWith("http")) return null
@@ -291,7 +301,7 @@ internal object VegaSites {
         val seasons = mutableListOf<SeasonBlock>()
         val movieGroups = mutableListOf<QualityGroup>()
 
-        // a season headline followed by quality headlines whose paragraphs carry the server buttons
+        // season headline then quality headlines with server buttons
         val seasonHeads = content.select("h1, h2").filter { el ->
             Regex("""(?i)season\s*\d+|part\s*\d+""").containsMatchIn(el.text())
         }

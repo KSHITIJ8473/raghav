@@ -12,8 +12,7 @@ import okhttp3.RequestBody.Companion.toRequestBody
 
 private const val TAG = "MM_Net"
 
-// the site migrates domains every few months and the embed origins check the
-// referer, so every hardcoded origin had to become the current live one
+// domains migrate, embed origins check the referer
 object MMSite {
     @Volatile var baseUrl: String = "https://m1.multimovies.courses"
     val referer: String get() = "$baseUrl/"
@@ -23,7 +22,7 @@ object MMNet {
     const val UA =
         "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
 
-    // hosts that keep per-session cookies (the byse player binds its captcha to them)
+    // byse binds its captcha to per-session cookies
     private val cookieJar = ConcurrentHashMap<String, MutableMap<String, String>>()
 
     fun urlEncode(s: String): String = URLEncoder.encode(s, "UTF-8")
@@ -121,6 +120,6 @@ object MMNet {
         }
     }
 
-    // the PoW search is pure integer work, keep it off the IO threads
+    // pure integer work, keep it off the IO threads
     suspend fun <T> compute(block: () -> T): T = withContext(Dispatchers.Default) { block() }
 }

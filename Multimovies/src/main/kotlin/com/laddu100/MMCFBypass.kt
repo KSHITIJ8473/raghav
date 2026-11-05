@@ -459,8 +459,7 @@ private fun buildMMHeaders(original: Map<String, String>): Map<String, String> {
     if (!h.containsKey("Accept")) h["Accept"] = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
     val cookies = MMCFStore.getCookies()
     if (cookies != null) {
-        // cf_clearance is bound to the user agent that solved the challenge,
-        // so the stored UA must win over whatever the caller passed
+        // cf_clearance is bound to the solving user agent
         MMCFStore.getUserAgent()?.let { h["User-Agent"] = it }
         h["Cookie"] = cookies
     } else if (!h.containsKey("User-Agent")) {
@@ -503,7 +502,7 @@ suspend fun mmGet(url: String, headers: Map<String, String> = emptyMap(), allowR
             response = app.get(url, headers = buildMMHeaders(headers), timeout = 30_000L, allowRedirects = allowRedirects)
             if (!isMMCloudflareBlocked(response)) return@withLock
         }
-        // cookie did not unblock the page, back off instead of hammering the dialog
+        // back off instead of hammering the dialog
         MMCFStore.markBypassed()
     }
     return response

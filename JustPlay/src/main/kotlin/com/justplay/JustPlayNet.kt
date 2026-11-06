@@ -625,7 +625,7 @@ internal object PlayNet {
         val host = hostOf(url)
         if (host.isEmpty()) return
         val resolver: (suspend (String?, (SubtitleFile) -> Unit, (ExtractorLink) -> Unit) -> Unit) = when {
-            host.endsWith("hubcloud.ist") || host.endsWith("hubcloud.foo") ->
+            host.endsWith("hubcloud.ist") || host.endsWith("hubcloud.foo") || host.endsWith("hubcloud.cx") ->
                 { r, s, c -> PlayHubCloud().getUrl(url, r, s, c) }
             host.contains("gdflix") || host.contains("gdlink") ->
                 { r, s, c -> PlayGDFlix().getUrl(url, r, s, c) }

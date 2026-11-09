@@ -1,4 +1,4 @@
-version = 29
+version = 30
 
 
 android {
@@ -13,7 +13,7 @@ dependencies {
 
 cloudstream {
     language = "en"
-    description = "Live sports HIGH QAULITY"
+    description = "Live sports in HD: football, NBA, NFL, UFC, cricket and 120 live sports channels"
     authors = listOf("KSHITIJ8473")
 
     /**

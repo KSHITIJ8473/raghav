@@ -19,7 +19,7 @@ import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
 
 internal object HindMoviezSite {
-    private const val DEFAULT_DOMAIN = "https://hindmovie.dev"
+    private const val DEFAULT_DOMAIN = "https://v3.hindmovie.im/"
     private const val DOMAIN_REGISTRY =
         "https://raw.githubusercontent.com/SaurabhKaperwan/Utils/refs/heads/main/urls.json"
 

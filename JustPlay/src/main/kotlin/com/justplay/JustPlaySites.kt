@@ -422,7 +422,7 @@ internal object FourKhdHubSite {
 }
 
 internal object Movies4uSite {
-    private const val DEFAULT_DOMAIN = "https://new1.movies4u.garden"
+    private const val DEFAULT_DOMAIN = "https://new6.movies4u.garden"
     private const val DOMAIN_REGISTRY =
         "https://raw.githubusercontent.com/phisher98/TVVVV/refs/heads/main/domains.json"
     private val driveHostRegex = Regex("mdrive\\.cloud|nexdrive\\.fit|mobilejsr\\.rest|mdisk")

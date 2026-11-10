@@ -20,7 +20,7 @@ import org.jsoup.nodes.Element
 internal object MoviesLinkBdSite {
 
     private const val HUB_URL = "https://movielinkbd.com"
-    private const val DEFAULT_DOMAIN = "https://s3t2sa.movielinkbd.at"
+    private const val DEFAULT_DOMAIN = "https://qhetvv.movielinkbd.at"
 
     @Volatile
     private var workingDomain: String? = null
@@ -200,6 +200,28 @@ internal object MoviesLinkBdSite {
         }
     }
 
+    // the episode grid is built client side, the server markup only keeps
+    // h5 headings with the download buttons as plain siblings after them
+    private fun episodeButtons(doc: Document, season: Int, episode: Int): List<Element> {
+        val epTag = Regex("(?i)Episode\\s*:?\\s*0*$episode(?!\\d)")
+        val seasonTag = Regex("(?i)\\bS0*$season\\b")
+        val anySeason = Regex("(?i)\\bS\\d{1,2}\\b")
+        for (h5 in doc.select("h5")) {
+            val text = h5.text()
+            if (!epTag.containsMatchIn(text)) continue
+            if (anySeason.containsMatchIn(text) && !seasonTag.containsMatchIn(text)) continue
+            val out = mutableListOf<Element>()
+            var sib: Element? = h5.nextElementSibling()
+            while (sib != null && sib.tagName() != "h5") {
+                if (sib.tagName() == "a" && sib.hasAttr("data-dl")) out.add(sib)
+                out.addAll(sib.select("a[data-dl][data-ds][data-dr]"))
+                sib = sib.nextElementSibling()
+            }
+            if (out.isNotEmpty()) return out
+        }
+        return emptyList()
+    }
+
     private data class BdDetail(val pageUrl: String, val files: List<BdFile>)
 
     private data class BdFile(val info: String, val path: String)
@@ -223,13 +245,19 @@ internal object MoviesLinkBdSite {
         session.absorb(response)
         val doc = response.document
         val pageUrl = response.url
-        val scope = if (res.season == null) {
-            doc
+        val buttons: List<Element> = if (res.season == null) {
+            doc.select("a[data-dl][data-ds][data-dr]")
         } else {
-            val card = episodeCard(doc, res.season, res.episode ?: return null) ?: return null
-            card
+            val episode = res.episode ?: return null
+            val scoped = episodeButtons(doc, res.season, episode)
+            when {
+                scoped.isNotEmpty() -> scoped
+                else -> episodeCard(doc, res.season, episode)
+                    ?.select("a[data-dl][data-ds][data-dr]")
+                    ?: emptyList()
+            }
         }
-        val files = scope.select("a[data-dl][data-ds][data-dr]").mapNotNull { a ->
+        val files = buttons.mapNotNull { a ->
             val path = decodeButton(a) ?: return@mapNotNull null
             val label = buttonLabel(a)
             val info = if (res.season != null && label.isNotBlank()) {

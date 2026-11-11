@@ -144,8 +144,13 @@ class AnimeTHProvider : MainAPI() {
         "genre_sports" to "Sports",
     )
 
+    private suspend fun refreshDomain() {
+        FirebaseDomainHelper.getDomain("animeth")?.takeIf { it.contains("anime-th") }?.let { mainUrl = it.trimEnd('/') }
+    }
+
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         DonationManager.checkAndShow()
+        refreshDomain()
         val items = when {
             request.data == "home_latest" || request.data == "home_reviewed" ->
                 homeSection(request.data)
@@ -234,6 +239,7 @@ class AnimeTHProvider : MainAPI() {
 
     override suspend fun search(query: String): List<SearchResponse> {
         if (query.isBlank()) return emptyList()
+        refreshDomain()
         val q = query.trim()
         val bySlug = LinkedHashMap<String, SearchResponse>()
 
@@ -297,6 +303,7 @@ class AnimeTHProvider : MainAPI() {
     private class EpItem(val epId: String, val name: String, val num: Int)
 
     override suspend fun load(url: String): LoadResponse? {
+        refreshDomain()
         val slug = slugFromHref(url)
         if (slug.isBlank()) return null
 

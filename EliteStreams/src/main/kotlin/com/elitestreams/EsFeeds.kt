@@ -12,8 +12,12 @@ import java.util.concurrent.ConcurrentHashMap
 
 object EsFeeds {
 
-    private const val PLUGLIST = "https://premiumplugx.com/VIP/pluglist.php"
-    private const val HOTSTAR = "https://premiumplugx.com/htt/hot.php?playlist=1"
+    @Volatile
+    var BASE = "https://premiumplugx.com"
+        private set
+
+    private val PLUGLIST get() = "$BASE/VIP/pluglist.php"
+    private val HOTSTAR get() = "$BASE/htt/hot.php?playlist=1"
     private const val SONY_JSON = "https://api.npoint.io/5122554ee81206923fa7"
     private const val SLIV_EVENTS =
         "https://raw.githubusercontent.com/drmlive/sliv-live-events/refs/heads/main/sonyliv.m3u"
@@ -21,6 +25,10 @@ object EsFeeds {
     private const val FANCODE_BACKUP =
         "https://raw.githubusercontent.com/drmlive/fancode-live-events/refs/heads/main/fancode.m3u"
     private const val BIGGBOSS = "https://biggbossstreamx.livenoww.workers.dev/playlist.m3u"
+
+    suspend fun refreshDomain() {
+        FirebaseDomainHelper.getDomain("elitestreams")?.takeIf { it.contains("premiumplugx") }?.let { BASE = it.trimEnd('/') }
+    }
 
     private const val CACHE_TTL = 5 * 60 * 1000L
 

@@ -7,10 +7,16 @@ import java.util.concurrent.ConcurrentHashMap
 
 object TgTvApi {
 
-    const val SITE = "https://livetgtv.lovable.app"
+    @Volatile
+    var SITE = "https://livetgtv.lovable.app"
+        private set
     const val CHANNELS_URL = "https://jjtvxweb.pages.dev/jstr4web.json"
     const val COOKIE_PRIMARY = "https://allinonereborn2.online/jstrweb2/cookies.json"
     const val COOKIE_STAR = "https://allinonereborn2.online/jtv-fetch/jstarcookie/cookie.json"
+
+    suspend fun refreshDomain() {
+        FirebaseDomainHelper.getDomain("livetgtv")?.takeIf { it.contains("livetgtv") }?.let { SITE = it.trimEnd('/') }
+    }
 
     // function id baked into the bundle the site ships today
     private const val KNOWN_FN = "211ba18c9fcbaf4e68e5bb262905070b60b7ed4ffe802d16fbbed00150f1c024"
@@ -18,7 +24,8 @@ object TgTvApi {
     const val UA =
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
 
-    val siteHeaders = mapOf(
+    // rebuilt per read so a rotated site domain keeps matching origin headers
+    val siteHeaders get() = mapOf(
         "User-Agent" to UA,
         "Accept" to "*/*",
         "Origin" to SITE,
@@ -27,7 +34,7 @@ object TgTvApi {
 
     // jiotvmblive refuses the old jiotv app headers, the same url and
     // token only answers for a browser style request like the site's own
-    val playerHeaders = mapOf(
+    val playerHeaders get() = mapOf(
         "User-Agent" to UA,
         "Accept" to "*/*",
         "Origin" to SITE

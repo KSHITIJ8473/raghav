@@ -15,20 +15,38 @@ import org.jsoup.nodes.Element
 internal object VegaSites {
 
     // hosts hop, retired ones stay listed for old urls
-    class Site(val id: String, val label: String, val base: String, val aliases: List<String> = emptyList()) {
+    class Site(val id: String, val label: String, base: String, val aliases: List<String> = emptyList()) {
+        var base: String = base
+            private set
         val host: String get() = base.substringAfter("://")
         val knownHosts: List<String> get() = listOf(host) + aliases
+
+        fun rebase(newBase: String) {
+            val clean = newBase.trim().trim('"', '\'').trim().trimEnd('/')
+            if (clean.startsWith("http")) base = clean
+        }
     }
 
     val VEGA = Site(
         "v", "Vegamovies", "https://vegamovies.lease",
-        listOf("new1.vegamovies.lease", "vegamovies.lease")
+        listOf("vegamovies.lease", "new1.vegamovies.lease")
     )
     val ROG = Site(
-        "r", "Rogmovies", "https://rogmovies.im",
-        listOf("rogmovies.one", "rogmovies.im")
+        "r", "Rogmovies", "https://rogmovies.autos",
+        listOf("rogmovies.autos", "rogmovies.im", "rogmovies.one", "rogmovies.asia")
     )
     val ALL = listOf(VEGA, ROG)
+
+    @Volatile
+    private var domainsCheckedAt = 0L
+
+    // firebase carries the live domains when the baked ones fall behind
+    suspend fun refreshDomains() {
+        if (System.currentTimeMillis() - domainsCheckedAt < 5 * 60_000L) return
+        domainsCheckedAt = System.currentTimeMillis()
+        FirebaseDomainHelper.getDomain("vegamovies")?.let { VEGA.rebase(it) }
+        FirebaseDomainHelper.getDomain("rogmovies")?.let { ROG.rebase(it) }
+    }
 
     fun siteOf(url: String): Site? = ALL.firstOrNull { site ->
         site.knownHosts.any { url.contains(it, true) }

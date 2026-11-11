@@ -173,7 +173,12 @@ internal object AnvSession {
 
 internal object AnvApi {
 
-    const val BASE = "https://anv.to"
+    @Volatile
+    var BASE = "https://anv.to"
+
+    suspend fun refreshDomain() {
+        FirebaseDomainHelper.getDomain("anv")?.takeIf { it.contains("anv") }?.let { BASE = it.trimEnd('/') }
+    }
 
     private val regionKeywords = listOf(
         "brazil" to "(Brazil)",

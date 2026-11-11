@@ -146,6 +146,13 @@ class KdesaProvider : MainAPI() {
         "tv|10765" to "Sci-Fi & Fantasy Series"
     )
 
+    private suspend fun refreshDomain() {
+        FirebaseDomainHelper.getDomain("kdesa")?.takeIf { it.contains("7movies") }?.let {
+            mainUrl = it.trimEnd('/')
+            PARENT = mainUrl
+        }
+    }
+
     private fun DiscoverItem.toSearch(): SearchResponse? {
         val id = this.id ?: return null
         val type = when (this.mediaType) {
@@ -172,6 +179,7 @@ class KdesaProvider : MainAPI() {
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         DonationManager.checkAndShow()
+        refreshDomain()
         val (type, genre) = request.data.split("|", limit = 2)
         val genreParam = genre.takeIf { it.isNotBlank() }?.let { "&genre=$it" } ?: ""
         return try {
@@ -190,6 +198,7 @@ class KdesaProvider : MainAPI() {
 
     override suspend fun search(query: String): List<SearchResponse> {
         if (query.isBlank()) return emptyList()
+        refreshDomain()
         return try {
             val encoded = URLEncoder.encode(query, "UTF-8")
             val response = app.get(
@@ -297,6 +306,7 @@ class KdesaProvider : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse? {
+        refreshDomain()
         val parts = payloadParts(url)
         if (parts.size < 3) return null
         val type = if (parts[0] == "tv") "tv" else "movie"

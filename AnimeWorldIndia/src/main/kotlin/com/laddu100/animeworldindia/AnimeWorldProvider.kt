@@ -21,16 +21,6 @@ class AnimeWorldProvider : MainAPI() {
     override val hasDownloadSupport = true
     override val supportedTypes = setOf(TvType.Anime, TvType.AnimeMovie, TvType.Cartoon)
 
-    @Volatile
-    private var isUrlLoaded = false
-
-    @JsonIgnoreProperties(ignoreUnknown = true)
-    data class FirebaseConfig(
-        @JsonProperty("animeworldindia_url") val animeworldindia_url: String? = null,
-        @JsonProperty("animeworld_url") val animeworld_url: String? = null,
-        @JsonProperty("awi_url") val awi_url: String? = null
-    )
-
     @JsonIgnoreProperties(ignoreUnknown = true)
     data class ZephyrixVideo(
         @JsonProperty("videoSource") val videoSource: String? = null,
@@ -38,16 +28,7 @@ class AnimeWorldProvider : MainAPI() {
     )
 
     private suspend fun loadFirebaseUrl() {
-        if (isUrlLoaded) return
-        try {
-            val response = app.get("https://cloudstreampluginhelper-default-rtdb.firebaseio.com/.json", timeout = 10_000L).text
-            val config = parseJson<FirebaseConfig>(response)
-            val url = config.animeworldindia_url ?: config.animeworld_url ?: config.awi_url
-            if (!url.isNullOrBlank()) mainUrl = url.removeSuffix("/")
-            isUrlLoaded = true
-        } catch (_: Exception) {
-            isUrlLoaded = true
-        }
+        FirebaseDomainHelper.getDomain("animeworldindia")?.takeIf { it.contains("animeworld") }?.let { mainUrl = it.trimEnd('/') }
     }
 
     override val mainPage = mainPageOf(

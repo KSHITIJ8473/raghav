@@ -22,6 +22,8 @@ class EliteStreams : MainAPI() {
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         DonationManager.checkAndShow()
+        EsFeeds.refreshDomain()
+        mainUrl = EsFeeds.BASE
         if (page > 1) {
             return newHomePageResponse(request.name, emptyList<SearchResponse>(), hasNext = false)
         }
@@ -66,6 +68,8 @@ class EliteStreams : MainAPI() {
 
     override suspend fun search(query: String): List<SearchResponse> {
         if (query.isBlank()) return emptyList()
+        EsFeeds.refreshDomain()
+        mainUrl = EsFeeds.BASE
         return EsFeeds.allChannels()
             .filter { it.name.contains(query, ignoreCase = true) }
             .take(60)
@@ -73,6 +77,8 @@ class EliteStreams : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse? {
+        EsFeeds.refreshDomain()
+        mainUrl = EsFeeds.BASE
         val payload = try {
             parseJson<ChannelPayload>(url)
         } catch (_: Exception) {

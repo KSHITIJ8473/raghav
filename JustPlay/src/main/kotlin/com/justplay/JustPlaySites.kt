@@ -245,7 +245,9 @@ internal object HdHub4uSite {
         callback: (ExtractorLink) -> Unit
     ) {
         try {
-            val doc = app.get(postUrl, headers = PlayNet.headers("$domain/"), timeout = 20L).document
+            val pageRes = PlayNet.fetchWithCf(postUrl, "$domain/") ?: return
+            val doc = pageRes.document
+            pageRes.close()
             if (res.season != null) {
                 emitEpisodes(doc, domain, res, subtitleCallback, callback)
             } else {

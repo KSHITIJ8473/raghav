@@ -59,6 +59,7 @@ class VegaMovies : MainAPI() {
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         DonationManager.checkAndShow()
+        VegaSites.refreshDomains()
         val (siteId, path) = request.data.split(":", limit = 2).let {
             it[0] to it.getOrElse(1) { "" }
         }
@@ -73,6 +74,7 @@ class VegaMovies : MainAPI() {
 
     override suspend fun search(query: String): List<SearchResponse>? {
         if (query.isBlank()) return null
+        VegaSites.refreshDomains()
         val api = this
         val merged = coroutineScope {
             VegaSites.ALL.map { site ->

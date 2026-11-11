@@ -143,6 +143,8 @@ class Toonix : MainAPI() {
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         DonationManager.checkAndShow()
+        ToonixApi.refreshDomain()
+        mainUrl = ToonixApi.BASE
         val home = try {
             home()
         } catch (e: kotlinx.coroutines.CancellationException) {
@@ -273,6 +275,8 @@ class Toonix : MainAPI() {
 
     override suspend fun search(query: String): List<SearchResponse>? {
         if (query.isBlank()) return null
+        ToonixApi.refreshDomain()
+        mainUrl = ToonixApi.BASE
         siteSearch(query)?.let { return it }
 
         var cards = searchCatalog.load()
@@ -328,6 +332,8 @@ class Toonix : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse? {
+        ToonixApi.refreshDomain()
+        mainUrl = ToonixApi.BASE
         val path = url.removePrefix(ToonixApi.BASE)
         return when {
             path.startsWith("/show/") -> loadShow(url)

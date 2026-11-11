@@ -84,6 +84,8 @@ class MovyProvider : MainAPI() {
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         DonationManager.checkAndShow()
+        MovyApi.refreshDomain()
+        mainUrl = MovyApi.MAIN_URL
         val data = MovyApi.tmdbPage(request.data, page)
             ?: return newHomePageResponse(request.name, emptyList(), hasNext = false)
         val fallbackType = if (request.data.startsWith("tv/") ||
@@ -96,6 +98,8 @@ class MovyProvider : MainAPI() {
 
     override suspend fun search(query: String): List<SearchResponse> {
         if (query.isBlank()) return emptyList()
+        MovyApi.refreshDomain()
+        mainUrl = MovyApi.MAIN_URL
         val data = MovyApi.searchMulti(query, 1) ?: return emptyList()
         return data.results.orEmpty()
             .filter { it.mediaType == "movie" || it.mediaType == "tv" }
@@ -135,6 +139,8 @@ class MovyProvider : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse? {
+        MovyApi.refreshDomain()
+        mainUrl = MovyApi.MAIN_URL
         val id = url.substringAfterLast("/").toIntOrNull() ?: return null
         return if (url.contains("/tv/")) loadTv(id, url) else loadMovie(id, url)
     }

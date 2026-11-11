@@ -87,6 +87,8 @@ class LiveTgTvProvider : MainAPI() {
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         DonationManager.checkAndShow()
+        TgTvApi.refreshDomain()
+        mainUrl = TgTvApi.SITE
         val channels = TgTvApi.channels()
         val filtered = if (request.data == "all") {
             channels
@@ -106,6 +108,8 @@ class LiveTgTvProvider : MainAPI() {
     override suspend fun search(query: String): List<SearchResponse> {
         val q = query.trim().lowercase()
         if (q.isBlank()) return emptyList()
+        TgTvApi.refreshDomain()
+        mainUrl = TgTvApi.SITE
         return TgTvApi.channels()
             .filter { it.optString("name").lowercase().contains(q) }
             .take(50)
@@ -113,6 +117,8 @@ class LiveTgTvProvider : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse {
+        TgTvApi.refreshDomain()
+        mainUrl = TgTvApi.SITE
         val id = channelIdOf(url)
             ?: throw com.lagradost.cloudstream3.ErrorLoadingException("Channel not found: $url")
         val channel = TgTvApi.channelById(id)

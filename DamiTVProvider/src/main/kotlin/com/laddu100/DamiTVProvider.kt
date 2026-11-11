@@ -783,11 +783,16 @@ class DamiTVProvider : MainAPI() {
         return cat == "24/7-streams" || cat == "live-tv" || cat == "channels" || cat.contains("stream")
     }
 
+    private suspend fun refreshDomain() {
+        FirebaseDomainHelper.getDomain("damitv")?.takeIf { it.contains("damitv") }?.let { mainUrl = it.trimEnd('/') }
+    }
+
     override suspend fun getMainPage(
         page: Int,
         request: MainPageRequest
     ): HomePageResponse {
         DonationManager.checkAndShow()
+        refreshDomain()
         val lists = mutableListOf<HomePageList>()
 
         try {
@@ -835,6 +840,7 @@ class DamiTVProvider : MainAPI() {
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
+        refreshDomain()
         val results = mutableListOf<SearchResponse>()
         try {
             val text = apiGet("$mainUrl/papi/matches/all", apiHeaders)

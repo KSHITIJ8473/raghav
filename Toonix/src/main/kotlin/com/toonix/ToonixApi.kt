@@ -109,7 +109,13 @@ class ToonixMaster(
 class ToonixException(message: String) : Exception(message)
 
 object ToonixApi {
-    const val BASE = "https://toonix.bond"
+    @Volatile
+    var BASE = "https://toonix.bond"
+        private set
+
+    suspend fun refreshDomain() {
+        FirebaseDomainHelper.getDomain("toonix")?.takeIf { it.contains("toonix") }?.let { BASE = it.trimEnd('/') }
+    }
 
     private val mapper = ObjectMapper()
     private val cfKiller by lazy { CloudflareKiller() }

@@ -85,6 +85,8 @@ class Anv : MainAPI() {
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         DonationManager.checkAndShow()
+        AnvApi.refreshDomain()
+        mainUrl = AnvApi.BASE
         val home = mutableListOf<SearchResponse>()
         var hasNext = false
         when (request.data) {
@@ -115,6 +117,8 @@ class Anv : MainAPI() {
 
     override suspend fun search(query: String): List<SearchResponse>? {
         if (query.isBlank()) return null
+        AnvApi.refreshDomain()
+        mainUrl = AnvApi.BASE
         val resp = AnvApi.catalog(
             "BrowseAnime",
             mapOf("page" to 1, "perPage" to 28, "sort" to listOf("POPULARITY_DESC"), "search" to query)
@@ -124,6 +128,8 @@ class Anv : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse? {
+        AnvApi.refreshDomain()
+        mainUrl = AnvApi.BASE
         val slug = url.substringAfter("$mainUrl/anime/", "").substringBefore("?").trim('/')
         if (slug.isBlank()) return null
         val media = AnvApi.detail(slug) ?: return null

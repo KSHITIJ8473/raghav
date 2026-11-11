@@ -18,7 +18,9 @@ private const val UA =
     "Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Mobile Safari/537.36"
 
 // the embed gate trusts the parent site, every playback call has to present it
-private const val PARENT = "https://7movies.ac"
+@Volatile
+var PARENT = "https://7movies.ac"
+    internal set
 private const val EMBED = "https://embed.vidrift.net"
 private const val EMBED_REFERER = "https://embed.vidrift.net/"
 

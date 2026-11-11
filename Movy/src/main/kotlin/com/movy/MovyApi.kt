@@ -9,8 +9,15 @@ object MovyApi {
 
     private const val TAG = "Movy"
 
-    const val MAIN_URL = "https://www.movy.sx"
-    const val REFERER = "https://www.movy.sx/"
+    @Volatile
+    var MAIN_URL = "https://www.movy.sx"
+        private set
+
+    suspend fun refreshDomain() {
+        FirebaseDomainHelper.getDomain("movy")?.takeIf { it.contains("movy") }?.let { MAIN_URL = it.trimEnd('/') }
+    }
+
+    val REFERER get() = "$MAIN_URL/"
     private const val TMDB_BASE = "https://db.wecollege.net/3"
     private const val STREAM_BASE = "https://api.wecollege.net"
     private const val IMAGE_BASE = "https://image.tmdb.org/t/p"
@@ -18,7 +25,7 @@ object MovyApi {
     const val USER_AGENT =
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36"
 
-    val baseHeaders = mapOf(
+    val baseHeaders get() = mapOf(
         "User-Agent" to USER_AGENT,
         "Accept" to "*/*",
         "Referer" to REFERER,
@@ -26,7 +33,7 @@ object MovyApi {
     )
 
     // the cdn fronts check the site referer on playback requests
-    val playHeaders = mapOf(
+    val playHeaders get() = mapOf(
         "User-Agent" to USER_AGENT,
         "Referer" to REFERER,
         "Origin" to MAIN_URL,

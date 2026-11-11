@@ -115,8 +115,13 @@ class Nepu : MainAPI() {
         }.distinctBy { it.url }
     }
 
+    private suspend fun refreshDomain() {
+        FirebaseDomainHelper.getDomain("nepu")?.takeIf { it.contains("nepu") }?.let { mainUrl = it.trimEnd('/') }
+    }
+
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         DonationManager.checkAndShow()
+        refreshDomain()
         val (section, filter) = request.data.split("|", limit = 2)
         val response = try {
             nepuGet(listUrl(section, filter, page))
@@ -139,6 +144,7 @@ class Nepu : MainAPI() {
     override suspend fun search(query: String): List<SearchResponse> {
         val q = query.trim().replace(Regex("\\s+"), "-")
         if (q.isEmpty()) return emptyList()
+        refreshDomain()
         val encoded = URLEncoder.encode(q, "UTF-8")
         val response = try {
             nepuGet(
@@ -183,6 +189,7 @@ class Nepu : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse {
+        refreshDomain()
         val response = try {
             nepuGet(url)
         } catch (e: Exception) {

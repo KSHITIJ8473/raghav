@@ -31,7 +31,8 @@ class HiCine : MainAPI() {
     override var lang = "hi"
 
     companion object {
-        private const val API = "https://api.hicine.biz"
+        @Volatile
+        private var API = "https://api.hicine.biz"
         private const val USER_AGENT =
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36"
 
@@ -52,6 +53,16 @@ class HiCine : MainAPI() {
             "gofile" to "Gofile",
             "server1" to "Server 1"
         )
+    }
+
+    private suspend fun refreshDomain() {
+        FirebaseDomainHelper.getDomain("hicine")?.takeIf { it.contains("hicine") }?.let {
+            val base = it.trimEnd('/')
+            mainUrl = base
+            // the api is a subdomain of the main site
+            val host = base.substringAfter("//")
+            API = if (host.startsWith("api.")) base else "https://api.$host"
+        }
     }
 
     @JsonIgnoreProperties(ignoreUnknown = true)
@@ -141,6 +152,7 @@ class HiCine : MainAPI() {
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         DonationManager.checkAndShow()
+        refreshDomain()
         val parts = request.data.split(":", limit = 2)
         if (parts.size < 2) return newHomePageResponse(request.name, emptyList())
 
@@ -196,6 +208,7 @@ class HiCine : MainAPI() {
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
+        refreshDomain()
         val encoded = URLEncoder.encode(query, "UTF-8")
         val text = try {
             app.get("$API/rpc/search/$encoded?limit=50", timeout = 20L).text
@@ -214,6 +227,7 @@ class HiCine : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse? {
+        refreshDomain()
         val parts = url.removePrefix("$mainUrl/").split("/")
         val table = parts.getOrNull(0) ?: return null
         val recordId = parts.getOrNull(1)?.toIntOrNull() ?: return null

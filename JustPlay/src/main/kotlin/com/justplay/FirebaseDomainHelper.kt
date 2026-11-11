@@ -23,7 +23,7 @@ object FirebaseDomainHelper {
             val response = app.get(URL, timeout = 5L).text
             val parsed = parseJson<Map<String, String>>(response)
             domains = parsed.filterValues { it.isNotBlank() }
-                .mapValues { it.value.trim().trimEnd('/') }
+                .mapValues { it.value.trim().trim('"', '\'').trim().trimEnd('/') }
             lastLoadTime = now
             everLoadedSuccessfully = true
         } catch (_: Exception) {

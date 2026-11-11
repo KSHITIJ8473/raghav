@@ -22,7 +22,7 @@ import java.util.concurrent.ConcurrentHashMap
 // same theme and api, one object covers both sites
 internal object VegaMoviesSite {
 
-    private val baseDomains = listOf("https://vegamovies.lease", "https://rogmovies.im")
+    private val baseDomains = listOf("https://vegamovies.lease", "https://rogmovies.autos", "https://rogmovies.im")
 
     @Volatile
     private var remoteDomains: List<String>? = null

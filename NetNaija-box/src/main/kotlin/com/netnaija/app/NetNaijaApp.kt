@@ -448,6 +448,7 @@ class NetNaijaApp(private val sharedPref: SharedPreferences?) : MainAPI() {
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         DonationManager.checkAndShow()
+        FirebaseDomainHelper.getDomain("netnaijabox")?.takeIf { it.contains("netnaija") }?.let { mainUrl = it }
         val restrictKid = if (!MainAPI.Companion.settingsForProvider.enableAdult) 1 else 0
 
         // live sports come from a separate h5 sport api and render as one
@@ -605,6 +606,7 @@ class NetNaijaApp(private val sharedPref: SharedPreferences?) : MainAPI() {
     }
 
     override suspend fun search(query: String, page: Int): SearchResponseList {
+        FirebaseDomainHelper.getDomain("netnaijabox")?.takeIf { it.contains("netnaija") }?.let { mainUrl = it }
         val url = "$mainUrl/wefeed-mobile-bff/subject-api/search/v2"
         val restrictKid = if (!MainAPI.Companion.settingsForProvider.enableAdult) 1 else 0
         val bodyJson = "{\"page\": $page, \"perPage\": 20, \"keyword\": \"$query\", \"restrictKid\": $restrictKid}"
@@ -753,6 +755,7 @@ class NetNaijaApp(private val sharedPref: SharedPreferences?) : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse {
+        FirebaseDomainHelper.getDomain("netnaijabox")?.takeIf { it.contains("netnaija") }?.let { mainUrl = it }
         val normalizedUrl = when {
             url.contains("/sport_match:") -> "sport_match:" + url.substringAfter("/sport_match:")
             url.contains("/sport_video:") -> "sport_video:" + url.substringAfter("/sport_video:")

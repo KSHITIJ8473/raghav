@@ -9,10 +9,13 @@ import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.newExtractorLink
 import com.lagradost.nicehttp.NiceResponse
+import com.lagradost.cloudstream3.network.WebViewResolver
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
@@ -344,7 +347,7 @@ internal object MoviesLinkBdSite {
                     row.contains("hubcloud") -> "HubCloud"
                     row.contains("xcloud") -> "XCloud"
                     row.contains("instant") -> "Instant Download"
-                    else -> return@mapNotNull null
+                    else -> "Other"
                 }
                 GoRow(server, path)
             }
@@ -365,7 +368,12 @@ internal object MoviesLinkBdSite {
         }
     }
 
-    // xcloud sits behind cloudflare and follows the hubcloud layout
+    // xcloud sits behind cloudflare and follows the hubcloud layout, but the
+    // watch player also builds its stream in javascript, so when the markup
+    // carries no buttons a webview sniffs the playlist out of the player
+    private val xcloudGate = Mutex()
+    private val mediaPattern = Regex("""(?i)\.(m3u8|mp4)(?:\?|$)""")
+
     private suspend fun emitXCloud(
         url: String,
         info: String,
@@ -375,29 +383,63 @@ internal object MoviesLinkBdSite {
         callback: (ExtractorLink) -> Unit
     ) {
         try {
-            val res = PlayNet.fetchWithCf(url, referer) ?: return
-            if (!res.isSuccessful) {
+            val res = PlayNet.fetchWithCf(url, referer)
+            if (res != null && res.isSuccessful) {
+                val doc = res.document
                 res.close()
-                return
-            }
-            val doc = res.document
-            res.close()
-            PlayHubCloud.emitHubServers(
-                doc, PlayNet.getBaseUrl(url), url, subtitleCallback
-            ) { link ->
-                callback(
-                    ExtractorLink(
-                        "[${PlayLabels.siteName("movielinkbd")}]",
-                        PlayLabels.buildLabel("movielinkbd", link.name, info),
-                        link.url,
-                        link.referer,
-                        quality ?: link.quality,
-                        link.headers,
-                        link.extractorData,
-                        link.type
+                val emitted = PlayHubCloud.emitHubServers(
+                    doc, PlayNet.getBaseUrl(url), url, subtitleCallback
+                ) { link ->
+                    callback(
+                        ExtractorLink(
+                            "[${PlayLabels.siteName("movielinkbd")}]",
+                            PlayLabels.buildLabel("movielinkbd", link.name, info),
+                            link.url,
+                            link.referer,
+                            quality ?: link.quality,
+                            link.headers,
+                            link.extractorData,
+                            link.type
+                        )
                     )
-                )
+                }
+                if (emitted) return
+            } else {
+                res?.close()
             }
+
+            val resolved = xcloudGate.withLock {
+                val resolver = WebViewResolver(
+                    interceptUrl = mediaPattern,
+                    additionalUrls = listOf(mediaPattern),
+                    script = """document.querySelector('button,[role="button"],.jw-icon-display,.vjs-play-button,.vds-play-button')?.click();""",
+                    useOkhttp = false,
+                    timeout = 30_000L
+                )
+                try {
+                    app.get(url, referer = referer, interceptor = resolver).url
+                } catch (_: Exception) {
+                    null
+                }
+            } ?: return
+            // the interceptor falls back to the page url when nothing is sniffed
+            if (!mediaPattern.containsMatchIn(resolved)) return
+            val type = if (resolved.contains(".m3u8", true)) {
+                ExtractorLinkType.M3U8
+            } else {
+                ExtractorLinkType.VIDEO
+            }
+            callback(
+                newExtractorLink(
+                    "[${PlayLabels.siteName("movielinkbd")}]",
+                    PlayLabels.buildLabel("movielinkbd", "XCloud", info),
+                    resolved,
+                    type
+                ) {
+                    this.quality = quality
+                    this.headers = mapOf("Referer" to url)
+                }
+            )
         } catch (_: Exception) {}
     }
 

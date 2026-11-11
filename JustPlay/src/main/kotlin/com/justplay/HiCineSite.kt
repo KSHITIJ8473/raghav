@@ -18,8 +18,21 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 
 internal object HiCineSite {
-    private const val API = "https://api.hicine.biz"
+    private const val DEFAULT_API = "https://api.hicine.biz"
     private const val TOKEN_TTL = 3 * 60 * 1000L
+
+    @Volatile
+    private var apiOverride: String? = null
+
+    private suspend fun api(): String {
+        apiOverride?.let { return it }
+        val remote = FirebaseDomainHelper.getDomain("justplay_hicine")?.trimEnd('/')
+        if (remote != null) {
+            apiOverride = remote
+            return remote
+        }
+        return DEFAULT_API
+    }
 
     private val URL_RE = Regex("""https?://[^\s,]+""")
     private val QUALITY_RE = Regex("""(?i)\b(2160p|1440p|1080p|720p|480p|360p|4K)\b""")
@@ -113,7 +126,7 @@ internal object HiCineSite {
         val text = PlayNet.retry {
             try {
                 app.get(
-                    "$API/rpc/search/${URLEncoder.encode(query, "UTF-8")}?limit=50",
+                    "${api()}/rpc/search/${URLEncoder.encode(query, "UTF-8")}?limit=50",
                     headers = PlayNet.headers(),
                     timeout = 15L
                 ).text
@@ -135,7 +148,7 @@ internal object HiCineSite {
     private suspend fun fetchDetail(table: String, recordId: Int): Item? {
         val text = PlayNet.retry {
             try {
-                app.get("$API/api/$table/$recordId", headers = PlayNet.headers(), timeout = 15L).text
+                app.get("${api()}/api/$table/$recordId", headers = PlayNet.headers(), timeout = 15L).text
             } catch (_: Exception) {
                 null
             }

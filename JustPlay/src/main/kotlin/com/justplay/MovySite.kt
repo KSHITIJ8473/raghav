@@ -169,24 +169,34 @@ internal object MovyCrypto {
 
 internal object MovySite {
 
-    private const val MAIN_URL = "https://www.movy.sx"
+    private const val DEFAULT_MAIN = "https://www.movy.sx"
     private const val STREAM_BASE = "https://api.wecollege.net"
     private const val UA =
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36"
 
-    private val baseHeaders = mapOf(
+    @Volatile
+    private var mainUrl: String = DEFAULT_MAIN
+
+    private fun baseHeaders(): Map<String, String> = mapOf(
         "User-Agent" to UA,
         "Accept" to "*/*",
-        "Referer" to "$MAIN_URL/",
-        "Origin" to MAIN_URL
+        "Referer" to "$mainUrl/",
+        "Origin" to mainUrl
     )
 
     // the cdn fronts check the site origin on playback requests
-    private val playHeaders = mapOf(
+    private fun playHeaders(): Map<String, String> = mapOf(
         "User-Agent" to UA,
-        "Referer" to "$MAIN_URL/",
-        "Origin" to MAIN_URL
+        "Referer" to "$mainUrl/",
+        "Origin" to mainUrl
     )
+
+    private suspend fun syncDomain() {
+        if (mainUrl != DEFAULT_MAIN) return
+        val remote = FirebaseDomainHelper.getDomain("justplay_movy")
+            ?: FirebaseDomainHelper.getDomain("movy")
+        remote?.let { mainUrl = it.trimEnd('/') }
+    }
 
     private class City(val slug: String, val display: String, val langNote: String? = null)
 
@@ -242,7 +252,7 @@ internal object MovySite {
                 val res = try {
                     app.get(
                         "$STREAM_BASE/seed?mediaId=$mediaId",
-                        headers = baseHeaders,
+                        headers = baseHeaders(),
                         timeout = 15L
                     )
                 } catch (_: Exception) {
@@ -322,7 +332,7 @@ internal object MovySite {
             val code: Int
             val body: String?
             try {
-                val res = app.get(url, headers = baseHeaders, timeout = 30L)
+                val res = app.get(url, headers = baseHeaders(), timeout = 30L)
                 code = res.code
                 body = if (code == 200) res.text else null
             } catch (_: Exception) {
@@ -403,7 +413,7 @@ internal object MovySite {
             }
             try {
                 subtitleCallback.invoke(newSubtitleFile(label, url) {
-                    headers = playHeaders
+                    headers = playHeaders()
                 })
             } catch (_: Exception) {}
         }
@@ -432,8 +442,8 @@ internal object MovySite {
                 callback.invoke(
                     newExtractorLink("[Movy]", name, url, type) {
                         qualityValue(qualityLabel)?.let { quality = it }
-                        referer = "$MAIN_URL/"
-                        headers = playHeaders
+                        referer = "$mainUrl/"
+                        headers = playHeaders()
                     }
                 )
             } catch (_: Exception) {}
@@ -445,6 +455,7 @@ internal object MovySite {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
+        syncDomain()
         val tmdbId = res.id?.toString() ?: return
         val title = res.title?.takeIf { it.isNotBlank() } ?: return
         val mediaType = if (res.isMovie) "movie" else "tv"

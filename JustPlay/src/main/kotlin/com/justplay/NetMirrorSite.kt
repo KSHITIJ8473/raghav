@@ -27,7 +27,18 @@ import org.json.JSONObject
 internal object NetMirrorSite {
 
     private const val TAG = "NM"
-    private const val BASE = "https://net52.cc"
+    private const val DEFAULT_BASE = "https://net52.cc"
+
+    @Volatile
+    private var baseDomain: String = DEFAULT_BASE
+
+    private suspend fun base(): String {
+        if (baseDomain != DEFAULT_BASE) return baseDomain
+        val remote = FirebaseDomainHelper.getDomain("justplay_netmirror")
+            ?: FirebaseDomainHelper.getDomain("netmirror")
+        remote?.let { baseDomain = it.trimEnd('/') }
+        return baseDomain
+    }
 
     private const val SOLVE_UA =
         "Mozilla/5.0 (Linux; Android 12; RMX2117 Build/SP1A.210812.016; wv) " +
@@ -103,6 +114,7 @@ internal object NetMirrorSite {
         mapOf("t_hash_t" to cookie, "ott" to ott, "hd" to "on")
 
     private fun playlistHeaders(cookie: String, ott: String): Map<String, String> {
+        val b = baseDomain
         val cookieLine = apiCookies(cookie, ott)
             .entries.joinToString("; ") { "${it.key}=${it.value}" }
         return mapOf(
@@ -110,7 +122,7 @@ internal object NetMirrorSite {
             "Accept-Language" to "en-IN,en-US;q=0.9,en;q=0.8",
             "Connection" to "keep-alive",
             "Cookie" to cookieLine,
-            "Referer" to "$BASE/mobile/home?app=1",
+            "Referer" to "$b/mobile/home?app=1",
             "sec-ch-ua" to "\"Android WebView\";v=\"149\", \"Chromium\";v=\"149\", \"Not)A;Brand\";v=\"24\"",
             "sec-ch-ua-mobile" to "?0",
             "sec-ch-ua-platform" to "\"Android\"",
@@ -172,9 +184,10 @@ internal object NetMirrorSite {
     }
 
     private suspend fun solveCookie(): String? {
+        val b = base()
         val headers = mapOf("User-Agent" to SOLVE_UA, "X-Requested-With" to XRW_APP)
         var addhash = try {
-            addhashOf(app.get("$BASE/mobile/home?app=1", headers = headers, timeout = 20L))
+            addhashOf(app.get("$b/mobile/home?app=1", headers = headers, timeout = 20L))
         } catch (_: Exception) {
             ""
         }
@@ -183,9 +196,9 @@ internal object NetMirrorSite {
             addhash = try {
                 addhashOf(
                     app.get(
-                        "$BASE/mobile/home?app=1",
+                        "$b/mobile/home?app=1",
                         headers = headers,
-                        interceptor = PlayNet.killerFor("$BASE/mobile/home?app=1"),
+                        interceptor = PlayNet.killerFor("$b/mobile/home?app=1"),
                         timeout = 60L
                     )
                 )
@@ -209,7 +222,7 @@ internal object NetMirrorSite {
             delay(10_000L)
             val res = try {
                 app.post(
-                    "$BASE/mobile/verify2.php",
+                    "$b/mobile/verify2.php",
                     headers = mapOf(
                         "User-Agent" to SOLVE_UA,
                         "X-Requested-With" to "XMLHttpRequest"
@@ -233,12 +246,13 @@ internal object NetMirrorSite {
     }
 
     private suspend fun search(cookie: String, ott: Ott, query: String): List<MirrorHit> {
+        val b = base()
         val text = PlayNet.retry {
             try {
                 app.get(
-                    "$BASE${ott.path}/search.php?s=$query&t=${unixTime()}",
+                    "$b${ott.path}/search.php?s=$query&t=${unixTime()}",
                     headers = mapOf("User-Agent" to DESKTOP_UA),
-                    referer = "$BASE/home",
+                    referer = "$b/home",
                     cookies = apiCookies(cookie, ott.code),
                     timeout = 20L
                 ).text
@@ -290,12 +304,13 @@ internal object NetMirrorSite {
     }
 
     private suspend fun fetchPost(cookie: String, ott: Ott, id: String): MirrorPost? {
+        val b = base()
         val text = PlayNet.retry {
             try {
                 app.get(
-                    "$BASE${ott.path}/post.php?id=$id&t=${unixTime()}",
+                    "$b${ott.path}/post.php?id=$id&t=${unixTime()}",
                     headers = pageHeaders,
-                    referer = "$BASE/home",
+                    referer = "$b/home",
                     cookies = apiCookies(cookie, ott.code),
                     timeout = 20L
                 ).text
@@ -330,6 +345,7 @@ internal object NetMirrorSite {
         seasonId: String,
         startPage: Int
     ): List<MirrorEp> {
+        val b = base()
         val out = mutableListOf<MirrorEp>()
         var page = startPage
         var more = true
@@ -337,10 +353,10 @@ internal object NetMirrorSite {
             val next = try {
                 JSONObject(
                     app.get(
-                        "$BASE${ott.path}/episodes.php?s=$seasonId&series=$idJson" +
+                        "$b${ott.path}/episodes.php?s=$seasonId&series=$idJson" +
                             "&t=${unixTime()}&page=$page",
                         headers = pageHeaders,
-                        referer = "$BASE/home",
+                        referer = "$b/home",
                         cookies = apiCookies(cookie, ott.code),
                         timeout = 20L
                     ).text
@@ -387,12 +403,13 @@ internal object NetMirrorSite {
         headers: Map<String, String>,
         cookie: String,
     ): JSONArray? {
+        val b = base()
         val text = PlayNet.retry {
             try {
                 app.get(
-                    "$BASE${ott.path}/playlist.php?id=$id&t=$title&tm=${unixTime()}",
+                    "$b${ott.path}/playlist.php?id=$id&t=$title&tm=${unixTime()}",
                     headers = headers,
-                    referer = "$BASE/mobile/home?app=1",
+                    referer = "$b/mobile/home?app=1",
                     cookies = apiCookies(cookie, ott.code),
                     timeout = 20L
                 ).text
@@ -415,6 +432,7 @@ internal object NetMirrorSite {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
+        val b = base()
         val candidates = mutableListOf<Pair<String, String>>()
         for (i in 0 until arr.length()) {
             val item = arr.optJSONObject(i) ?: continue
@@ -427,7 +445,7 @@ internal object NetMirrorSite {
                     if (!file.startsWith("http")) continue
                     subtitleCallback(
                         newSubtitleFile(track.optString("label"), httpsify(file)) {
-                            this.headers = mapOf("Referer" to "$BASE/")
+                            this.headers = mapOf("Referer" to "$b/")
                         }
                     )
                 }
@@ -461,7 +479,7 @@ internal object NetMirrorSite {
                     url,
                     ExtractorLinkType.M3U8
                 ) {
-                    this.referer = "$BASE/mobile/home?app=1"
+                    this.referer = "$b/mobile/home?app=1"
                     this.quality = streamQuality(url)
                     this.headers = headers
                 }
@@ -472,16 +490,17 @@ internal object NetMirrorSite {
     }
 
     private suspend fun playableFile(file: String, headers: Map<String, String>): String? {
+        val b = base()
         // hp variant blocks later requests, prefer plain
         val strippedFile = file
             .replace("&hp=yes", "")
             .replace("hp=yes&", "")
             .replace("?hp=yes", "")
         if (strippedFile != file) {
-            val bare = BASE + strippedFile
+            val bare = b + strippedFile
             if (PlayNet.m3u8Alive(bare, headers)) return bare
         }
-        val url = BASE + file
+        val url = b + file
         if (PlayNet.m3u8Alive(url, headers)) return url
         return null
     }
@@ -579,6 +598,7 @@ internal object NetMirrorSite {
     // the solve takes ~1 min cold, warm it early
     suspend fun prefetch() {
         try {
+            base()
             solvedCookie()
         } catch (_: Exception) {}
     }

@@ -152,7 +152,35 @@ internal object DrivePages {
 }
 
 internal object HdHub4uSite {
-    private const val DEFAULT_DOMAIN = "https://new11.hdhub4u.cl"
+    private const val DEFAULT_DOMAIN = "https://new13.hdhub4u.cl"
+    private const val DOMAIN_REGISTRY =
+        "https://raw.githubusercontent.com/phisher98/TVVVV/refs/heads/main/domains.json"
+
+    @Volatile
+    private var registryDomain: String? = null
+
+    @Volatile
+    private var registryCheckedAt = 0L
+
+    private suspend fun registryDomain(): String? {
+        val now = System.currentTimeMillis()
+        if (registryDomain == null && now - registryCheckedAt > 10 * 60 * 1000L) {
+            registryCheckedAt = now
+            registryDomain = try {
+                val text = app.get(DOMAIN_REGISTRY, timeout = 10L).text
+                JSONObject(text).optString("HDHUB4u").takeIf { it.startsWith("http") }
+            } catch (_: Exception) {
+                null
+            }
+        }
+        return registryDomain
+    }
+
+    private suspend fun domain(): String =
+        FirebaseDomainHelper.getDomain("justplay_hdhub4u")
+            ?: FirebaseDomainHelper.getDomain("hdhub4u")
+            ?: registryDomain()
+            ?: DEFAULT_DOMAIN
 
     private data class HubPost(val title: String, val url: String, val imdbId: String)
 
@@ -219,25 +247,7 @@ internal object HdHub4uSite {
         try {
             val doc = app.get(postUrl, headers = PlayNet.headers("$domain/"), timeout = 20L).document
             if (res.season != null) {
-                val epRegex = Regex("(?i)episode\\s*(\\d+)")
-                for (h3 in doc.select("h3")) {
-                    val links = h3.select("a[href]")
-                    val epLink = links.firstOrNull { it.text().contains("episode", true) } ?: continue
-                    val epNum = epRegex.find(epLink.text())?.groupValues?.get(1)?.toIntOrNull() ?: continue
-                    if (res.episode != null && epNum != res.episode) continue
-
-                    val watch = links.firstOrNull { it.text().trim().equals("watch", true) }
-                    if (watch != null) {
-                        val watchHref = watch.absUrl("href").ifBlank { watch.attr("href") }
-                        if (watchHref.startsWith("http")) {
-                            PlayNet.emitOwnLink("hdhub4u", watchHref, "Episode $epNum Watch", null, domain, subtitleCallback, callback)
-                        }
-                    }
-
-                    val href = epLink.absUrl("href").ifBlank { epLink.attr("href") }
-                    if (!href.startsWith("http")) continue
-                    emitResolved(href, "Episode $epNum", domain, subtitleCallback, callback)
-                }
+                emitEpisodes(doc, domain, res, subtitleCallback, callback)
             } else {
                 for (el in doc.select("h3 a:matches((?i)480|720|1080|2160|4K), h4 a:matches((?i)480|720|1080|2160|4K)")) {
                     val href = el.absUrl("href").ifBlank { el.attr("href") }
@@ -248,15 +258,124 @@ internal object HdHub4uSite {
         } catch (_: Exception) {}
     }
 
+    // the site spells the episode marker with random casing
+    private suspend fun emitEpisodes(
+        doc: Document,
+        domain: String,
+        res: PlayLinkData,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        val marker = Regex("(?i)episodes?\\s*[:\\-]?\\s*(\\d+)")
+        val heads = doc.select("h3, h4").filter { el ->
+            el.selectFirst("a[href]") == null && marker.containsMatchIn(el.text())
+        }
+        if (heads.isEmpty()) return
+        val wanted = res.episode ?: return
+        val rows = mutableListOf<Element>()
+        for (head in heads) {
+            val num = marker.find(head.text())?.groupValues?.get(1)?.toIntOrNull() ?: continue
+            if (num != wanted) continue
+            var sib = head.nextElementSibling()
+            while (sib != null && sib.tagName() in listOf("h3", "h4")) {
+                if (marker.containsMatchIn(sib.text()) && sib.selectFirst("a[href]") == null) break
+                rows.add(sib)
+                sib = sib.nextElementSibling()
+            }
+            if (rows.isNotEmpty()) break
+        }
+        val semaphore = Semaphore(4)
+        coroutineScope {
+            rows.forEach { row ->
+                val quality = PlayNet.getIndexQuality(row.text())
+                for (a in row.select("a[href]")) {
+                    val href = a.absUrl("href").ifBlank { a.attr("href") }
+                    if (!href.startsWith("http")) continue
+                    val label = a.text().trim().lowercase()
+                    when {
+                        label.contains("watch") -> {
+                            async(Dispatchers.IO) {
+                                semaphore.withPermit {
+                                    PlayNet.emitOwnLink(
+                                        "hdhub4u", href, "Episode $wanted Watch", null,
+                                        domain, subtitleCallback, callback
+                                    )
+                                }
+                            }
+                        }
+                        // search links only carry a query, the json api behind them has the files
+                        href.contains("search-recover") -> {
+                            async(Dispatchers.IO) {
+                                semaphore.withPermit {
+                                    searchRecover(href, quality, wanted, subtitleCallback, callback)
+                                }
+                            }
+                        }
+                        else -> {
+                            async(Dispatchers.IO) {
+                                semaphore.withPermit {
+                                    emitResolved(href, "Episode $wanted", domain, subtitleCallback, callback)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private suspend fun searchRecover(
+        url: String,
+        quality: Int,
+        episode: Int,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        try {
+            val base = PlayNet.getBaseUrl(url)
+            val q = Uri.parse(url).getQueryParameter("q") ?: return
+            val fromAc = Uri.parse(url).getQueryParameter("from_ac")
+            val api = "$base/drive/search-recover.php?api=search" +
+                "&q=${Uri.encode(q)}&page=1" +
+                (fromAc?.let { "&from_ac=${Uri.encode(it)}" } ?: "")
+            val text = PlayNet.retry {
+                try {
+                    val body = app.get(
+                        api,
+                        headers = PlayNet.headers("$base/").toMutableMap().apply {
+                            put("Accept", "application/json")
+                        },
+                        timeout = 15L
+                    ).text
+                    if (JSONObject(body).optJSONArray("hits") != null) body else null
+                } catch (_: Exception) {
+                    null
+                }
+            } ?: return
+            val hits = JSONObject(text).optJSONArray("hits") ?: return
+            val packText = Regex("(?i)\\.(zip|rar|7z)$|\\b(batch|pack|complete)\\b")
+            val driveLinks = (0 until hits.length()).mapNotNull { i ->
+                val hit = hits.optJSONObject(i) ?: return@mapNotNull null
+                val name = hit.optString("file_name")
+                val link = hit.optString("url")
+                if (link.isBlank() || packText.containsMatchIn(name)) null else link
+            }.distinct().take(3)
+            driveLinks.forEach { link ->
+                PlayNet.emitOwnLink(
+                    "hdhub4u", link, "Episode $episode", quality,
+                    url, subtitleCallback, callback
+                )
+            }
+        } catch (_: Exception) {}
+    }
+
     suspend fun invoke(
         res: PlayLinkData,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
         try {
-            val domain = FirebaseDomainHelper.getDomain("justplay_hdhub4u")
-                ?: FirebaseDomainHelper.getDomain("hdhub4u")
-                ?: DEFAULT_DOMAIN
+            val domain = domain()
             if (res.title.isNullOrBlank()) return
 
             // year narrows the flood before matching

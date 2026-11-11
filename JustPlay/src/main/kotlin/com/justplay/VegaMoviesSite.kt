@@ -22,7 +22,22 @@ import java.util.concurrent.ConcurrentHashMap
 // same theme and api, one object covers both sites
 internal object VegaMoviesSite {
 
-    private val domains = listOf("https://vegamovies.lease", "https://rogmovies.im")
+    private val baseDomains = listOf("https://vegamovies.lease", "https://rogmovies.im")
+
+    @Volatile
+    private var remoteDomains: List<String>? = null
+
+    private suspend fun domains(): List<String> {
+        remoteDomains?.let { return it }
+        val overrides = mutableListOf<String>()
+        FirebaseDomainHelper.getDomain("justplay_vegamovies")?.let { overrides.add(it) }
+        FirebaseDomainHelper.getDomain("vegamovies")?.let { overrides.add(it) }
+        FirebaseDomainHelper.getDomain("justplay_rogmovies")?.let { overrides.add(it) }
+        FirebaseDomainHelper.getDomain("rogmovies")?.let { overrides.add(it) }
+        val merged = (overrides + baseDomains).distinct()
+        if (overrides.isNotEmpty()) remoteDomains = merged
+        return merged
+    }
 
     private val deadHosts = Regex("""(?i)megaup|viking|vik1ng|telegram|t\.me""")
 
@@ -661,8 +676,9 @@ internal object VegaMoviesSite {
             if (res.title.isNullOrBlank()) return
 
             // both catalogs are searched side by side, every round runs both domains
+            val candidates = domains()
             suspend fun searchRound(q: String): List<VegaDoc> = coroutineScope {
-                domains.map { domain ->
+                candidates.map { domain ->
                     async(Dispatchers.IO) { searchPosts(domain, q) }
                 }.flatMap { it.await() }
             }
@@ -679,8 +695,8 @@ internal object VegaMoviesSite {
             val permalink = post0.permalink?.takeIf { it.isNotBlank() } ?: return
             // permalinks come back relative
             val domain = post0.domain.ifBlank {
-                domains.firstOrNull { permalink.contains(it.removePrefix("https://"), true) }
-                    ?: domains.first()
+                candidates.firstOrNull { permalink.contains(it.removePrefix("https://"), true) }
+                    ?: candidates.first()
             }
             val postUrl = PlayNet.absolute(permalink, domain)
             val html = try {

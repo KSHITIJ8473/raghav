@@ -14,9 +14,9 @@ import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 
 internal object MoviesDriveSite {
-    private const val DEFAULT_DOMAIN = "https://new1.moviesdrive.beer"
+    private const val DEFAULT_DOMAIN = "https://new3.moviesdrive.cyou"
     private const val DOMAIN_REGISTRY =
-        "https://raw.githubusercontent.com/SaurabhKaperwan/Utils/refs/heads/main/urls.json"
+        "https://raw.githubusercontent.com/phisher98/TVVVV/refs/heads/main/domains.json"
 
     private val driveLink = Regex("hubcloud|gdflix|gdlink", RegexOption.IGNORE_CASE)
     private val packText = Regex("""(?i)\b(zip|rar|7z|batch)\b""")

@@ -20,7 +20,7 @@ import org.jsoup.nodes.Element
 internal object MoviesLinkBdSite {
 
     private const val HUB_URL = "https://movielinkbd.com"
-    private const val DEFAULT_DOMAIN = "https://qhetvv.movielinkbd.at"
+    private const val DEFAULT_DOMAIN = "https://drjuea.movielinkbd.at"
 
     @Volatile
     private var workingDomain: String? = null
@@ -33,7 +33,7 @@ internal object MoviesLinkBdSite {
 
     // the hub only lists mirrors that link straight into content paths
     private val mirrorRegex = Regex(
-        "https?://([a-z0-9-]+\\.movielinkbd\\.(?:at|li|tv|app|net))(?=/[a-z])",
+        "https?://([a-z0-9-]+\\.movielinkbd\\.(?:at|li|tv|app|net))(?=/)",
         RegexOption.IGNORE_CASE
     )
 
@@ -342,6 +342,7 @@ internal object MoviesLinkBdSite {
                 val row = a.text().lowercase()
                 val server = when {
                     row.contains("hubcloud") -> "HubCloud"
+                    row.contains("xcloud") -> "XCloud"
                     row.contains("instant") -> "Instant Download"
                     else -> return@mapNotNull null
                 }
@@ -353,15 +354,51 @@ internal object MoviesLinkBdSite {
         val quality = PlayNet.getIndexQuality(file.info)
         rows.forEach { row ->
             val target = goTarget(domain, row, session, fileUrl, key) ?: return@forEach
-            if (row.server == "Instant Download") {
-                emitInstant(target, file.info, quality, callback)
-            } else {
-                PlayNet.emitOwnLink(
+            when (row.server) {
+                "Instant Download" -> emitInstant(target, file.info, quality, callback)
+                "XCloud" -> emitXCloud(target, file.info, quality, fileUrl, subtitleCallback, callback)
+                else -> PlayNet.emitOwnLink(
                     "movielinkbd", target, file.info, quality, fileUrl,
                     subtitleCallback, callback
                 )
             }
         }
+    }
+
+    // xcloud sits behind cloudflare and follows the hubcloud layout
+    private suspend fun emitXCloud(
+        url: String,
+        info: String,
+        quality: Int?,
+        referer: String,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        try {
+            val res = PlayNet.fetchWithCf(url, referer) ?: return
+            if (!res.isSuccessful) {
+                res.close()
+                return
+            }
+            val doc = res.document
+            res.close()
+            PlayHubCloud.emitHubServers(
+                doc, PlayNet.getBaseUrl(url), url, subtitleCallback
+            ) { link ->
+                callback(
+                    ExtractorLink(
+                        "[${PlayLabels.siteName("movielinkbd")}]",
+                        PlayLabels.buildLabel("movielinkbd", link.name, info),
+                        link.url,
+                        link.referer,
+                        quality ?: link.quality,
+                        link.headers,
+                        link.extractorData,
+                        link.type
+                    )
+                )
+            }
+        } catch (_: Exception) {}
     }
 
     suspend fun invoke(

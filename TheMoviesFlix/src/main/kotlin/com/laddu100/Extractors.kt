@@ -28,7 +28,7 @@ class FastDlExtractor : ExtractorApi() {
 
 class VCloudExtractor : ExtractorApi() {
     override val name = "V-Cloud"
-    override val mainUrl = "https://vcloud.fit"
+    override val mainUrl = "https://vcloud.beer"
     override val requiresReferer = false
 
     override suspend fun getUrl(
@@ -48,7 +48,7 @@ class VCloudExtractor : ExtractorApi() {
 
 class VegaDriveExtractor : ExtractorApi() {
     override val name = "V-Drive"
-    override val mainUrl = "https://one.vegadrive.app"
+    override val mainUrl = "https://one.vegadrive.me"
     override val requiresReferer = false
 
     override suspend fun getUrl(

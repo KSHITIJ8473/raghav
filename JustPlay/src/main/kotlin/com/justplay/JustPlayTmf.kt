@@ -13,6 +13,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import org.json.JSONObject
+import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import java.net.URLDecoder
 import java.util.concurrent.ConcurrentHashMap
@@ -20,10 +21,9 @@ import java.util.concurrent.ConcurrentHashMap
 internal object PlayTmfNet {
 
     private val FALLBACK_DOMAINS = listOf(
+        "https://one.1moviesflix.lol",
         "https://themoviesflixhq.com",
-        "https://moviesflixhq.com",
-        "https://themoviesflix.actor",
-        "https://moviesflixi.com"
+        "https://moviesflixhq.com"
     )
 
     private val domainMutex = Mutex()
@@ -59,13 +59,9 @@ internal object PlayTmfNet {
     }
 
     suspend fun fetchPage(url: String, referer: String? = null): Document? {
-        val res = PlayNet.retry {
-            try {
-                app.get(url, headers = PlayNet.browserHeaders(referer), timeout = 25L)
-            } catch (_: Exception) {
-                null
-            }
-        } ?: return null
+        // the site sits behind a cloudflare wall that opens for some networks
+        // only, the solver is the reliable way in
+        val res = PlayNet.fetchWithCf(url, referer) ?: return null
         if (!res.isSuccessful) {
             res.close()
             return null
@@ -95,11 +91,19 @@ internal object PlayTmfNet {
         Regex("""(\d{3,4})[pP]\b""").find(text)?.groupValues?.get(1)?.toIntOrNull()
             ?: if (text.contains("2160", true) || text.contains("4K", true) || text.contains("UHD", true)) 2160 else null
 
+    // a bare year from the page title is noise next to the language and codec
+    // tags, everything else in brackets is worth keeping
     fun infoOf(title: String): String =
         Regex("""[\[{(]([^\]})]+)[\]})]""").findAll(title)
             .map { it.groupValues[1].trim() }
-            .filter { it.isNotBlank() && !it.equals("links", true) }
+            .filter { it.isNotBlank() && !it.equals("links", true) && !it.matches(Regex("""\d{4}""")) }
             .joinToString(" · ")
+
+    fun hostOf(url: String): String = try {
+        java.net.URI(url).host?.lowercase() ?: ""
+    } catch (_: Exception) {
+        ""
+    }
 
     private val DRIVE_SELF = listOf(
         "nexdrive", "mobilejsr", "vglist", "w.org", "wordpress", "gmpg",
@@ -109,11 +113,35 @@ internal object PlayTmfNet {
 
     private fun isDriveJunk(href: String): Boolean = DRIVE_SELF.any { href.contains(it, true) }
 
+    // the drive page keeps its buttons behind a countdown, the button markup
+    // only exists as a base64 copy inside the unlock script
+    private fun encodedContentOf(doc: Document): String? {
+        for (script in doc.select("script")) {
+            val data = script.data()
+            if (!data.contains("encoded")) continue
+            val blob = Regex("""const\s+encoded\s*=\s*["]([A-Za-z0-9+/=]+)["]""")
+                .find(data)?.groupValues?.get(1) ?: continue
+            val decoded = try {
+                base64Decode(blob)
+            } catch (_: Exception) {
+                null
+            }
+            if (decoded != null && decoded.contains("<")) return decoded
+        }
+        return null
+    }
+
     private fun parseDrivePage(doc: Document): DrivePage {
         val title = doc.selectFirst("h1")?.text()?.trim()
             ?: doc.title().substringBefore(" – ").substringBefore(" - ").trim()
-        val root = doc.selectFirst("article") ?: doc.selectFirst("div.entry-content")
-            ?: return DrivePage(title, qualityOf(title), infoOf(title), emptyList(), emptyMap())
+
+        val encoded = encodedContentOf(doc)
+        val root = if (encoded != null) {
+            Jsoup.parse(encoded).body()
+        } else {
+            doc.selectFirst("article") ?: doc.selectFirst("div.entry-content")
+                ?: return DrivePage(title, qualityOf(title), infoOf(title), emptyList(), emptyMap())
+        }
 
         val links = root.select("a[href]").mapNotNull { a ->
             val href = a.attr("href").trim()
@@ -151,12 +179,14 @@ internal object PlayTmfNet {
         val jar = mutableMapOf<String, String>()
         var current = url
         val seen = mutableSetOf<String>()
+        // the drive host expects the main site as the navigation source
+        val referer = domain()
         repeat(12) {
             if (!seen.add(current)) return null
             val res = try {
                 app.get(
                     current,
-                    headers = PlayNet.browserHeaders("https://themoviesflixhq.com/"),
+                    headers = PlayNet.browserHeaders(referer),
                     cookies = jar,
                     allowRedirects = false,
                     timeout = 20L
@@ -174,9 +204,11 @@ internal object PlayTmfNet {
                 val body = try {
                     res.text
                 } catch (_: Exception) {
+                    res.close()
                     return null
                 }
                 if (body.contains("challenge-platform") || body.contains("Just a moment", true)) {
+                    res.close()
                     return null
                 }
                 return res
@@ -192,13 +224,23 @@ internal object PlayTmfNet {
     }
 
     private fun mirrorUrl(url: String): String = when {
-        url.contains("nexdrive.fit") -> url.replace("nexdrive.fit", "mobilejsr.rest")
-        url.contains("mobilejsr.rest") -> url.replace("mobilejsr.rest", "nexdrive.fit")
+        url.contains("mobilejsr.best") -> url.replace("mobilejsr.best", "nexdrive.beer")
+        url.contains("nexdrive.beer") -> url.replace("nexdrive.beer", "mobilejsr.best")
+        url.contains("nexdrive.fit") -> url.replace("nexdrive.fit", "mobilejsr.best")
         else -> url
     }
 
+    private fun driveKey(url: String): String = when {
+        url.contains("nexdrive.beer") -> url.replace("nexdrive.beer", "mobilejsr.best")
+        url.contains("nexdrive.fit") -> url.replace("nexdrive.fit", "mobilejsr.best")
+        else -> url
+    }
+
+    // mobilejsr and nexdrive serve the same drive app, when one has a bad day
+    // the other answers, zip pack pages are skipped because no player can open
+    // an archive
     suspend fun fetchDrivePage(url: String): DrivePage? {
-        val key = url.replace("mobilejsr.rest", "nexdrive.fit")
+        val key = driveKey(url)
         driveCache[key]?.let { cached ->
             if (System.currentTimeMillis() - cached.savedAt < DRIVE_CACHE_MS) return cached.page
             driveCache.remove(key)
@@ -214,6 +256,8 @@ internal object PlayTmfNet {
                     it.document
                 } catch (_: Exception) {
                     null
+                } finally {
+                    it.close()
                 }
                 doc?.let { d ->
                     val parsed = parseDrivePage(d)
@@ -271,7 +315,7 @@ internal object PlayTmfSources {
         return try {
             val res = app.get(
                 url,
-                headers = PlayNet.browserHeaders("https://nexdrive.fit/"),
+                headers = PlayNet.browserHeaders(),
                 timeout = 20L
             )
             val text = res.text
@@ -301,9 +345,10 @@ internal object PlayTmfSources {
 
     suspend fun resolveVCloud(url: String): List<Stream> {
         return try {
+            // the share links carry rel=noreferrer, the host never sees one
             val res = app.get(
                 url,
-                headers = PlayNet.browserHeaders("https://nexdrive.fit/"),
+                headers = PlayNet.browserHeaders(),
                 timeout = 30L
             )
             if (!res.isSuccessful) return emptyList()
@@ -369,27 +414,38 @@ internal object PlayTmfSources {
             ?.takeIf { it.startsWith("http") }
     }
 
+    // the share page can sit on a mirror front while its provider buttons
+    // point at the vega host, only that origin is accepted as the go referer
     suspend fun resolveVegaDrive(url: String): List<Stream> {
         return try {
             val page = app.get(
                 url,
-                headers = PlayNet.browserHeaders("https://nexdrive.fit/"),
+                headers = PlayNet.browserHeaders(),
                 timeout = 20L
             )
-            val base = PlayNet.getBaseUrl(page.url)
-            val token = url.substringAfter("/s/").substringBefore("?")
+            if (!page.isSuccessful) return emptyList()
+            val doc = page.document
+            val token = url.substringAfter("/s/").substringBefore("?").trimEnd('/')
+
+            val vegaBase = doc.select("a[href]")
+                .map { it.attr("href") }
+                .firstOrNull { it.contains("/d/") || it.contains("/go/") }
+                ?.let { PlayNet.getBaseUrl(it) }
+                ?: "https://one.vegadrive.me"
 
             val out = mutableListOf<Stream>()
 
-            val drop = resolveVegaProvider(base, token, "skydrop")
+            val drop = redirectOf("$vegaBase/go/$token/skydrop", "$vegaBase/")
             if (drop != null && drop.contains("googleusercontent") &&
                 !drop.substringAfterLast("/").contains(".zip", true)
             ) {
                 out.add(Stream("V-Drive Vegadrop (10Gbps)", drop, ExtractorLinkType.VIDEO))
             }
 
-            val pixel = resolveVegaProvider(base, token, "pixeldrain")
-            if (pixel != null && pixel.contains("pixeldrain.com/u/")) {
+            // the bridge bounces dead mirrors back with the provider name in the
+            // query, so the host and not the whole url has to be checked
+            val pixel = redirectOf("$vegaBase/go/$token/pixeldrain", "$vegaBase/")
+            if (pixel != null && PlayTmfNet.hostOf(pixel).contains("pixeldrain")) {
                 val id = pixel.substringBefore("?").substringBefore("#").substringAfterLast("/")
                 if (id.isNotBlank()) {
                     out.add(
@@ -402,12 +458,12 @@ internal object PlayTmfSources {
                 }
             }
 
-            val buzz = resolveVegaProvider(base, token, "buzzheavier")
+            val buzz = redirectOf("$vegaBase/go/$token/buzzheavier", "$vegaBase/")
             if (buzz != null && buzz.contains("bzzhr.co")) {
                 out.add(Stream("V-Drive Buzzheavier", buzz, ExtractorLinkType.VIDEO))
             }
 
-            val telegram = resolveVegaProvider(base, token, "telegram")
+            val telegram = redirectOf("$vegaBase/go/$token/telegram", "$vegaBase/")
             if (telegram != null && telegram.contains("tgfiles")) {
                 out.add(Stream("V-Drive Telegram", telegram, ExtractorLinkType.VIDEO))
             }
@@ -416,19 +472,6 @@ internal object PlayTmfSources {
         } catch (_: Exception) {
             emptyList()
         }
-    }
-
-    private suspend fun resolveVegaProvider(
-        base: String,
-        token: String,
-        provider: String
-    ): String? {
-        val start = if (provider == "skydrop") {
-            "$base/go/$token/skydrop"
-        } else {
-            "$base/d/$token/$provider"
-        }
-        return redirectOf(start, "$base/", hops = 6)
     }
 
     private val FILEPRESS_ID = Regex("""/file/([a-f0-9]{16,40})""")
@@ -751,15 +794,16 @@ internal object PlayTmfSources {
     }
 
     fun resolves(href: String): Boolean =
-        href.contains("fastdl.") || href.contains("vcloud.") ||
-            href.contains("vegadrive.") || href.contains("filebee.") ||
-            href.contains("filepress.") || href.contains("fpgo.") ||
-            href.contains("hubcloud.")
+        href.contains("fastdl.") || href.contains("hubcdn.") ||
+            href.contains("mcloud.") || href.contains("vcloud.") ||
+            href.contains("vegadrive.") || href.contains("m-drive.") ||
+            href.contains("filebee.") || href.contains("filepress.") ||
+            href.contains("fpgo.")
 
     suspend fun resolveOne(href: String): List<Stream> = when {
         href.contains("fastdl.") || href.contains("hubcdn.") -> resolveFastDl(href)
-        href.contains("vcloud.") -> resolveVCloud(href)
-        href.contains("vegadrive.") -> resolveVegaDrive(href)
+        href.contains("mcloud.") || href.contains("vcloud.") -> resolveVCloud(href)
+        href.contains("vegadrive.") || href.contains("m-drive.") -> resolveVegaDrive(href)
         href.contains("filebee.") || href.contains("filepress.") || href.contains("fpgo.") ->
             resolveFilePress(href)
         else -> emptyList()
@@ -802,7 +846,7 @@ internal object PlayTmfSources {
 
                         if (streams.isEmpty()) {
                             PlayNet.emitOwnLink(
-                                "themoviesflix", href, info, qualityHint, "https://nexdrive.fit/",
+                                "themoviesflix", href, info, qualityHint, "https://mobilejsr.best/",
                                 subtitleCallback
                             ) {
                                 emitted.set(true)
@@ -811,7 +855,7 @@ internal object PlayTmfSources {
                         }
                     } else {
                         PlayNet.emitOwnLink(
-                            "themoviesflix", href, info, qualityHint, "https://nexdrive.fit/",
+                            "themoviesflix", href, info, qualityHint, "https://mobilejsr.best/",
                             subtitleCallback
                         ) {
                             emitted.set(true)

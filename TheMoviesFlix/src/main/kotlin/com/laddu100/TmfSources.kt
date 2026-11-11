@@ -45,6 +45,7 @@ object TmfSources {
                 return null
             }
             val loc = res.headers["location"]?.trim().orEmpty()
+            res.closeQuietly()
             if (loc.isEmpty()) return current
             current = when {
                 loc.startsWith("http") -> loc
@@ -61,7 +62,7 @@ object TmfSources {
         return try {
             val res = app.get(
                 url,
-                headers = TmfNet.browserHeaders("https://nexdrive.fit/"),
+                headers = TmfNet.browserHeaders(),
                 timeout = 20L
             )
             val text = res.text
@@ -93,9 +94,10 @@ object TmfSources {
     // the target in a script variable, double base64 or a plain url
     suspend fun resolveVCloud(url: String): List<Stream> {
         return try {
+            // the share links carry rel=noreferrer, the host never sees one
             val res = app.get(
                 url,
-                headers = TmfNet.browserHeaders("https://nexdrive.fit/"),
+                headers = TmfNet.browserHeaders(),
                 timeout = 30L
             )
             if (!res.isSuccessful) return emptyList()
@@ -161,29 +163,38 @@ object TmfSources {
             ?.takeIf { it.startsWith("http") }
     }
 
-    // the vegadrive share page lists one bridge provider per host, they come and
-    // go so each result is checked against the host it is supposed to be on
+    // the share page can sit on a mirror front while its provider buttons
+    // point at the vega host, only that origin is accepted as the go referer
     suspend fun resolveVegaDrive(url: String): List<Stream> {
         return try {
             val page = app.get(
                 url,
-                headers = TmfNet.browserHeaders("https://nexdrive.fit/"),
+                headers = TmfNet.browserHeaders(),
                 timeout = 20L
             )
-            val base = TmfNet.originOf(page.url)
-            val token = url.substringAfter("/s/").substringBefore("?")
+            if (!page.isSuccessful) return emptyList()
+            val doc = page.document
+            val token = url.substringAfter("/s/").substringBefore("?").trimEnd('/')
+
+            val vegaBase = doc.select("a[href]")
+                .map { it.attr("href") }
+                .firstOrNull { it.contains("/d/") || it.contains("/go/") }
+                ?.let { TmfNet.originOf(it) }
+                ?: "https://one.vegadrive.me"
 
             val out = mutableListOf<Stream>()
 
-            val drop = resolveVegaProvider(base, token, "skydrop")
+            val drop = redirectOf("$vegaBase/go/$token/skydrop", "$vegaBase/")
             if (drop != null && drop.contains("googleusercontent") &&
                 !drop.substringAfterLast("/").contains(".zip", true)
             ) {
                 out.add(Stream("V-Drive Vegadrop (10Gbps)", drop, ExtractorLinkType.VIDEO))
             }
 
-            val pixel = resolveVegaProvider(base, token, "pixeldrain")
-            if (pixel != null && pixel.contains("pixeldrain.com/u/")) {
+            // the bridge bounces dead mirrors back with the provider name in the
+            // query, so the host and not the whole url has to be checked
+            val pixel = redirectOf("$vegaBase/go/$token/pixeldrain", "$vegaBase/")
+            if (pixel != null && TmfNet.hostOf(pixel).contains("pixeldrain")) {
                 val id = pixel.substringBefore("?").substringBefore("#").substringAfterLast("/")
                 if (id.isNotBlank()) {
                     out.add(
@@ -196,12 +207,12 @@ object TmfSources {
                 }
             }
 
-            val buzz = resolveVegaProvider(base, token, "buzzheavier")
+            val buzz = redirectOf("$vegaBase/go/$token/buzzheavier", "$vegaBase/")
             if (buzz != null && buzz.contains("bzzhr.co")) {
                 out.add(Stream("V-Drive Buzzheavier", buzz, ExtractorLinkType.VIDEO))
             }
 
-            val telegram = resolveVegaProvider(base, token, "telegram")
+            val telegram = redirectOf("$vegaBase/go/$token/telegram", "$vegaBase/")
             if (telegram != null && telegram.contains("tgfiles")) {
                 out.add(Stream("V-Drive Telegram", telegram, ExtractorLinkType.VIDEO))
             }
@@ -210,21 +221,6 @@ object TmfSources {
         } catch (_: Exception) {
             emptyList()
         }
-    }
-
-    // the provider pages only answer when the share page is sent as referer,
-    // without it they bounce straight back to the picker
-    private suspend fun resolveVegaProvider(
-        base: String,
-        token: String,
-        provider: String
-    ): String? {
-        val start = if (provider == "skydrop") {
-            "$base/go/$token/skydrop"
-        } else {
-            "$base/d/$token/$provider"
-        }
-        return redirectOf(start, "$base/", hops = 6)
     }
 
     private val FILEPRESS_ID = Regex("""/file/([a-f0-9]{16,40})""")
@@ -547,15 +543,16 @@ object TmfSources {
     }
 
     fun resolves(href: String): Boolean =
-        href.contains("fastdl.") || href.contains("vcloud.") ||
-            href.contains("vegadrive.") || href.contains("filebee.") ||
-            href.contains("filepress.") || href.contains("fpgo.") ||
-            href.contains("hubcloud.")
+        href.contains("fastdl.") || href.contains("hubcdn.") ||
+            href.contains("mcloud.") || href.contains("vcloud.") ||
+            href.contains("vegadrive.") || href.contains("m-drive.") ||
+            href.contains("filebee.") || href.contains("filepress.") ||
+            href.contains("fpgo.")
 
     suspend fun resolveOne(href: String): List<Stream> = when {
         href.contains("fastdl.") || href.contains("hubcdn.") -> resolveFastDl(href)
-        href.contains("vcloud.") -> resolveVCloud(href)
-        href.contains("vegadrive.") -> resolveVegaDrive(href)
+        href.contains("mcloud.") || href.contains("vcloud.") -> resolveVCloud(href)
+        href.contains("vegadrive.") || href.contains("m-drive.") -> resolveVegaDrive(href)
         href.contains("filebee.") || href.contains("filepress.") || href.contains("fpgo.") ->
             resolveFilePress(href)
         else -> emptyList()

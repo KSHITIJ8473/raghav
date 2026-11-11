@@ -13,7 +13,7 @@ import org.jsoup.nodes.Element
 import java.net.URLEncoder
 
 class TheMoviesFlix : MainAPI() {
-    override var mainUrl = "https://themoviesflixhq.com"
+    override var mainUrl = "https://one.1moviesflix.lol"
     override var name = "TheMoviesFlix"
     override val hasMainPage = true
     override var lang = "en"
@@ -192,20 +192,12 @@ class TheMoviesFlix : MainAPI() {
                     }.awaitAll()
                 }.flatten().toSortedSet()
 
-                if (episodeNums.isEmpty()) {
-                    episodes.add(newEpisode("$allDriveUrls|$seasonNum|1") {
-                        this.name = groups.first().label
-                        this.episode = 1
+                for (epNum in episodeNums) {
+                    episodes.add(newEpisode("$allDriveUrls|$seasonNum|$epNum") {
+                        this.name = "Episode $epNum"
+                        this.episode = epNum
                         this.season = seasonNum
                     })
-                } else {
-                    for (epNum in episodeNums) {
-                        episodes.add(newEpisode("$allDriveUrls|$seasonNum|$epNum") {
-                            this.name = "Episode $epNum"
-                            this.episode = epNum
-                            this.season = seasonNum
-                        })
-                    }
                 }
             }
 
@@ -273,7 +265,7 @@ class TheMoviesFlix : MainAPI() {
                         if (hrefs.isEmpty()) return@async false
                         TmfSources.emitAll(
                             hrefs, page.quality, page.info,
-                            "https://nexdrive.fit/", subtitleCallback, callback
+                            "https://mobilejsr.best/", subtitleCallback, callback
                         )
                     } catch (_: Exception) {
                         false

@@ -1,11 +1,20 @@
 package com.laddu100
 
 import com.lagradost.cloudstream3.app
+import com.lagradost.cloudstream3.base64Decode
 import com.lagradost.nicehttp.NiceResponse
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import java.util.concurrent.ConcurrentHashMap
+
+// unread bodies never return to the connection pool
+internal fun NiceResponse.closeQuietly() {
+    try {
+        okhttpResponse.close()
+    } catch (_: Exception) {}
+}
 
 object TmfNet {
 
@@ -32,10 +41,9 @@ object TmfNet {
     }
 
     private val FALLBACK_DOMAINS = listOf(
+        "https://one.1moviesflix.lol",
         "https://themoviesflixhq.com",
-        "https://moviesflixhq.com",
-        "https://themoviesflix.actor",
-        "https://moviesflixi.com"
+        "https://moviesflixhq.com"
     )
 
     private val domainMutex = Mutex()
@@ -99,11 +107,19 @@ object TmfNet {
         Regex("""(\d{3,4})[pP]\b""").find(text)?.groupValues?.get(1)?.toIntOrNull()
             ?: if (text.contains("2160", true) || text.contains("4K", true) || text.contains("UHD", true)) 2160 else null
 
+    // a bare year from the page title is noise next to the language and codec
+    // tags, everything else in brackets is worth keeping
     fun infoOf(title: String): String =
         Regex("""[\[{(]([^\]})]+)[\]})]""").findAll(title)
             .map { it.groupValues[1].trim() }
-            .filter { it.isNotBlank() && !it.equals("links", true) }
+            .filter { it.isNotBlank() && !it.equals("links", true) && !it.matches(Regex("""\d{4}""")) }
             .joinToString(" · ")
+
+    fun hostOf(url: String): String = try {
+        java.net.URI(url).host?.lowercase() ?: ""
+    } catch (_: Exception) {
+        ""
+    }
 
     // links that belong to the drive page itself and never carry a file
     private val DRIVE_SELF = listOf(
@@ -114,11 +130,35 @@ object TmfNet {
 
     private fun isDriveJunk(href: String): Boolean = DRIVE_SELF.any { href.contains(it, true) }
 
+    // the drive page keeps its buttons behind a countdown, the button markup
+    // only exists as a base64 copy inside the unlock script
+    private fun encodedContentOf(doc: Document): String? {
+        for (script in doc.select("script")) {
+            val data = script.data()
+            if (!data.contains("encoded")) continue
+            val blob = Regex("""const\s+encoded\s*=\s*["]([A-Za-z0-9+/=]+)["]""")
+                .find(data)?.groupValues?.get(1) ?: continue
+            val decoded = try {
+                base64Decode(blob)
+            } catch (_: Exception) {
+                null
+            }
+            if (decoded != null && decoded.contains("<")) return decoded
+        }
+        return null
+    }
+
     private fun parseDrivePage(doc: Document): DrivePage {
         val title = doc.selectFirst("h1")?.text()?.trim()
             ?: doc.title().substringBefore(" – ").substringBefore(" - ").trim()
-        val root = doc.selectFirst("article") ?: doc.selectFirst("div.entry-content")
-            ?: return DrivePage(title, qualityOf(title), infoOf(title), emptyList(), emptyMap())
+
+        val encoded = encodedContentOf(doc)
+        val root = if (encoded != null) {
+            Jsoup.parse(encoded).body()
+        } else {
+            doc.selectFirst("article") ?: doc.selectFirst("div.entry-content")
+                ?: return DrivePage(title, qualityOf(title), infoOf(title), emptyList(), emptyMap())
+        }
 
         val links = root.select("a[href]").mapNotNull { a ->
             val href = a.attr("href").trim()
@@ -158,12 +198,14 @@ object TmfNet {
         val jar = mutableMapOf<String, String>()
         var current = url
         val seen = mutableSetOf<String>()
+        // the drive host expects the main site as the navigation source
+        val referer = domain()
         repeat(12) {
             if (!seen.add(current)) return null
             val res = try {
                 app.get(
                     current,
-                    headers = browserHeaders("https://themoviesflixhq.com/"),
+                    headers = browserHeaders(referer),
                     cookies = jar,
                     allowRedirects = false,
                     timeout = 20L
@@ -174,17 +216,23 @@ object TmfNet {
             jar.putAll(res.cookies)
             val loc = res.headers["location"]?.trim().orEmpty()
             if (loc.isEmpty()) {
-                if (res.code != 200) return null
+                if (res.code != 200) {
+                    res.closeQuietly()
+                    return null
+                }
                 val body = try {
                     res.text
                 } catch (_: Exception) {
+                    res.closeQuietly()
                     return null
                 }
                 if (body.contains("challenge-platform") || body.contains("Just a moment", true)) {
+                    res.closeQuietly()
                     return null
                 }
                 return res
             }
+            res.closeQuietly()
             current = when {
                 loc.startsWith("http") -> loc
                 loc.startsWith("/") -> originOf(current) + loc
@@ -195,15 +243,17 @@ object TmfNet {
     }
 
     private fun mirrorUrl(url: String): String = when {
-        url.contains("nexdrive.fit") -> url.replace("nexdrive.fit", "mobilejsr.rest")
-        url.contains("mobilejsr.rest") -> url.replace("mobilejsr.rest", "nexdrive.fit")
+        url.contains("mobilejsr.best") -> url.replace("mobilejsr.best", "nexdrive.beer")
+        url.contains("nexdrive.beer") -> url.replace("nexdrive.beer", "mobilejsr.best")
+        url.contains("nexdrive.fit") -> url.replace("nexdrive.fit", "mobilejsr.best")
         else -> url
     }
 
-    // nexdrive and mobilejsr serve the same drive app, when one has a bad day the other answers,
-    // zip pack pages are skipped because no player can open an archive
+    // mobilejsr and nexdrive serve the same drive app, when one has a bad day
+    // the other answers, zip pack pages are skipped because no player can open
+    // an archive
     suspend fun fetchDrivePage(url: String): DrivePage? {
-        val key = url.replace("mobilejsr.rest", "nexdrive.fit")
+        val key = driveKey(url)
         driveCache[key]?.let { cached ->
             if (System.currentTimeMillis() - cached.savedAt < DRIVE_CACHE_MS) return cached.page
             driveCache.remove(key)
@@ -219,6 +269,8 @@ object TmfNet {
                     it.document
                 } catch (_: Exception) {
                     null
+                } finally {
+                    it.closeQuietly()
                 }
                 doc?.let { d ->
                     val parsed = parseDrivePage(d)
@@ -228,6 +280,12 @@ object TmfNet {
             driveCache[key] = CachedDrivePage(System.currentTimeMillis(), page)
             page
         }
+    }
+
+    private fun driveKey(url: String): String = when {
+        url.contains("nexdrive.beer") -> url.replace("nexdrive.beer", "mobilejsr.best")
+        url.contains("nexdrive.fit") -> url.replace("nexdrive.fit", "mobilejsr.best")
+        else -> url
     }
 
     // one kilobyte range request, drops links whose file is gone before they

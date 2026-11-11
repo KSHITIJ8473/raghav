@@ -436,7 +436,7 @@ internal object MoviesLinkBdSite {
                     resolved,
                     type
                 ) {
-                    this.quality = quality
+                    this.quality = quality ?: Qualities.Unknown.value
                     this.headers = mapOf("Referer" to url)
                 }
             )

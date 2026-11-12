@@ -758,6 +758,14 @@ class RaghavAnime : MainAPI() {
                     anv.loadLinksByAnilistId(aniId, episode, isDub, subs, callback)
                 }
             },
+            "AniLight" to {
+                val epData = SourceCache.episodeData("AniLight", animeKey, isDub, episode) {
+                    resolveAniLight(aniId, searchTitles, targetTitles, episode, isDub, linkData.year)
+                }
+                if (epData != null) {
+                    RaghavAniLight().loadLinks(epData, false, subs, callback)
+                }
+            },
         )
 
         val ordered = sources
@@ -889,6 +897,7 @@ class RaghavAnime : MainAPI() {
                     { warmSource("Xanime", key, isDub) { resolveXanime(titles, targets, null, isDub, year)?.episodes } },
                     { warmSource("Senshi", key, isDub) { resolveSenshi(titles, targets, null, isDub, year)?.episodes } },
                     { warmSource("AniSuge", key, isDub) { resolveAniSuge(titles, targets, null, isDub, year)?.episodes } },
+                    { warmSource("AniLight", key, isDub) { resolveAniLight(aniId, titles, targets, null, isDub, year)?.episodes } },
                     { if (aniId > 0) RaghavAniChan().warm() }
                 ))
             }
@@ -965,6 +974,37 @@ class RaghavAnime : MainAPI() {
             doSearch = { xanime.search(it) },
             doLoad = { xanime.load(it) as? com.lagradost.cloudstream3.AnimeLoadResponse },
             sourceTag = "Xanime")
+    }
+
+    // anilight indexes anilist ids, an exact id hit beats any title scoring
+    private suspend fun resolveAniLight(aniId: Int, titles: List<String>, targets: List<String>, episode: Int?, isDub: Boolean, year: Int?): SourceCache.Match? {
+        val anilight = RaghavAniLight()
+        if (aniId > 0) {
+            for (t in titles) {
+                val hit = try {
+                    RaghavAniLightApi.search(t).firstOrNull { it.anilistId == aniId && !it.slug.isNullOrBlank() }
+                } catch (e: Throwable) {
+                    if (e is CancellationException) throw e
+                    null
+                } ?: continue
+                val loadResult = try {
+                    anilight.load("${anilight.mainUrl}/anime/${hit.slug}") as? com.lagradost.cloudstream3.AnimeLoadResponse
+                } catch (e: Throwable) {
+                    if (e is CancellationException) throw e
+                    null
+                }
+                if (loadResult != null) {
+                    val map = episodeMap(loadResult.episodes?.get(if (isDub) DubStatus.Dubbed else DubStatus.Subbed))
+                    if (map != null && (episode == null || map.containsKey(episode))) {
+                        return SourceCache.Match(map, episode != null)
+                    }
+                }
+            }
+        }
+        return findEpisodeMap(titles, targets, episode, isDub, year,
+            doSearch = { anilight.search(it) },
+            doLoad = { anilight.load(it) as? com.lagradost.cloudstream3.AnimeLoadResponse },
+            sourceTag = "AniLight")
     }
 
     private suspend fun resolveAniWaves(titles: List<String>, targets: List<String>, episode: Int?, isDub: Boolean): SourceCache.Match? {

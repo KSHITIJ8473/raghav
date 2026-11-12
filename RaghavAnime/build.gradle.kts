@@ -1,4 +1,4 @@
-version = 96
+version = 97
 
 android {
     buildFeatures {

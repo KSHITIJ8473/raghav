@@ -21,6 +21,7 @@ class JustPlayPlugin : Plugin() {
         registerExtractorAPI(PlayGofile())
         registerExtractorAPI(PlayGDFlix())
         registerExtractorAPI(PlayGDLink())
+        registerExtractorAPI(PlayInstantCloud())
         openSettings = { ctx ->
             try {
                 JustPlaySettings.show(ctx)

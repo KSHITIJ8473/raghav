@@ -18,6 +18,7 @@ import java.net.URLDecoder
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import org.json.JSONObject
@@ -175,9 +176,13 @@ class PlayHubCloud : ExtractorApi() {
                         } catch (_: Exception) {}
                     }
                     abs.startsWith("http") -> {
-                        try {
-                            emitted = loadExtractor(abs, base, subtitleCallback, callback) || emitted
-                        } catch (_: Exception) {}
+                        // family hosts never reach the global registry, its fuzzy
+                        // matching hands download pages to unrelated extractors
+                        if (PlayNet.extractorFor(abs) == null) {
+                            try {
+                                emitted = loadExtractor(abs, base, subtitleCallback, callback) || emitted
+                            } catch (_: Exception) {}
+                        }
                     }
                 }
             }
@@ -258,6 +263,21 @@ class PlayHubCloud : ExtractorApi() {
                             }
                         } catch (_: Exception) {}
                     }
+                    text.contains("buzz") || href.contains("fuckingfast") -> {
+                        try {
+                            val res = app.get(
+                                "$href/download",
+                                referer = href,
+                                allowRedirects = false,
+                                timeout = 15L
+                            )
+                            val dlink = res.headers["hx-redirect"] ?: ""
+                            res.close()
+                            if (dlink.isNotBlank()) {
+                                found.add("BuzzServer [$labelExtras]" to PlayNet.absolute(dlink, PlayNet.getBaseUrl(href)))
+                            }
+                        } catch (_: Exception) {}
+                    }
                     text.contains("download file") || text.contains("download now") || text.contains("download] ") -> {
                         found.add("Download File [$labelExtras]" to href)
                     }
@@ -275,6 +295,70 @@ class PlayHubCloud : ExtractorApi() {
             if (emitVerified(found, quality, callback)) emitted = true
             return emitted
         }
+    }
+}
+
+class PlayInstantCloud : ExtractorApi() {
+    override val name = "InstantCloud"
+    override val mainUrl = "https://instantcloud.org"
+    override val requiresReferer = false
+
+    override suspend fun getUrl(
+        url: String,
+        referer: String?,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        try {
+            val headers = mapOf(
+                "User-Agent" to PLAY_UA,
+                "Accept" to "application/json",
+                "Referer" to url
+            )
+            var link = downloadLink(url, headers)
+            if (link == null) {
+                // a cold file reports needs_poll until the drive read finishes
+                var ready = false
+                repeat(3) {
+                    if (ready) return@repeat
+                    val meta = try {
+                        app.get("$url?ajax=1&refresh=1", headers = headers, timeout = 15L).text
+                    } catch (_: Exception) {
+                        return
+                    }
+                    val obj = try {
+                        JSONObject(meta)
+                    } catch (_: Exception) {
+                        null
+                    } ?: return
+                    ready = obj.optBoolean("downloadable") ||
+                        obj.optString("gp_status").equals("VALID", true)
+                    if (!ready && obj.optBoolean("needs_poll")) delay(1500L)
+                }
+                if (ready) link = downloadLink(url, headers)
+            }
+            if (link == null) return
+            if (!PlayNet.alive(link, ExtractorLinkType.VIDEO)) return
+            callback(
+                newExtractorLink(name, name, link, ExtractorLinkType.VIDEO) {
+                    this.quality = PlayNet.getIndexQuality(url)
+                }
+            )
+        } catch (_: Exception) {}
+    }
+
+    private suspend fun downloadLink(url: String, headers: Map<String, String>): String? {
+        val body = try {
+            app.get("$url/download?json=1", headers = headers, timeout = 20L).text
+        } catch (_: Exception) {
+            return null
+        }
+        val obj = try {
+            JSONObject(body)
+        } catch (_: Exception) {
+            return null
+        }
+        return obj.optString("download_url").trim().takeIf { it.startsWith("http") }
     }
 }
 
@@ -699,7 +783,14 @@ class PlayHblinks : ExtractorApi() {
             for (a in doc.select("div.entry-content a[href]")) {
                 val href = a.attr("href").trim()
                 if (!href.startsWith("http") || !seen.add(href)) continue
-                loadExtractor(href, url, subtitleCallback, callback)
+                val own = PlayNet.extractorFor(href)
+                if (own != null) {
+                    try {
+                        own.getUrl(href, url, subtitleCallback, callback)
+                    } catch (_: Exception) {}
+                } else {
+                    loadExtractor(href, url, subtitleCallback, callback)
+                }
             }
         } catch (_: Exception) {}
     }
@@ -728,7 +819,9 @@ class PlayHubdrive : ExtractorApi() {
                 val href = a.attr("href").trim()
                 if (!href.startsWith("http") || href.contains("/tg/") || !seen.add(href)) continue
                 if (href.contains("hubcloud")) {
-                    loadExtractor(href, url, subtitleCallback, callback)
+                    try {
+                        PlayHubCloud().getUrl(href, url, subtitleCallback, callback)
+                    } catch (_: Exception) {}
                 }
             }
         } catch (_: Exception) {}

@@ -5,6 +5,7 @@ import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.base64Decode
 import com.lagradost.cloudstream3.network.CloudflareKiller
+import com.lagradost.cloudstream3.utils.ExtractorApi
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.Qualities
@@ -612,6 +613,29 @@ internal object PlayNet {
         } catch (_: Exception) {}
     }
 
+    // mirror domains rotate faster than any registry, the family is matched by
+    // host substring so hubcloud.pw and hubdrive.blog land in our own scrapers
+    // instead of the fuzzy loadExtractor pass that hands them to strangers
+    fun extractorFor(url: String): ExtractorApi? {
+        val host = hostOf(url)
+        if (host.isEmpty()) return null
+        return when {
+            host.contains("hubcloud.") -> PlayHubCloud()
+            host.contains("hubdrive") -> PlayHubdrive()
+            host.contains("hubcdn") -> PlayHubCdn()
+            host.contains("hblinks") -> PlayHblinks()
+            host.contains("gdflix") || host.contains("gdlink") -> PlayGDFlix()
+            host.contains("gofile") -> PlayGofile()
+            host.contains("fastdl") -> PlayFastDl()
+            host.contains("vcloud") -> PlayVCloud()
+            host.contains("vegadrive") -> PlayVegaDrive()
+            host.contains("instantcloud") -> PlayInstantCloud()
+            host.contains("filebee") || host.contains("filepress") || host.contains("fpgo") ->
+                PlayFilePress()
+            else -> null
+        }
+    }
+
     suspend fun emitOwnLink(
         site: String,
         url: String,
@@ -622,30 +646,14 @@ internal object PlayNet {
         callback: (ExtractorLink) -> Unit
     ) {
         if (url.isBlank()) return
-        val host = hostOf(url)
-        if (host.isEmpty()) return
-        val resolver: (suspend (String?, (SubtitleFile) -> Unit, (ExtractorLink) -> Unit) -> Unit) = when {
-            host.contains("hubcloud.") ->
-                { r, s, c -> PlayHubCloud().getUrl(url, r, s, c) }
-            host.contains("gdflix") || host.contains("gdlink") ->
-                { r, s, c -> PlayGDFlix().getUrl(url, r, s, c) }
-            host.contains("hubdrive") -> { r, s, c -> PlayHubdrive().getUrl(url, r, s, c) }
-            host.contains("hubcdn") -> { r, s, c -> PlayHubCdn().getUrl(url, r, s, c) }
-            host.contains("hblinks") -> { r, s, c -> PlayHblinks().getUrl(url, r, s, c) }
-            host.contains("gofile") -> { r, s, c -> PlayGofile().getUrl(url, r, s, c) }
-            host.contains("fastdl") -> { r, s, c -> PlayFastDl().getUrl(url, r, s, c) }
-            host.contains("vcloud") -> { r, s, c -> PlayVCloud().getUrl(url, r, s, c) }
-            host.contains("vegadrive") -> { r, s, c -> PlayVegaDrive().getUrl(url, r, s, c) }
-            host.contains("filebee") || host.contains("filepress") || host.contains("fpgo") ->
-                { r, s, c -> PlayFilePress().getUrl(url, r, s, c) }
-            else -> {
-                emitSiteLink(site, url, label, quality, referer, subtitleCallback, callback)
-                return
-            }
+        val api = extractorFor(url)
+        if (api == null) {
+            emitSiteLink(site, url, label, quality, referer, subtitleCallback, callback)
+            return
         }
         try {
             val collected = mutableListOf<ExtractorLink>()
-            resolver(referer, subtitleCallback) { collected.add(it) }
+            api.getUrl(url, referer, subtitleCallback) { collected.add(it) }
             emitChecked(site, label, quality, collected, callback)
         } catch (_: Exception) {}
     }

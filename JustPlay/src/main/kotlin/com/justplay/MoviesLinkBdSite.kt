@@ -108,8 +108,8 @@ internal object MoviesLinkBdSite {
 
     private data class BdPost(val title: String, val url: String)
 
-    // /go/ tokens only resolve for the session that opened the file page, the
-    // cookie set has to ride along through the whole chain
+    // /go/ tokens and the file pages only answer the session that walked the
+    // chain in order, every hop carries the cookies picked up so far
     private class BdSession {
         private val cookies = java.util.concurrent.ConcurrentHashMap<String, String>()
 
@@ -273,18 +273,43 @@ internal object MoviesLinkBdSite {
         return BdDetail(pageUrl, files)
     }
 
-    private class GoRow(val server: String, val path: String)
+    private class BdRow(val host: String, val path: String)
+
+    // the row set rotates between renders, data-host is the only stable name
+    private fun fileRows(doc: Document, key: String): List<BdRow> {
+        val rows = mutableListOf<BdRow>()
+        for (a in doc.select("a.dlh-arow")) {
+            if (a.className().contains("dlh-promo")) continue
+            val host = a.attr("data-host").trim().lowercase()
+            if (host.endsWith("-promo")) continue
+            val path = if (a.hasAttr("data-g")) {
+                decodeGo(a.attr("data-g"), key) ?: continue
+            } else {
+                a.attr("href").trim().takeIf { it.startsWith("/") } ?: continue
+            }
+            val name = host.ifBlank {
+                val text = a.text().lowercase()
+                when {
+                    text.contains("xcloud") -> "xcloud"
+                    text.contains("instant") -> "instantcloud"
+                    else -> ""
+                }
+            }
+            rows.add(BdRow(name, path))
+        }
+        return rows.distinctBy { it.path }
+    }
 
     private suspend fun goTarget(
         domain: String,
-        row: GoRow,
+        path: String,
         session: BdSession,
         referer: String,
         key: String
     ): String? {
         return try {
             val res = app.get(
-                PlayNet.absolute(row.path, domain),
+                PlayNet.absolute(path, domain),
                 headers = PlayNet.headers(referer),
                 cookies = session.with("mlbd_gk" to key),
                 allowRedirects = false,
@@ -299,22 +324,145 @@ internal object MoviesLinkBdSite {
         }
     }
 
-    private suspend fun emitInstant(
-        fileUrl: String,
+    private val directMedia = Regex(
+        """(?i)\.(mp4|mkv|webm|mov|m3u8)(?:\?|$)|\.r2\.cloudflarestorage\.com/|googleusercontent\.com/|\.r2\.dev/"""
+    )
+
+    private suspend fun emitDirect(
+        url: String,
+        server: String,
         info: String,
         quality: Int?,
         callback: (ExtractorLink) -> Unit
     ) {
-        val url = fileUrl.trimEnd('/') + "/download"
+        if (!url.startsWith("http")) return
         if (!PlayNet.alive(url, ExtractorLinkType.VIDEO)) return
-        val name = PlayLabels.buildLabel("movielinkbd", "Instant Download", info)
+        val name = PlayLabels.buildLabel("movielinkbd", server, info)
         try {
-            callback.invoke(
+            callback(
                 newExtractorLink("[MovieLinkBD]", name, url, ExtractorLinkType.VIDEO) {
                     this.quality = quality ?: Qualities.Unknown.value
                 }
             )
         } catch (_: Exception) {}
+    }
+
+    // fsl hands out a one time /d/ link that either redirects straight to the
+    // file or serves a small exchange page carrying the direct link
+    private suspend fun emitFsl(
+        url: String,
+        info: String,
+        quality: Int?,
+        referer: String,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        val target = PlayNet.resolveRedirectTarget(url, referer)
+        if (target != null && !PlayNet.hostOf(target).contains("fsldownload")) {
+            emitDirect(target, "FSL", info, quality, callback)
+            return
+        }
+        val res = try {
+            app.get(url, headers = PlayNet.headers(referer), timeout = 15L)
+        } catch (_: Exception) {
+            null
+        } ?: return
+        val doc = res.document
+        res.close()
+        for (a in doc.select("a[href]")) {
+            val href = a.attr("href").trim()
+            if (href.startsWith("http") && directMedia.containsMatchIn(href)) {
+                emitDirect(href, "FSL", info, quality, callback)
+                return
+            }
+        }
+    }
+
+    private suspend fun emitSubFile(
+        domain: String,
+        path: String,
+        info: String,
+        quality: Int?,
+        referer: String,
+        session: BdSession,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        val res = try {
+            app.get(
+                PlayNet.absolute(path, domain),
+                headers = PlayNet.headers(referer),
+                cookies = session.with(),
+                timeout = 20L
+            )
+        } catch (_: Exception) {
+            null
+        } ?: return
+        session.absorb(res)
+        val doc = res.document
+        val pageUrl = res.url
+        res.close()
+        for (a in doc.select("a.dlh-cta[href], div.fsl-action-area a[href], a[download][href]")) {
+            val href = a.attr("href").trim()
+            if (!href.startsWith("http")) continue
+            when {
+                href.contains("fsldownload") -> emitFsl(href, info, quality, pageUrl, callback)
+                directMedia.containsMatchIn(href) -> emitDirect(href, "Instant MP4", info, quality, callback)
+                else -> PlayNet.emitOwnLink(
+                    "movielinkbd", href, info, quality, pageUrl,
+                    subtitleCallback, callback
+                )
+            }
+        }
+        // some mirrors keep the hubcloud button layout behind the same page
+        try {
+            PlayHubCloud.emitHubServers(
+                doc, PlayNet.getBaseUrl(pageUrl), pageUrl, subtitleCallback
+            ) { link ->
+                callback(
+                    ExtractorLink(
+                        "[${PlayLabels.siteName("movielinkbd")}]",
+                        PlayLabels.buildLabel("movielinkbd", link.name, info),
+                        link.url,
+                        link.referer,
+                        quality ?: link.quality,
+                        link.headers,
+                        link.extractorData,
+                        link.type
+                    )
+                )
+            }
+        } catch (_: Exception) {}
+    }
+
+    private suspend fun emitRow(
+        domain: String,
+        row: BdRow,
+        info: String,
+        quality: Int?,
+        referer: String,
+        key: String,
+        session: BdSession,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        when {
+            row.path.startsWith("/go/") -> {
+                val target = goTarget(domain, row.path, session, referer, key) ?: return
+                // a stale or raced token bounces back to the hub, never chase it
+                if (PlayNet.hostOf(target).contains("movielinkbd")) return
+                if (row.host.contains("xcloud") || PlayNet.hostOf(target).contains("xcloud")) {
+                    emitXCloud(target, info, quality, referer, subtitleCallback, callback)
+                } else {
+                    PlayNet.emitOwnLink(
+                        "movielinkbd", target, info, quality, referer,
+                        subtitleCallback, callback
+                    )
+                }
+            }
+            row.path.startsWith("/file/") -> {
+                emitSubFile(domain, row.path, info, quality, referer, session, subtitleCallback, callback)
+            }
+        }
     }
 
     private suspend fun emitFile(
@@ -339,31 +487,16 @@ internal object MoviesLinkBdSite {
         session.absorb(response)
         val text = response.text
         val key = keyRegex.find(text)?.groupValues?.get(1) ?: return
-        val rows = try {
-            response.document.select("a.dlh-arow[data-g]").mapNotNull { a ->
-                val path = decodeGo(a.attr("data-g"), key) ?: return@mapNotNull null
-                val row = a.text().lowercase()
-                val server = when {
-                    row.contains("hubcloud") -> "HubCloud"
-                    row.contains("xcloud") -> "XCloud"
-                    row.contains("instant") -> "Instant Download"
-                    else -> "Other"
-                }
-                GoRow(server, path)
-            }
-        } catch (_: Exception) {
-            emptyList()
-        }
+        val rows = fileRows(response.document, key)
         val quality = PlayNet.getIndexQuality(file.info)
-        rows.forEach { row ->
-            val target = goTarget(domain, row, session, fileUrl, key) ?: return@forEach
-            when (row.server) {
-                "Instant Download" -> emitInstant(target, file.info, quality, callback)
-                "XCloud" -> emitXCloud(target, file.info, quality, fileUrl, subtitleCallback, callback)
-                else -> PlayNet.emitOwnLink(
-                    "movielinkbd", target, file.info, quality, fileUrl,
-                    subtitleCallback, callback
-                )
+        val semaphore = Semaphore(4)
+        coroutineScope {
+            rows.forEach { row ->
+                async(Dispatchers.IO) {
+                    semaphore.withPermit {
+                        emitRow(domain, row, file.info, quality, fileUrl, key, session, subtitleCallback, callback)
+                    }
+                }
             }
         }
     }
@@ -372,7 +505,7 @@ internal object MoviesLinkBdSite {
     // watch player also builds its stream in javascript, so when the markup
     // carries no buttons a webview sniffs the playlist out of the player
     private val xcloudGate = Mutex()
-    private val mediaPattern = Regex("""(?i)\.(m3u8|mp4)(?:\?|$)""")
+    private val mediaPattern = Regex("""(?i)\.(m3u8|mp4|mkv)(?:\?|$)""")
 
     private suspend fun emitXCloud(
         url: String,
@@ -412,7 +545,7 @@ internal object MoviesLinkBdSite {
                 val resolver = WebViewResolver(
                     interceptUrl = mediaPattern,
                     additionalUrls = listOf(mediaPattern),
-                    script = """document.querySelector('button,[role="button"],.jw-icon-display,.vjs-play-button,.vds-play-button')?.click();""",
+                    script = """document.querySelector('a#download, .vd a.btn, .vd a')?.click();""",
                     useOkhttp = false,
                     timeout = 30_000L
                 )

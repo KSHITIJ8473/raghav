@@ -27,7 +27,6 @@ import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
-// domains migrate, embeds check the referer
 internal object MmSite {
     @Volatile var baseUrl: String = "https://m1.multimovies.courses"
     val referer: String get() = "$baseUrl/"
@@ -476,7 +475,6 @@ internal object MmCineverse {
         label: String,
         callback: (ExtractorLink) -> Unit,
     ): Boolean {
-        // info primes it, video carries the name
         MmNet.get(
             "https://$host/api/v1/info?id=$code",
             referer = "https://$host/",
@@ -584,7 +582,6 @@ internal object MmCineverse {
         return resolveProxyHtml(resp.text, "$labelPrefix $displayName", callback)
     }
 
-    // relay hands a var src playlist or proxies the page
     private suspend fun resolveProxyHtml(html: String, label: String, callback: (ExtractorLink) -> Unit): Boolean {
         val src = Regex("var\\s+src=\"([^\"]+)\"").find(html)?.groupValues?.get(1)
         if (src != null) {
@@ -627,7 +624,6 @@ internal object MmCineverse {
         val html = MmNet.get(embedUrl, referer = MmSite.referer) ?: return false
         val doc = org.jsoup.Jsoup.parse(html)
 
-        // switchServer(url, platform, displayName, fileCode, title, element)
         val servers = doc.select(".srv-item").mapNotNull { el ->
             val onclick = el.attr("onclick")
             val m = Regex("switchServer\\('([^']*)','([^']*)','([^']*)','([^']*)'").find(onclick)
@@ -635,7 +631,6 @@ internal object MmCineverse {
             SubServer(MmNet.deEsc(m.groupValues[1]), m.groupValues[2], m.groupValues[3], m.groupValues[4])
         }.distinctBy { it.platform }
 
-        // default frame mirrors the first entry
         val defaultFrame = doc.selectFirst("#playerFrame")?.attr("src")
         val ordered = if (defaultFrame != null) {
             val defaultPlatform = Regex("[?&]p=([^&]+)").find(defaultFrame)?.groupValues?.get(1)
@@ -651,7 +646,6 @@ internal object MmCineverse {
         return any
     }
 
-    // full urls go to the owning resolver
     private suspend fun resolveMirror(
         server: SubServer,
         labelPrefix: String,
@@ -1287,7 +1281,6 @@ internal object MmVidsync {
     }
 }
 
-// vidrift carries sources inline, orion needs the embed referer
 internal object MmVidrift {
 
     private const val ORIGIN = "https://embed.vidrift.net"
@@ -1333,7 +1326,6 @@ internal object MmVidrift {
         labelPrefix: String,
         callback: (ExtractorLink) -> Unit,
     ): Boolean {
-        // cloudflare walled, fetchWithCf solves it
         val resp = try {
             PlayNet.fetchWithCf(embedUrl, referer = MmSite.referer)
         } catch (_: Exception) {
@@ -1371,7 +1363,6 @@ internal object MmVidrift {
                 added = true
             }
         }
-        // extra single stream slots the page fills for some titles
         for (key in listOf("evionUrl", "vexonUrl", "selfhostUrl")) {
             val url = meta.optString(key)
             if (!url.startsWith("http")) continue
@@ -1669,7 +1660,6 @@ internal object MmVidbolt {
     ): Boolean {
         var any = false
 
-        // one json endpoint per media type
         val resolveUrl = if (isTv) {
             if (season == null || episode == null) null
             else "$HOST/api/resolve?type=tv&id=$tmdbId&season=$season&episode=$episode"

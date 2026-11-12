@@ -160,12 +160,10 @@ internal object HiCineSite {
         }
     }
 
-    // year lives in the title, strip it for matching
     private fun cleanTitle(title: String?): String =
         (title ?: "").replace(TITLE_YEAR_RE, "").trim()
 
     private fun knownYears(item: Item): List<Int> {
-        // upload date, use the title year
         return ANY_YEAR_RE.findAll(item.title ?: "")
             .mapNotNull { it.value.toIntOrNull() }.toList()
     }
@@ -189,7 +187,6 @@ internal object HiCineSite {
             tableMatches(table, item, wantSeries)
         }.ifEmpty { hits.filter { (_, item) -> PlayNet.titleMatches(cleanTitle(item.title), title) } }
 
-        // wrong year means a different title
         val exact = candidates.filter { (_, item) ->
             PlayNet.normalizeTitle(cleanTitle(item.title)) == wanted
         }
@@ -198,7 +195,6 @@ internal object HiCineSite {
         } else {
             candidates.filter { (_, item) -> yearOk(item, res.matchYear) }
         }
-        // detail view knows the real type
         for ((table, item) in pool.take(3)) {
             val detail = fetchDetail(table, item.recordId ?: continue) ?: continue
             if (tableMatches(table, detail, wantSeries)) return detail
@@ -206,7 +202,6 @@ internal object HiCineSite {
         return null
     }
 
-    // only the first slot is a real url
     private fun parseMovieLinks(raw: String?): List<FileEntry> {
         if (raw.isNullOrBlank()) return emptyList()
         return raw.lines().flatMap { line ->
@@ -221,7 +216,6 @@ internal object HiCineSite {
         }
     }
 
-    // column order varies, size can be empty
     private fun parseEntry(raw: String): FileEntry? {
         val url = URL_RE.find(raw)?.value ?: return null
         val quality = QUALITY_RE.find(raw)?.value
@@ -284,7 +278,6 @@ internal object HiCineSite {
 
         val links = serverTokens(base, vcloud) ?: return
         if (links.watchable == false) return
-        // panel file name beats guessed quality
         val info = links.title
             ?: listOfNotNull(entry.quality, entry.size).joinToString(" ")
         coroutineScope {
@@ -295,7 +288,6 @@ internal object HiCineSite {
                     val server = SERVER_LABELS[type] ?: return@async
                     val target = resolveServer(base, type, vcloud, ts, sig) ?: return@async
                     if (type == "gofile") {
-                        // gofile lands on a folder page
                         PlayNet.emitSiteLink(
                             "hicine", target, info,
                             PlayNet.getIndexQuality(info), null, subtitleCallback, callback
@@ -310,7 +302,6 @@ internal object HiCineSite {
 
     private val tokenCache = ConcurrentHashMap<String, Pair<Long, LinksResponse?>>()
 
-    // tokens last ~5 min, cache shorter
     private suspend fun serverTokens(base: String, vcloud: String): LinksResponse? {
         val cached = tokenCache[vcloud]
         if (cached != null && System.currentTimeMillis() - cached.first < TOKEN_TTL) {
@@ -336,7 +327,6 @@ internal object HiCineSite {
         return parsed
     }
 
-    // manual redirects avoid pulling the video body
     private val noRedirectClient: OkHttpClient by lazy {
         app.baseClient.newBuilder()
             .followRedirects(false)
@@ -377,7 +367,6 @@ internal object HiCineSite {
         return "https://pixeldrain.dev/api/file/$id"
     }
 
-    // 10gbps only carries the real url in its query
     private fun resolveTen(goUrl: String): String? {
         val hubcloud = hopLocation(goUrl) ?: return null
         val workerHop = hopLocation(hubcloud) ?: return null

@@ -99,7 +99,6 @@ internal object PlayDiscovery {
         "/discover/movie&with_original_language=${row.code}" +
             "&sort_by=popularity.desc&vote_count.gte=${row.minVotes}"
 
-    // bounded, starts over when full
     private val shownUrls = ConcurrentHashMap.newKeySet<String>()
     private const val SHOWN_CAP = 3000
     private const val SURPRISE_BATCH = 20
@@ -141,7 +140,6 @@ internal object PlayDiscovery {
         return out to hasNext
     }
 
-    // halves the wait on mixed rows
     private suspend fun mixedDiscover(
         api: MainAPI,
         moviePath: String,

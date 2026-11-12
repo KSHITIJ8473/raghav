@@ -61,7 +61,6 @@ internal object HindMoviezSite {
             }
             return matched.firstOrNull { PlayNet.seasonsOf(it.first) == null }
         }
-        // wrong year is a different movie
         return matched.firstOrNull { PlayNet.yearMatches(it.first, res.matchYear) }
     }
 
@@ -93,7 +92,6 @@ internal object HindMoviezSite {
         }
     }
 
-    // hcloud pages wrap the direct workers url twice: url=B64(direct/index.php?url=B64(target))
     private fun hpageTarget(href: String): String? {
         val outer = href.substringAfter("url=", "").substringBefore("&")
         if (outer.isBlank()) return null
@@ -155,7 +153,6 @@ internal object HindMoviezSite {
         } catch (_: Exception) {
             null
         } ?: return
-        // the host signs the id server side (chi.php/f.php), following it lands on the file card
         val doc = try {
             res.document
         } catch (_: Exception) {
@@ -199,7 +196,6 @@ internal object HindMoviezSite {
 
             var chosen: Pair<String, String>? = null
             outer@ for (domain in candidates()) {
-                // year first, bare title buries the pick
                 for (query in PlayNet.searchQueries(res)) {
                     val found = searchPosts(domain, query)
                     if (found.isEmpty()) continue

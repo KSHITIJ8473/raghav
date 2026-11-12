@@ -28,7 +28,6 @@ import java.util.concurrent.ConcurrentHashMap
 internal const val PLAY_UA =
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 
-// unread bodies never return to the pool
 internal fun NiceResponse.close() {
     try {
         okhttpResponse.close()
@@ -48,7 +47,6 @@ internal object PlayNet {
 
     private val verifiedUrls: MutableSet<String> = ConcurrentHashMap.newKeySet()
 
-    // a narrow gate serialises every site's checks
     private val verifyGate = Semaphore(24)
 
     suspend fun <T> retry(attempts: Int = 2, gapMs: Long = 600L, block: suspend () -> T?): T? {
@@ -143,7 +141,6 @@ internal object PlayNet {
 
     private val imageSegment = Regex("""(?i)\.(png|jpe?g|gif|webp|bmp)(?:[?#].*)?$""")
 
-    // child uris resolve relative to the manifest
     private fun resolveManifestChild(href: String, manifestUrl: String): String = when {
         href.startsWith("http") -> href
         href.startsWith("//") -> "https:$href"
@@ -173,7 +170,6 @@ internal object PlayNet {
         }
     }
 
-    // image tiles prove a decoy, unfetchable proves nothing
     private suspend fun playlistServesVideo(
         text: String,
         url: String,
@@ -261,12 +257,10 @@ internal object PlayNet {
         s
     }
 
-    // site spelling, & reads as and
     private fun wordsOf(s: String): List<String> =
         foldAccents(s).lowercase().replace("&", " and ")
             .split(Regex("[^a-z0-9]+")).filter { it.isNotBlank() }
 
-    // title ends where the filler tokens begin
     private val tailJunk = setOf(
         "480p", "720p", "1080p", "1440p", "2160p", "4k", "2k", "8k", "uhd", "qhd", "fhd",
         "bluray", "web", "webdl", "webrip", "webhd", "hdrip", "hdcam", "hdtc", "hdts",
@@ -295,7 +289,6 @@ internal object PlayNet {
 
     private val leadNoise = setOf("download", "watch", "online", "stream")
 
-    // skip the site's own lead words
     private fun nameStarts(postWords: List<String>): Sequence<Int> = sequence {
         yield(0)
         var idx = 0
@@ -316,14 +309,12 @@ internal object PlayNet {
         if (normQuery.isBlank()) return false
         val normPost = normalizeTitle(postTitle)
         if (!normPost.contains(normQuery)) return false
-        // long names are unambiguous anywhere in the post
         if (normQuery.length >= 10) return true
 
         val queryWords = wordsOf(query)
         val postWords = wordsOf(postTitle)
         if (queryWords.isEmpty() || postWords.isEmpty()) return false
 
-        // whole word match, k g f still lines up with kgf
         for (start in nameStarts(postWords)) {
             val maxEnd = minOf(start + queryWords.size, postWords.size)
             for (end in start + 1..maxEnd) {
@@ -335,7 +326,6 @@ internal object PlayNet {
         return false
     }
 
-    // movie requests never want series markers
     fun isSeriesPost(text: String?): Boolean {
         if (text.isNullOrBlank()) return false
         if (seasonsOf(text) != null) return true
@@ -351,20 +341,30 @@ internal object PlayNet {
         return true
     }
 
-    // most specific rounds first, bare title last
     fun searchQueries(res: PlayLinkData): List<String> {
         val title = res.title?.takeIf { it.isNotBlank() } ?: return emptyList()
         val out = LinkedHashSet<String>()
-        res.matchYear?.let { year -> out.add("$title $year") }
-        out.add(title)
+        val year = res.matchYear
+        if (res.season == null) {
+            year?.let { out.add("$title $it") }
+            out.add(title)
+        } else {
+            out.add(title)
+            year?.let { out.add("$title $it") }
+        }
         res.orgTitle
             ?.takeIf {
                 it.isNotBlank() && normalizeTitle(it).isNotBlank() &&
                     normalizeTitle(it) != normalizeTitle(title)
             }
             ?.let { org ->
-                res.matchYear?.let { year -> out.add("$org $year") }
-                out.add(org)
+                if (res.season == null) {
+                    year?.let { y -> out.add("$org $y") }
+                    out.add(org)
+                } else {
+                    out.add(org)
+                    year?.let { y -> out.add("$org $y") }
+                }
             }
         return out.toList()
     }
@@ -613,9 +613,6 @@ internal object PlayNet {
         } catch (_: Exception) {}
     }
 
-    // mirror domains rotate faster than any registry, the family is matched by
-    // host substring so hubcloud.pw and hubdrive.blog land in our own scrapers
-    // instead of the fuzzy loadExtractor pass that hands them to strangers
     fun extractorFor(url: String): ExtractorApi? {
         val host = hostOf(url)
         if (host.isEmpty()) return null
@@ -666,7 +663,6 @@ internal object PlayNet {
         callback: (ExtractorLink) -> Unit
     ) {
         if (links.isEmpty()) return
-        // emit each link as its check finishes
         withTimeoutOrNull(45_000L) {
             coroutineScope {
                 links.map { link ->

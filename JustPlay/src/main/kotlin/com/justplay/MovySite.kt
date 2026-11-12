@@ -44,11 +44,8 @@ internal data class MovySourcesReply(
     val subtitles: List<MovySubtitle>? = null
 )
 
-// movy.sx enc=2 wire format: base64url payload starting with "mvm1", then json
-// XORed with a keystream derived from the seed and the tmdb media id
 internal object MovyCrypto {
 
-    // 0x9e3779b9 written as its int32 form, the hex literal would be a long
     private const val GOLDEN = -1640531527
     private const val MAGIC_M = 109
     private const val MAGIC_V = 118
@@ -70,11 +67,9 @@ internal object MovyCrypto {
         return (value shl s) or (value ushr (32 - s))
     }
 
-    // js computes this on a >>> 0 value
     private fun mod61(value: Int): Int = ((value.toLong() and 0xFFFFFFFFL) % 61L).toInt()
 
     private fun fnv1aMixed(text: String): Int {
-        // 0x811c9dc5 also overflows int, same trick as GOLDEN
         var hash = -2128831035
         for (ch in text) {
             hash = hash xor ch.code
@@ -83,7 +78,6 @@ internal object MovyCrypto {
         return fmix(hash)
     }
 
-    // js ToUint32 applied to the media id string before it enters the mix
     private fun toUint32(text: String): Int {
         val parsed = text.trim().toDoubleOrNull() ?: return 0
         if (parsed.isNaN() || parsed.isInfinite()) return 0
@@ -145,7 +139,6 @@ internal object MovyCrypto {
         return Base64.getDecoder().decode(text)
     }
 
-    // null means the marker did not match, i.e. the seed was wrong
     fun decrypt(payload: String, seed: String, mediaId: String): String? {
         return try {
             val raw = decodeBase64Url(payload)
@@ -184,7 +177,6 @@ internal object MovySite {
         "Origin" to mainUrl
     )
 
-    // the cdn fronts check the site origin on playback requests
     private fun playHeaders(): Map<String, String> = mapOf(
         "User-Agent" to UA,
         "Referer" to "$mainUrl/",
@@ -221,8 +213,6 @@ internal object MovySite {
         City("cancun", "Cancun", "Spanish")
     )
 
-    // seeds live for roughly 30 seconds and the nodes behind cloudflare often
-    // disagree about which one is current, one pool keeps every city in sync
     private class SeedPool(private val mediaId: String) {
         @Volatile
         private var seed: String? = null
@@ -281,7 +271,6 @@ internal object MovySite {
         }
     }
 
-    // the api double encodes the title, the extractors expect the leftover escaping
     private fun titleOnWire(title: String): String {
         val once = java.net.URLEncoder.encode(title, "UTF-8").replace("+", "%20")
         return once.replace("%", "%25")
@@ -311,7 +300,6 @@ internal object MovySite {
         return "$STREAM_BASE/${city.slug}/sources?$parts"
     }
 
-    // a 401 means the node knows a different seed, retry before pulling a new one
     private suspend fun citySources(
         city: City,
         mediaType: String,
@@ -346,7 +334,6 @@ internal object MovySite {
             when {
                 code == 200 && body != null -> {
                     val plain = MovyCrypto.decrypt(body, seed, tmdbId) ?: run {
-                        // marker mismatch, this node scrambled with another seed
                         staleSeedStrikes++
                         if (staleSeedStrikes >= 2) {
                             pool.drop()
@@ -399,11 +386,9 @@ internal object MovySite {
     ) {
         reply.subtitles.orEmpty().forEach { sub ->
             val url = sub.url?.takeIf { it.startsWith("http") } ?: return@forEach
-            // bare relay links without a format tag are dead placeholders
             val format = sub.type?.lowercase() ?: return@forEach
             if (format != "vtt" && format != "srt") return@forEach
             var label = sub.language?.takeIf { it.isNotBlank() } ?: sub.lang ?: return@forEach
-            // two letter codes point at dead relay tokens, real tracks are full names
             if (label.length < 4) return@forEach
             val cut = label.indexOf(" - [")
             if (cut > 0) label = label.substring(0, cut).trim()
@@ -429,7 +414,6 @@ internal object MovySite {
             val url = source.url?.takeIf { it.startsWith("http") } ?: return@forEach
             val qualityLabel = source.quality.orEmpty().trim()
             if (qualityLabel.isEmpty()) return@forEach
-            // austin only keeps the english row, delhi carries the other indian languages
             if (city.slug == "austin" && qualityLabel != "English") return@forEach
             if (!seenUrls.add(url)) return@forEach
             val info = buildString {

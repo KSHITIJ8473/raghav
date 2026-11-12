@@ -34,7 +34,6 @@ internal object MoviesLinkBdSite {
     @Volatile
     private var hubCheckedAt = 0L
 
-    // the hub only lists mirrors that link straight into content paths
     private val mirrorRegex = Regex(
         "https?://([a-z0-9-]+\\.movielinkbd\\.(?:at|li|tv|app|net))(?=/)",
         RegexOption.IGNORE_CASE
@@ -42,7 +41,6 @@ internal object MoviesLinkBdSite {
 
     private val keyRegex = Regex("var K=\"([a-f0-9]{24})\"")
 
-    // the file token is base64 of the path, XORed with a keystream from the seed
     private fun decodeDl(payload: String, seedHex: String, rounds: Int): String? {
         return try {
             val raw = Base64.decode(payload, Base64.DEFAULT)
@@ -59,7 +57,6 @@ internal object MoviesLinkBdSite {
         }
     }
 
-    // the go token is base64url XORed with the page key
     private fun decodeGo(token: String, key: String): String? {
         return try {
             var b64 = token.replace("-", "+").replace("_", "/")
@@ -108,8 +105,6 @@ internal object MoviesLinkBdSite {
 
     private data class BdPost(val title: String, val url: String)
 
-    // /go/ tokens and the file pages only answer the session that walked the
-    // chain in order, every hop carries the cookies picked up so far
     private class BdSession {
         private val cookies = java.util.concurrent.ConcurrentHashMap<String, String>()
 
@@ -174,7 +169,6 @@ internal object MoviesLinkBdSite {
             }
             return matched.firstOrNull { PlayNet.seasonsOf(it.title) == null }
         }
-        // wrong year is a different movie
         return matched.firstOrNull { PlayNet.yearMatches(it.title, res.matchYear) }
     }
 
@@ -193,7 +187,6 @@ internal object MoviesLinkBdSite {
 
     private fun episodeCard(doc: Document, season: Int, episode: Int): Element? {
         return doc.select("div.ep-card").firstOrNull { card ->
-            // single season shows often ship an empty season attribute
             val cardSeason = card.attr("data-season-number").toIntOrNull()
             if (cardSeason != null && cardSeason != season) return@firstOrNull false
             if (card.attr("data-episode-number").toIntOrNull() == episode) return@firstOrNull true
@@ -203,8 +196,6 @@ internal object MoviesLinkBdSite {
         }
     }
 
-    // the episode grid is built client side, the server markup only keeps
-    // h5 headings with the download buttons as plain siblings after them
     private fun episodeButtons(doc: Document, season: Int, episode: Int): List<Element> {
         val epTag = Regex("(?i)Episode\\s*:?\\s*0*$episode(?!\\d)")
         val seasonTag = Regex("(?i)\\bS0*$season\\b")
@@ -275,7 +266,6 @@ internal object MoviesLinkBdSite {
 
     private class BdRow(val host: String, val path: String)
 
-    // the row set rotates between renders, data-host is the only stable name
     private fun fileRows(doc: Document, key: String): List<BdRow> {
         val rows = mutableListOf<BdRow>()
         for (a in doc.select("a.dlh-arow")) {
@@ -347,8 +337,6 @@ internal object MoviesLinkBdSite {
         } catch (_: Exception) {}
     }
 
-    // fsl hands out a one time /d/ link that either redirects straight to the
-    // file or serves a small exchange page carrying the direct link
     private suspend fun emitFsl(
         url: String,
         info: String,
@@ -361,11 +349,7 @@ internal object MoviesLinkBdSite {
             emitDirect(target, "FSL", info, quality, callback)
             return
         }
-        val res = try {
-            app.get(url, headers = PlayNet.headers(referer), timeout = 15L)
-        } catch (_: Exception) {
-            null
-        } ?: return
+        val res = PlayNet.fetchWithCf(url, referer) ?: return
         val doc = res.document
         res.close()
         for (a in doc.select("a[href]")) {
@@ -413,7 +397,6 @@ internal object MoviesLinkBdSite {
                 )
             }
         }
-        // some mirrors keep the hubcloud button layout behind the same page
         try {
             PlayHubCloud.emitHubServers(
                 doc, PlayNet.getBaseUrl(pageUrl), pageUrl, subtitleCallback
@@ -448,7 +431,6 @@ internal object MoviesLinkBdSite {
         when {
             row.path.startsWith("/go/") -> {
                 val target = goTarget(domain, row.path, session, referer, key) ?: return
-                // a stale or raced token bounces back to the hub, never chase it
                 if (PlayNet.hostOf(target).contains("movielinkbd")) return
                 if (row.host.contains("xcloud") || PlayNet.hostOf(target).contains("xcloud")) {
                     emitXCloud(target, info, quality, referer, subtitleCallback, callback)
@@ -501,9 +483,6 @@ internal object MoviesLinkBdSite {
         }
     }
 
-    // xcloud sits behind cloudflare and follows the hubcloud layout, but the
-    // watch player also builds its stream in javascript, so when the markup
-    // carries no buttons a webview sniffs the playlist out of the player
     private val xcloudGate = Mutex()
     private val mediaPattern = Regex("""(?i)\.(m3u8|mp4|mkv)(?:\?|$)""")
 
@@ -555,7 +534,6 @@ internal object MoviesLinkBdSite {
                     null
                 }
             } ?: return
-            // the interceptor falls back to the page url when nothing is sniffed
             if (!mediaPattern.containsMatchIn(resolved)) return
             val type = if (resolved.contains(".m3u8", true)) {
                 ExtractorLinkType.M3U8

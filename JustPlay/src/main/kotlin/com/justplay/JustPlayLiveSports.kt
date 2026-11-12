@@ -124,7 +124,6 @@ private object LiveCrypto {
         }
     }
 
-    // non json means the wrong aes key
     fun decrypt(payload: String): String? {
         return try {
             val ciphertext = base64DecodeArray(
@@ -160,7 +159,6 @@ private object LiveCrypto {
     }
 }
 
-// host rotates on blocks, cached from remote config
 private class RemoteDomain(
     private val ttlMs: Long = 1_800_000L,
     private val fallbackTtlMs: Long = 120_000L,
@@ -202,7 +200,6 @@ private class RemoteDomain(
                 expiresAt = now + ttlMs
                 return@withLock fetched
             }
-            // stale host beats hammering firebase offline
             if (current == null) {
                 val result = fallback()
                 value = result
@@ -214,7 +211,6 @@ private class RemoteDomain(
     }
 }
 
-// dead mirror invalidates the cached host
 private class StaleDomainInterceptor(private val domain: RemoteDomain) : okhttp3.Interceptor {
     override fun intercept(chain: okhttp3.Interceptor.Chain): okhttp3.Response {
         val host = chain.request().url.host
@@ -249,7 +245,6 @@ object LiveSports {
     @JsonIgnoreProperties(ignoreUnknown = true)
     private data class RemoteConfig(val entries: Map<String, String>? = null)
 
-    // cric_api2 first, cric_api1 is the spare
     private suspend fun baseUrlFromFirebase(): String? {
         return try {
             withContext(Dispatchers.IO) {
@@ -357,13 +352,11 @@ object LiveSports {
         return if (a == b) a else "$a vs $b"
     }
 
-    // channel entries show one crest for both teams
     private fun isSameTeam(a: String?, b: String?): Boolean {
         if (a.isNullOrBlank() || b.isNullOrBlank()) return false
         return a.trim().equals(b.trim(), ignoreCase = true)
     }
 
-    // wide card with both crests, live tv style
     private fun matchCardUrl(event: LiveEvent): String {
         val info = event.eventInfo
         val title = java.net.URLEncoder.encode(info?.eventName ?: event.title ?: "", "UTF-8")
@@ -474,7 +467,6 @@ object LiveSports {
         }
     }
 
-    // per stream headers after a pipe: url|Referer=..&Origin=..
     private fun parseStreamLink(link: String): Pair<String, Map<String, String>> {
         val headers = mutableMapOf<String, String>()
         if (!link.contains("|")) {
@@ -534,7 +526,6 @@ object LiveSports {
         return true
     }
 
-    // type 7 is clearkey dash, hex kid:hex key
     private suspend fun emitDrmLink(
         serverName: String,
         url: String,
@@ -593,7 +584,6 @@ object LiveSports {
         return loadInWebView(url)
     }
 
-    // some servers hide the stream in their player page
     private suspend fun loadInWebView(embedUrl: String): String? {
         return withContext(Dispatchers.Main) {
             suspendCoroutine { continuation ->
@@ -605,7 +595,6 @@ object LiveSports {
                 var captured = false
                 var resumed = false
 
-                // drop late resumes after cancel
                 fun finishOnce(result: String?) {
                     if (resumed) return
                     resumed = true
@@ -665,7 +654,6 @@ object LiveSports {
                     override fun onPageFinished(view: WebView, pageUrl: String) {
                         super.onPageFinished(view, pageUrl)
                         if (captured) return
-                        // player pages park the stream in a playbackURL var
                         Handler(Looper.getMainLooper()).postDelayed({
                             if (captured) return@postDelayed
                             try {
@@ -690,7 +678,6 @@ object LiveSports {
                 webView.webChromeClient = WebChromeClient()
                 webView.loadUrl(embedUrl)
 
-                // hard stop so a hanging page cannot eat the whole load
                 Handler(Looper.getMainLooper()).postDelayed({
                     if (!captured) {
                         try {

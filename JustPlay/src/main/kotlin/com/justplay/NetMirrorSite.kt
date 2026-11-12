@@ -12,10 +12,13 @@ import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.getQualityFromName
 import com.lagradost.cloudstream3.utils.httpsify
 import com.lagradost.cloudstream3.utils.newExtractorLink
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
@@ -110,6 +113,8 @@ internal object NetMirrorSite {
 
     private val cookieLock = Mutex()
 
+    private val refreshScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
     private fun apiCookies(cookie: String, ott: String): Map<String, String> =
         mapOf("t_hash_t" to cookie, "ott" to ott, "hd" to "on")
 
@@ -167,14 +172,16 @@ internal object NetMirrorSite {
             cookieAt = System.currentTimeMillis()
             return stored
         }
-        return cookieLock.withLock {
-            if (cookieFresh(cookieAt)) return cookieValue
-            val fresh = solveCookie()
-            cookieValue = fresh
-            cookieAt = if (fresh == null) 0L else System.currentTimeMillis()
-            fresh?.let { storeCookie(it) }
-            fresh
-        }
+        return refreshCookie()
+    }
+
+    private suspend fun refreshCookie(): String? = cookieLock.withLock {
+        if (cookieFresh(cookieAt)) return@withLock cookieValue
+        val fresh = solveCookie()
+        cookieValue = fresh
+        cookieAt = if (fresh == null) 0L else System.currentTimeMillis()
+        fresh?.let { storeCookie(it) }
+        fresh
     }
 
     private fun addhashOf(response: com.lagradost.nicehttp.NiceResponse): String = try {
@@ -390,7 +397,7 @@ internal object NetMirrorSite {
         try {
             CloudStreamApp.setKey(KEY_COOKIE_AT, "0")
         } catch (_: Exception) {}
-        val fresh = solvedCookie() ?: return false
+        val fresh = refreshCookie() ?: return false
         val freshHeaders = playlistHeaders(fresh, ott.code)
         val retry = fetchPlaylist(ott, id, title, freshHeaders, fresh) ?: return false
         return emitSources(site, ott, retry, freshHeaders, subtitleCallback, callback)
@@ -491,7 +498,6 @@ internal object NetMirrorSite {
 
     private suspend fun playableFile(file: String, headers: Map<String, String>): String? {
         val b = base()
-        // hp variant blocks later requests, prefer plain
         val strippedFile = file
             .replace("&hp=yes", "")
             .replace("hp=yes&", "")
@@ -583,6 +589,9 @@ internal object NetMirrorSite {
     ) {
         try {
             val cookie = solvedCookie() ?: return
+            if (System.currentTimeMillis() - cookieAt > 120_000L) {
+                refreshScope.launch { runCatching { refreshCookie() } }
+            }
             coroutineScope {
                 catalogs.forEach { ott ->
                     async(Dispatchers.IO) {
@@ -595,7 +604,6 @@ internal object NetMirrorSite {
         } catch (_: Exception) {}
     }
 
-    // the solve takes ~1 min cold, warm it early
     suspend fun prefetch() {
         try {
             base()

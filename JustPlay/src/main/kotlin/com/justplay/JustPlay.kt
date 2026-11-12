@@ -62,20 +62,16 @@ class JustPlay : MainAPI() {
         private const val KEY_LIVE_SPORTS = "JUSTPLAY_LIVE_SPORTS"
         private const val KEY_LIVE_SPORTS_TOP = "JUSTPLAY_LIVE_SPORTS_TOP"
         private const val LIVE_ROW = "live_sports"
-        // the cap only stops junk floods
         private const val LINKS_PER_SOURCE = 40
 
-        // app cancels loadLinks at 120s, stay under it
         private const val SITE_BUDGET_MS = 90_000L
 
-        // fast sites first, then a steady release beat
         private const val FIRST_RELEASE_MS = 6_000L
         private const val RELEASE_BEAT_MS = 1_500L
 
         private fun widenClient() {
             try {
                 val dispatcher = app.baseClient.dispatcher
-                // live sports resolve beside site scrapes, both need room in the queue
                 if (dispatcher.maxRequestsPerHost < 40) dispatcher.maxRequestsPerHost = 40
                 if (dispatcher.maxRequests < 200) dispatcher.maxRequests = 200
             } catch (_: Exception) {}
@@ -180,12 +176,10 @@ class JustPlay : MainAPI() {
         Pair("/discover/tv&with_original_language=ko&sort_by=popularity.desc", "Korean Shows")
     )
 
-    // keep the burst small for low end devices
     override var sequentialMainPage = true
     override var sequentialMainPageDelay = 150L
     override var sequentialMainPageScrollDelay = 250L
 
-    // rebuilt per access so settings apply on restart
     override val mainPage: List<MainPageData>
         get() {
             val rows = ArrayList<MainPageData>(48)
@@ -211,7 +205,6 @@ class JustPlay : MainAPI() {
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         DonationManager.checkAndShow()
-        // cold solve takes ~1 min, start it early
         prefetchScope.launch { NetMirrorSite.prefetch() }
         val data = request.data
         if (data == LIVE_ROW) {
@@ -263,11 +256,9 @@ class JustPlay : MainAPI() {
         return items
     }
 
-    // the image loader cannot render svg
     private fun pickTmdbLogo(logos: org.json.JSONArray?): String? {
         if (logos == null || logos.length() == 0) return null
 
-        // optString turns a json null into the literal string, guard both cases
         fun urlOf(logo: org.json.JSONObject): String? {
             val fp = logo.optString("file_path")
             if (fp.isBlank() || fp == "null") return null
@@ -309,7 +300,6 @@ class JustPlay : MainAPI() {
 
     override suspend fun load(url: String): LoadResponse? {
         prefetchScope.launch { NetMirrorSite.prefetch() }
-        // live payloads carry a slug
         val live = try {
             parseJson<LiveLoadData>(url)
         } catch (_: Exception) {
@@ -550,7 +540,6 @@ class JustPlay : MainAPI() {
         val seenUrls = ConcurrentHashMap.newKeySet<String>()
         val sourceCounts = ConcurrentHashMap<String, AtomicInteger>()
 
-        // short batches, single links churn the player list
         val held = mutableListOf<ExtractorLink>()
         val heldLock = Any()
 
@@ -561,7 +550,6 @@ class JustPlay : MainAPI() {
                 held.clear()
                 out
             }
-            // streams first so autoplay shows a frame fast
             batch.sortedWith(compareBy({ it.type == ExtractorLinkType.VIDEO }, { -it.quality }))
                 .forEach(callback)
         }
@@ -574,7 +562,6 @@ class JustPlay : MainAPI() {
             val emitted = sourceCounts.computeIfAbsent(link.source) { AtomicInteger() }
             if (emitted.incrementAndGet() > LINKS_PER_SOURCE) return@label
             val out = if (treatAsDownload) PlaySourceFilter.taggedDownloadOnly(link) else link
-            // uhd remuxes are slow to first frame, cap the rank at 1080p
             if (!treatAsDownload && out.type == ExtractorLinkType.VIDEO && out.quality > Qualities.P1080.value) {
                 out.quality = Qualities.Unknown.value
             }
@@ -585,7 +572,6 @@ class JustPlay : MainAPI() {
             val gate = Semaphore(siteConcurrency())
             val jobs = active.map { site ->
                 async(Dispatchers.IO) {
-                    // budget covers the permit wait too
                     try {
                         withTimeoutOrNull(SITE_BUDGET_MS) {
                             gate.withPermit {

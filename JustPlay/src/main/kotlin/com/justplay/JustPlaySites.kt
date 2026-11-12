@@ -260,7 +260,6 @@ internal object HdHub4uSite {
         } catch (_: Exception) {}
     }
 
-    // the site spells the episode marker with random casing
     private suspend fun emitEpisodes(
         doc: Document,
         domain: String,
@@ -269,28 +268,24 @@ internal object HdHub4uSite {
         callback: (ExtractorLink) -> Unit
     ) {
         val marker = Regex("(?i)episodes?\\s*[:\\-]?\\s*(\\d+)")
-        val heads = doc.select("h3, h4").filter { el ->
-            el.selectFirst("a[href]") == null && marker.containsMatchIn(el.text())
-        }
-        if (heads.isEmpty()) return
         val wanted = res.episode ?: return
-        val rows = mutableListOf<Element>()
-        for (head in heads) {
-            val num = marker.find(head.text())?.groupValues?.get(1)?.toIntOrNull() ?: continue
-            if (num != wanted) continue
-            var sib = head.nextElementSibling()
-            while (sib != null && sib.tagName() in listOf("h3", "h4")) {
-                if (marker.containsMatchIn(sib.text()) && sib.selectFirst("a[href]") == null) break
-                rows.add(sib)
-                sib = sib.nextElementSibling()
-            }
-            if (rows.isNotEmpty()) break
+        val head = doc.select("h3, h4").firstOrNull { el ->
+            marker.find(el.text())?.groupValues?.get(1)?.toIntOrNull() == wanted
+        } ?: return
+
+        val containers = mutableListOf<Element>()
+        containers.add(head)
+        var sib = head.nextElementSibling()
+        while (sib != null && sib.tagName() !in listOf("h2", "h3", "h4", "h5")) {
+            containers.add(sib)
+            sib = sib.nextElementSibling()
         }
+
         val semaphore = Semaphore(4)
         coroutineScope {
-            rows.forEach { row ->
-                val quality = PlayNet.getIndexQuality(row.text())
-                for (a in row.select("a[href]")) {
+            containers.forEach { box ->
+                val quality = PlayNet.getIndexQuality(box.text())
+                for (a in box.select("a[href]")) {
                     val href = a.absUrl("href").ifBlank { a.attr("href") }
                     if (!href.startsWith("http")) continue
                     val label = a.text().trim().lowercase()
@@ -298,14 +293,13 @@ internal object HdHub4uSite {
                         label.contains("watch") -> {
                             async(Dispatchers.IO) {
                                 semaphore.withPermit {
-                                    PlayNet.emitOwnLink(
+                                    PlayNet.emitSiteLink(
                                         "hdhub4u", href, "Episode $wanted Watch", null,
                                         domain, subtitleCallback, callback
                                     )
                                 }
                             }
                         }
-                        // search links only carry a query, the json api behind them has the files
                         href.contains("search-recover") -> {
                             async(Dispatchers.IO) {
                                 semaphore.withPermit {
@@ -380,13 +374,11 @@ internal object HdHub4uSite {
             val domain = domain()
             if (res.title.isNullOrBlank()) return
 
-            // year narrows the flood before matching
             var chosen: List<HubPost> = emptyList()
             for (query in PlayNet.searchQueries(res)) {
                 val posts = typesenseSearch(domain, query)
                 if (posts.isEmpty()) continue
 
-                // an imdb twin settles odd spellings
                 res.imdbId?.takeIf { it.isNotBlank() }?.let { id ->
                     posts.firstOrNull { it.imdbId.equals(id, ignoreCase = true) }?.let { hit ->
                         chosen = listOf(hit)
@@ -403,7 +395,6 @@ internal object HdHub4uSite {
                             if (seasonPosts.isNotEmpty()) seasonPosts
                             else matched.filter { PlayNet.seasonsOf(it.title) == null }
                         } else {
-                            // wrong year is a different movie
                             matched.filter { PlayNet.yearMatches(it.title, res.matchYear) }
                         }.take(2)
                     }
@@ -494,7 +485,6 @@ internal object FourKhdHubSite {
                 val elements = searchDoc.select("div.card-grid > a.movie-card")
                 fun contentOf(el: Element): String = el.selectFirst("div.movie-card-content")?.text()?.lowercase() ?: ""
 
-                // wrong year is a different title
                 matched = elements.firstOrNull { el ->
                     val content = contentOf(el)
                     PlayNet.titleMatchesFor(content, res) && PlayNet.yearMatches(content, res.year)
@@ -734,7 +724,6 @@ internal object Movies4uSite {
             if (res.title.isNullOrBlank()) return
             var chosen: List<Pair<String, String>> = emptyList()
 
-            // year keeps the short list honest
             for (query in PlayNet.searchQueries(res)) {
                 val posts = findPosts(query)
                 if (posts.isEmpty()) continue
@@ -748,7 +737,6 @@ internal object Movies4uSite {
                     if (seasonPosts.isNotEmpty()) seasonPosts
                     else matched.filter { (postTitle, _) -> PlayNet.seasonsOf(postTitle) == null }
                 } else {
-                    // wrong year is a different movie
                     matched.filter { (postTitle, _) -> PlayNet.yearMatches(postTitle, res.matchYear) }
                 }.take(2)
                 if (chosen.isNotEmpty()) break
@@ -836,7 +824,6 @@ internal object TmfSite {
                     if (res.season != null) PlayNet.seasonsOf(t)?.contains(res.season) == true
                     else PlayNet.yearMatches(t, res.matchYear)
                 } ?: matched.firstOrNull { (t, _) ->
-                    // a season request may sit in a seasonless post
                     res.season != null && PlayNet.seasonsOf(t) == null
                 }
                 if (target != null) break
@@ -878,7 +865,6 @@ internal object MultimoviesSite {
     private const val DEFAULT_DOMAIN = "https://m1.multimovies.courses"
     private const val DOMAIN_CHECK_TTL_MS = 5L * 60 * 1000
 
-    // garden is kept last because it is challenge walled today
     private val domainFallbacks = listOf(
         "https://m1.multimovies.courses",
         "https://multimovies.garden",
@@ -894,7 +880,6 @@ internal object MultimoviesSite {
     @Volatile private var domainCheckAt = 0L
     @Volatile private var resolvedDomain: String? = null
 
-    // probe a page every catalog renders
     private suspend fun currentDomain(): String {
         val now = System.currentTimeMillis()
         if (now - domainCheckAt < DOMAIN_CHECK_TTL_MS) {
@@ -1079,7 +1064,6 @@ internal object MultimoviesSite {
         val linkCb: (ExtractorLink) -> Unit = { link ->
             if (seenLinks.add(link.url)) {
                 val name = "[Multimovies] - " + link.name.replace(Regex("\\s+"), " ").trim()
-                // labels usually carry the quality
                 val quality = if (link.quality != Qualities.Unknown.value) {
                     link.quality
                 } else {
@@ -1211,7 +1195,6 @@ internal object MultimoviesSite {
         val norm = PlayNet.normalizeTitle(title)
         val exact = cards.filter { PlayNet.normalizeTitle(it.title) == norm }
         val pool = exact.ifEmpty { cards }
-        // a card from another year is a different title, not a fallback
         return pool.firstOrNull { c ->
             c.year == null || year == null || kotlin.math.abs(c.year - year) <= 1
         }

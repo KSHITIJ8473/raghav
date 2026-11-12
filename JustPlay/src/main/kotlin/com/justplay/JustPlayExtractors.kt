@@ -59,7 +59,6 @@ class PlayHubCloud : ExtractorApi() {
             if (link.contains("download", true)) return link
             val id = link.substringBefore("?").substringBefore("#").substringAfterLast("/")
             if (id.isBlank()) return null
-            // bare url, attachment form confuses players
             return "${PlayNet.getBaseUrl(link)}/api/file/$id"
         }
 
@@ -176,8 +175,6 @@ class PlayHubCloud : ExtractorApi() {
                         } catch (_: Exception) {}
                     }
                     abs.startsWith("http") -> {
-                        // family hosts never reach the global registry, its fuzzy
-                        // matching hands download pages to unrelated extractors
                         if (PlayNet.extractorFor(abs) == null) {
                             try {
                                 emitted = loadExtractor(abs, base, subtitleCallback, callback) || emitted
@@ -317,7 +314,6 @@ class PlayInstantCloud : ExtractorApi() {
             )
             var link = downloadLink(url, headers)
             if (link == null) {
-                // a cold file reports needs_poll until the drive read finishes
                 var ready = false
                 repeat(3) {
                     if (ready) return@repeat

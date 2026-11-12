@@ -19,7 +19,6 @@ import java.net.URI
 import java.net.URLDecoder
 import java.util.concurrent.ConcurrentHashMap
 
-// same theme and api, one object covers both sites
 internal object VegaMoviesSite {
 
     private val baseDomains = listOf("https://vegamovies.lease", "https://rogmovies.autos", "https://rogmovies.im")
@@ -64,7 +63,6 @@ internal object VegaMoviesSite {
         val domain: String = ""
     )
 
-    // the typesense proxy throws 5xx under load, retries keep it usable
     private suspend fun searchPosts(domain: String, query: String): List<VegaDoc> {
         val url = "$domain/ts-search.php?q=${Uri.encode(query)}&page=1"
         val text = PlayNet.retry(attempts = 3, gapMs = 800L) {
@@ -105,12 +103,10 @@ internal object VegaMoviesSite {
             }
             matched.firstOrNull { PlayNet.seasonsOf(it.post_title ?: "") == null }
         } else {
-            // wrong year is a different movie
             matched.firstOrNull { PlayNet.yearMatches(it.post_title ?: "", res.matchYear) }
         }
     }
 
-    // spin offs keep their own words
     private fun sameShow(postTitle: String, title: String): Boolean {
         var stripped = PlayNet.normalizeTitle(postTitle)
         for (prefix in listOf("download", "watch")) {
@@ -137,7 +133,6 @@ internal object VegaMoviesSite {
         val movieGroups: List<QualityGroup>
     )
 
-    // season headline then quality headlines with server buttons
     private fun parsePost(html: String): PostDetail? {
         val doc = Jsoup.parse(html)
         val content = doc.selectFirst(".entry-content, .post-content, article") ?: doc
@@ -212,7 +207,6 @@ internal object VegaMoviesSite {
         }
     }
 
-    // the middle hop carries servers or episode sections
     class DrivePage(
         val servers: List<Pair<String, String>>,
         val episodes: Map<Int, List<Pair<String, String>>>
@@ -267,10 +261,8 @@ internal object VegaMoviesSite {
         return page
     }
 
-    // a resolved server ready for the picker
     class Server(val name: String, val url: String)
 
-    // route one button to its direct files, named per server
     suspend fun resolve(href: String): List<Server> {
         if (!href.startsWith("http") || deadHosts.containsMatchIn(href)) return emptyList()
         val host = hostOf(href)
@@ -297,7 +289,6 @@ internal object VegaMoviesSite {
         ""
     }
 
-    // already the file, just name it
     private fun directServer(href: String): List<Server> {
         val h = href.lowercase()
         return when {
@@ -313,7 +304,6 @@ internal object VegaMoviesSite {
         return "${PlayNet.getBaseUrl(href)}/api/file/$id"
     }
 
-    // vcloud blocks plain clients, this cookie is set on first visit
     private fun vcloudHeaders(referer: String?): Map<String, String> {
         val h = PlayNet.browserHeaders(referer).toMutableMap()
         h["Cookie"] = "xla=s4t"
@@ -331,7 +321,6 @@ internal object VegaMoviesSite {
     private val vcloudTokenRegex = Regex("""var\s+url\s*=\s*atob\s*\(\s*atob\s*\(\s*['"]([^'"]+)['"]""")
     private val plainUrlRegex = Regex("""var\s+url\s*=\s*['"]([^'"]+)['"]""")
 
-    // token page hides in double base64, it carries every server
     private suspend fun vcloudTarget(url: String): Pair<String, String>? {
         val first = vcloudGet(url, "https://nexdrive.beer/") ?: return null
         var target = vcloudTokenRegex.find(first)?.groupValues?.get(1)
@@ -347,7 +336,6 @@ internal object VegaMoviesSite {
         return target?.takeIf { it.startsWith("http") }?.let { hopUrl to it }
     }
 
-    // name download buttons after their server
     private fun serverNameOf(label: String, href: String): String? {
         val low = label.lowercase()
         val h = href.lowercase()
@@ -387,7 +375,6 @@ internal object VegaMoviesSite {
             addServer(out, name, href)
         }
 
-        // a second pixeldrain hides in a js var
         Regex("""var\s+pxl\s*=\s*["']([^"']+)["']""").find(html)?.groupValues?.get(1)
             ?.takeIf { it.startsWith("http") && it.contains("pixeldrain") }
             ?.let { addServer(out, "PixelDrain", it) }
@@ -395,7 +382,6 @@ internal object VegaMoviesSite {
         return out.distinctBy { it.url }
     }
 
-    // named button to its direct file, dead ones stay out
     private suspend fun addServer(out: MutableList<Server>, name: String, href: String) {
         when (name) {
             "10Gbps" -> gpdlDirect(href)?.let { out.add(Server(name, it)) }
@@ -405,7 +391,6 @@ internal object VegaMoviesSite {
         }
     }
 
-    // a share page names its servers on the generate page
     private suspend fun hubcloudServers(url: String): List<Server> {
         val res = try {
             app.get(url, headers = PlayNet.browserHeaders(), timeout = 20L)
@@ -437,7 +422,6 @@ internal object VegaMoviesSite {
         return out.distinctBy { it.url }
     }
 
-    // vegadrive answers skydrop on the json api only
     private suspend fun vegadriveSkydrop(url: String): Server? {
         val page = try {
             app.get(url, headers = PlayNet.browserHeaders("https://nexdrive.beer/"), timeout = 20L)
@@ -467,7 +451,6 @@ internal object VegaMoviesSite {
         return null
     }
 
-    // link= param is the file
     private suspend fun fastdlDirect(url: String): String? {
         return try {
             val res = app.get(url, headers = PlayNet.browserHeaders(), timeout = 20L)
@@ -491,12 +474,10 @@ internal object VegaMoviesSite {
 
     private val filePressId = Regex("""/file/([a-f0-9]{16,40})""")
 
-    // api sits on the short domain
     private suspend fun filepressDirect(url: String): String? {
         val id = filePressId.find(url)?.groupValues?.get(1) ?: return null
         val base = "https://filebee.xyz"
 
-        // dotflix survives, worker hands out expiring links
         val share = filepressTask(id, "dotFlixDownlaod", base)
         if (share != null && share.startsWith("http")) {
             resolveDotFlix(share)?.let { return it }
@@ -564,7 +545,6 @@ internal object VegaMoviesSite {
         }
     }
 
-    // btoa file code, reversed base64 to the extract endpoint
     private suspend fun resolveDotFlix(shareUrl: String): String? {
         return try {
             val text = app.get(
@@ -602,7 +582,6 @@ internal object VegaMoviesSite {
         }
     }
 
-    // gofile folders hold samples, biggest child wins
     private suspend fun gofileDirect(url: String): String? {
         val code = url.substringAfterLast("/").substringBefore("#").substringBefore("?")
         if (code.isBlank()) return null
@@ -637,7 +616,6 @@ internal object VegaMoviesSite {
         }
     }
 
-    // gpdl bounces through a worker and a generator page
     private suspend fun gpdlDirect(url: String): String? {
         var cur = url
         try {
@@ -659,7 +637,6 @@ internal object VegaMoviesSite {
         return null
     }
 
-    // buttons read download now, headline is the real label
     private fun infoFrom(groupLabel: String): String =
         groupLabel.replace(Regex("""(?i)\bdownload\s+now\b|\bdownload\b"""), "")
             .replace(Regex("""\s+"""), " ").trim()
@@ -675,7 +652,6 @@ internal object VegaMoviesSite {
         try {
             if (res.title.isNullOrBlank()) return
 
-            // both catalogs are searched side by side, every round runs both domains
             val candidates = domains()
             suspend fun searchRound(q: String): List<VegaDoc> = coroutineScope {
                 candidates.map { domain ->
@@ -683,7 +659,6 @@ internal object VegaMoviesSite {
                 }.flatMap { it.await() }
             }
 
-            // year first, bare title buries the pick
             var post: VegaDoc? = null
             for (query in PlayNet.searchQueries(res)) {
                 val posts = searchRound(query)
@@ -693,7 +668,6 @@ internal object VegaMoviesSite {
             }
             val post0 = post ?: return
             val permalink = post0.permalink?.takeIf { it.isNotBlank() } ?: return
-            // permalinks come back relative
             val domain = post0.domain.ifBlank {
                 candidates.firstOrNull { permalink.contains(it.removePrefix("https://"), true) }
                     ?: candidates.first()
@@ -712,7 +686,6 @@ internal object VegaMoviesSite {
                     inSeason.isNotEmpty() -> inSeason
                     detail.seasons.isNotEmpty() ->
                         detail.seasons.filter { s -> PlayNet.seasonsOf(s.title) == null }.flatMap { it.groups }
-                    // one season post, blocks are that season's files
                     PlayNet.seasonsOf(post0.post_title ?: "")?.contains(res.season) == true -> detail.movieGroups
                     else -> emptyList()
                 }
@@ -724,7 +697,6 @@ internal object VegaMoviesSite {
             val claimed = ConcurrentHashMap.newKeySet<String>()
             val seenUrls = ConcurrentHashMap.newKeySet<String>()
 
-            // one slot per server, quality and encode
             suspend fun offer(server: Server, tier: Int, info: String, dv: Boolean) {
                 if (!seenUrls.add(server.url)) return
                 val key = "${server.name}|$tier|${if (dv) "dv" else ""}"

@@ -59,8 +59,6 @@ internal object PlayTmfNet {
     }
 
     suspend fun fetchPage(url: String, referer: String? = null): Document? {
-        // the site sits behind a cloudflare wall that opens for some networks
-        // only, the solver is the reliable way in
         val res = PlayNet.fetchWithCf(url, referer) ?: return null
         if (!res.isSuccessful) {
             res.close()
@@ -91,8 +89,6 @@ internal object PlayTmfNet {
         Regex("""(\d{3,4})[pP]\b""").find(text)?.groupValues?.get(1)?.toIntOrNull()
             ?: if (text.contains("2160", true) || text.contains("4K", true) || text.contains("UHD", true)) 2160 else null
 
-    // a bare year from the page title is noise next to the language and codec
-    // tags, everything else in brackets is worth keeping
     fun infoOf(title: String): String =
         Regex("""[\[{(]([^\]})]+)[\]})]""").findAll(title)
             .map { it.groupValues[1].trim() }
@@ -113,8 +109,6 @@ internal object PlayTmfNet {
 
     private fun isDriveJunk(href: String): Boolean = DRIVE_SELF.any { href.contains(it, true) }
 
-    // the drive page keeps its buttons behind a countdown, the button markup
-    // only exists as a base64 copy inside the unlock script
     private fun encodedContentOf(doc: Document): String? {
         for (script in doc.select("script")) {
             val data = script.data()
@@ -179,7 +173,6 @@ internal object PlayTmfNet {
         val jar = mutableMapOf<String, String>()
         var current = url
         val seen = mutableSetOf<String>()
-        // the drive host expects the main site as the navigation source
         val referer = domain()
         repeat(12) {
             if (!seen.add(current)) return null
@@ -236,9 +229,6 @@ internal object PlayTmfNet {
         else -> url
     }
 
-    // mobilejsr and nexdrive serve the same drive app, when one has a bad day
-    // the other answers, zip pack pages are skipped because no player can open
-    // an archive
     suspend fun fetchDrivePage(url: String): DrivePage? {
         val key = driveKey(url)
         driveCache[key]?.let { cached ->
@@ -345,7 +335,6 @@ internal object PlayTmfSources {
 
     suspend fun resolveVCloud(url: String): List<Stream> {
         return try {
-            // the share links carry rel=noreferrer, the host never sees one
             val res = app.get(
                 url,
                 headers = PlayNet.browserHeaders(),
@@ -414,8 +403,6 @@ internal object PlayTmfSources {
             ?.takeIf { it.startsWith("http") }
     }
 
-    // the share page can sit on a mirror front while its provider buttons
-    // point at the vega host, only that origin is accepted as the go referer
     suspend fun resolveVegaDrive(url: String): List<Stream> {
         return try {
             val page = app.get(
@@ -442,8 +429,6 @@ internal object PlayTmfSources {
                 out.add(Stream("V-Drive Vegadrop (10Gbps)", drop, ExtractorLinkType.VIDEO))
             }
 
-            // the bridge bounces dead mirrors back with the provider name in the
-            // query, so the host and not the whole url has to be checked
             val pixel = redirectOf("$vegaBase/go/$token/pixeldrain", "$vegaBase/")
             if (pixel != null && PlayTmfNet.hostOf(pixel).contains("pixeldrain")) {
                 val id = pixel.substringBefore("?").substringBefore("#").substringAfterLast("/")

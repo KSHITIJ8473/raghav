@@ -6,7 +6,7 @@ dependencies {
 
 cloudstream {
     language = "en"
-    description = "Anime with Sub & Dub, real episode titles and multi-language subtitles from AniLight"
+    description = "Anime with Sub & Dub"
     authors = listOf("KSHITIJ8473")
 
     status = 1

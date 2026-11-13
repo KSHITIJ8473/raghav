@@ -7,7 +7,7 @@ dependencies {
 
 cloudstream {
     language = "hi"
-    description = "Indian TV channels through m3u playlists, livetgtv is always on and every playlist pasted in settings opens as its own extension"
+    description = "Indian TV channels through m3u playlists "
     authors = listOf("KSHITIJ8473")
 
     status = 1

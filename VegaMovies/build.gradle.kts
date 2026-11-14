@@ -6,7 +6,7 @@ dependencies {
 
 cloudstream {
     language = "en"
-    description = "Movies and series from Vegamovies and Rogmovies in one place with every server the sites offer"
+    description = "Movies and series from Vegamovies and Rogmovies in one place"
     authors = listOf("KSHITIJ8473")
     status = 1
     tvTypes = listOf("Movie", "TvSeries")

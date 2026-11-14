@@ -12,7 +12,7 @@ dependencies {
 
 cloudstream {
     language = "en"
-    description = "ONE STOP SOLUTION FOR ANIME(SUB,DUB) - Kitsu Catalog"
+    description = "ONE STOP SOLUTION FOR ANIME(SUB,DUB,hardsub) collection of best sources - Kitsu Catalog"
     authors = listOf("raghav")
 
     status = 1

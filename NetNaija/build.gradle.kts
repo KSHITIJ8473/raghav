@@ -16,5 +16,5 @@ cloudstream {
     authors = listOf("raghav")
     status = 1
     tvTypes = listOf("Movie", "TvSeries", "Anime", "AnimeMovie", "OVA")
-    iconUrl = "https://netnaija.film/favicon.ico"
+    iconUrl = "https://cdn.aptoide.com/imgs/9/7/c/97c80794a7f0fc0b43ea49090343c49d_icon.png"
 }

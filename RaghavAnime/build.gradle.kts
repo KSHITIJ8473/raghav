@@ -12,7 +12,7 @@ dependencies {
 
 cloudstream {
     language = "en"
-    description = "ONE STOP SOLUTION FOR ANIME(SUB,DUB) - Raghav Aggregated Anime Pluginn )"
+    description = "ONE STOP SOLUTION FOR ANIME(SUB,DUB,hardsub) collection of best sources"
     authors = listOf("raghav")
 
     status = 1

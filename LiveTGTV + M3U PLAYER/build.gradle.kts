@@ -7,7 +7,7 @@ dependencies {
 
 cloudstream {
     language = "hi"
-    description = "Indian TV channels through m3u playlists "
+    description = "Indian TV channels and custom m3u playlists player"
     authors = listOf("KSHITIJ8473")
 
     status = 1

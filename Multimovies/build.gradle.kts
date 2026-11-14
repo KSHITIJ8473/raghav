@@ -12,7 +12,7 @@ dependencies {
 
 cloudstream {
     language = "en"
-    description = "Multimovies - Movies, TV Shows & Anime. Sources: Cineverse (multi-server), GD Mirror, Vidrift, Vidout, Filmu, VidBolt"
+    description = "Multimovies - Movies, TV Shows & Anime"
     authors = listOf("raghav,phisher,csksy")
     status = 1
     tvTypes = listOf("Movie", "TvSeries", "Anime")

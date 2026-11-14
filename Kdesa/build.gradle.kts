@@ -5,7 +5,7 @@ dependencies {
 }
 
 cloudstream {
-    description = "KDesa - Movies, TV Shows & Anime Multi-source,Multi-audio"
+    description = "KDesa - Movies, TV Shows & Anime Multi-source,Multi-audio in hindi,english etc"
     authors = listOf("KSHITIJ8473")
     status = 1
     tvTypes = listOf("Movie", "TvSeries", "Anime")

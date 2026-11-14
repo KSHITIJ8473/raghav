@@ -6,7 +6,7 @@ dependencies {
 
 cloudstream {
     language = "en"
-    description = "Anime with Sub & Dub from ani.pm"
+    description = "Anime with Sub & Dub and multi audio"
     authors = listOf("raghav")
 
     status = 1

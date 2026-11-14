@@ -6,7 +6,7 @@ dependencies {
 
 cloudstream {
     language = "en"
-    description = "Anime with sub & dub, multi-language subtitles"
+    description = "site is down dont download"
     authors = listOf("raghav")
 
     status = 1

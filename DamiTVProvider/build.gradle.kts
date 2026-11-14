@@ -13,7 +13,7 @@ dependencies {
 
 cloudstream {
     language = "en"
-    description = "Live sports in HD: football, NBA, NFL, UFC, cricket and 120 live sports channels"
+    description = "Live sports in HD: football, NBA, NFL, UFC, cricket and  live sports channels"
     authors = listOf("KSHITIJ8473")
 
     /**

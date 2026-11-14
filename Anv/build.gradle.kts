@@ -6,7 +6,7 @@ dependencies {
 
 cloudstream {
     language = "en"
-    description = "Anime sub and dub from multiple servers with subtitle language support"
+    description = "Anime sub and dub"
     authors = listOf("KSHITIJ8473")
     status = 1
     tvTypes = listOf(

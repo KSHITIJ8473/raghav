@@ -18,5 +18,5 @@ cloudstream {
     status = 1
     requiresResources = true
     tvTypes = listOf("Movie", "TvSeries", "Live")
-    iconUrl = "https://netnaija.film/favicon.ico"
+    iconUrl = "https://cdn.aptoide.com/imgs/9/7/c/97c80794a7f0fc0b43ea49090343c49d_icon.png"
 }

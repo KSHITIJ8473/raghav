@@ -12,7 +12,7 @@ dependencies {
 
 cloudstream {
     language = "en"
-    description = "Anime with Sub, Dub & Hardsub from Anidap"
+    description = "Anime with Sub, Dub from Anidap"
     authors = listOf("raghav")
 
     status = 1

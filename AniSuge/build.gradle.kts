@@ -6,7 +6,7 @@ dependencies {
 
 cloudstream {
     language = "en"
-    description = "Anime from AniSuge with Sub and Dub support"
+    description = "Anime from AniSuge with Sub and Dub"
     authors = listOf("raghav")
 
     status = 1
@@ -15,5 +15,5 @@ cloudstream {
         "AnimeMovie",
         "OVA"
     )
-    iconUrl = "https://animesuge.cz/animesuge/images/logo.png"
+    iconUrl = "https://animesuge.at/storage/media/2026/08/logo.png"
 }

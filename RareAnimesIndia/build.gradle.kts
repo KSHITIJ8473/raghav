@@ -12,7 +12,7 @@ dependencies {
 
 cloudstream {
     language = "hi"
-    description = "hindi cartoon (unstable and many dead links)"
+    description = "hindi cartoon"
     authors = listOf("raghav")
     status = 1
     tvTypes = listOf("Anime", "Cartoon", "TvSeries", "Movie")

@@ -11,7 +11,7 @@ dependencies {
 }
 
 cloudstream {
-    description = "Movies, series and live sports from multiple sources with a Manage Sources screen that filters download and stream links"
+    description = "Movies, series and live sports from multiple sources all in one collection of best sources with stream and download support "
     authors = listOf("KSHITIJ8473")
     status = 1
     tvTypes = listOf("Movie", "TvSeries")

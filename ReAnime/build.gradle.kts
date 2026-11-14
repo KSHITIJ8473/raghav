@@ -17,4 +17,4 @@ cloudstream {
     status = 1
     tvTypes = listOf("Anime", "AnimeMovie", "OVA")
     language = "en"
-    iconUrl = "https://reanime.wtf/logo-480.webp
+    iconUrl = "https://reanime.wtf/logo-480.webp"

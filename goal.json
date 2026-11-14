@@ -4,5 +4,7 @@
     "targetAmount": 40,
     "currentAmount": 26.38,
     "currency": "$",
-    "updatedAt": "2026-11-02"
+    "updatedAt": "2026-11-02",
+    "lastDonor": "ROHAN MEENA",
+    "lastDonation": "₹20"
 }

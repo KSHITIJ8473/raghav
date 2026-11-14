@@ -14,6 +14,11 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.text.SpannableStringBuilder
+import android.text.Spanned
+import android.text.TextUtils
+import android.text.style.ForegroundColorSpan
+import android.text.style.StyleSpan
 import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.View
@@ -336,11 +341,13 @@ class DonationDialogFragment : DialogFragment() {
     }
 
     private fun readGoal(): DonationManager.Goal {
-        val args = arguments ?: return DonationManager.Goal(0.0, 40.0, "$")
+        val args = arguments ?: return DonationManager.Goal(0.0, 40.0, "$", "", "")
         return DonationManager.Goal(
             args.getDouble("raised", 0.0),
             args.getDouble("target", 40.0),
-            args.getString("currency") ?: "$"
+            args.getString("currency") ?: "$",
+            args.getString("donor") ?: "",
+            args.getString("donation") ?: ""
         )
     }
 
@@ -402,6 +409,19 @@ class DonationDialogFragment : DialogFragment() {
                 it.topMargin = dp(density, 8)
             }
         })
+
+        if (goal.donor.isNotBlank() && goal.donation.isNotBlank()) {
+            card.addView(TextView(ctx).apply {
+                text = recentContribution(goal)
+                textSize = 11f
+                setTextColor(TEXT_DIM)
+                maxLines = 1
+                ellipsize = TextUtils.TruncateAt.END
+                layoutParams = LinearLayout.LayoutParams(-1, -2).also {
+                    it.topMargin = dp(density, 8)
+                }
+            })
+        }
         return card
     }
 
@@ -434,6 +454,25 @@ class DonationDialogFragment : DialogFragment() {
             progressDrawable = layers
             layoutParams = LinearLayout.LayoutParams(-1, dp(density, 10))
         }
+    }
+
+    private fun recentContribution(goal: DonationManager.Goal): SpannableStringBuilder {
+        val line = SpannableStringBuilder()
+        var start = line.length
+        line.append("RECENT CONTRIBUTION")
+        line.setSpan(StyleSpan(Typeface.BOLD), start, line.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        line.setSpan(ForegroundColorSpan(TEXT_MID), start, line.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        line.append(" - ")
+        start = line.length
+        line.append(goal.donor)
+        line.setSpan(StyleSpan(Typeface.BOLD), start, line.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        line.setSpan(ForegroundColorSpan(0xFFFFFFFF.toInt()), start, line.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        line.append(" donated ")
+        start = line.length
+        line.append(goal.donation)
+        line.setSpan(StyleSpan(Typeface.BOLD), start, line.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        line.setSpan(ForegroundColorSpan(GREEN), start, line.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        return line
     }
 
     private fun money(amount: Double, currency: String): String {

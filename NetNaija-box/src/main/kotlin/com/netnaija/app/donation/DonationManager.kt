@@ -29,7 +29,13 @@ object DonationManager {
     private const val GOAL_TIMEOUT_MS = 4000L
     private const val DEFAULT_TARGET = 40.0
 
-    data class Goal(val raised: Double, val target: Double, val currency: String) {
+    data class Goal(
+        val raised: Double,
+        val target: Double,
+        val currency: String,
+        val donor: String,
+        val donation: String
+    ) {
         val achieved: Boolean get() = target > 0.0 && raised >= target
         val percent: Int
             get() = if (target > 0.0) (raised / target * 100.0).toInt().coerceIn(0, 100) else 0
@@ -92,7 +98,9 @@ object DonationManager {
                 Goal(
                     obj.optDouble("currentAmount", 0.0),
                     if (target > 0.0) target else DEFAULT_TARGET,
-                    obj.optString("currency", "$")
+                    obj.optString("currency", "$"),
+                    obj.optString("lastDonor", ""),
+                    obj.optString("lastDonation", "")
                 )
             }
         } catch (e: Exception) {
@@ -100,7 +108,7 @@ object DonationManager {
         }
     }
 
-    private fun fallbackGoal() = Goal(0.0, DEFAULT_TARGET, "$")
+    private fun fallbackGoal() = Goal(0.0, DEFAULT_TARGET, "$", "", "")
 
     private fun monthKey(): String {
         val cal = Calendar.getInstance()
@@ -125,6 +133,8 @@ object DonationManager {
                         putDouble("raised", goal.raised)
                         putDouble("target", goal.target)
                         putString("currency", goal.currency)
+                        putString("donor", goal.donor)
+                        putString("donation", goal.donation)
                     }
                     fm.beginTransaction()
                         .add(DonationDialogFragment().apply { arguments = args }, DIALOG_TAG)

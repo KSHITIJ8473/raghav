@@ -17,7 +17,8 @@ internal object PlayLabels {
         "netmirror_pv" to "NetMirror Prime Video",
         "hicine" to "HiCine",
         "movy" to "Movy",
-        "movielinkbd" to "MovieLinkBD"
+        "movielinkbd" to "MovieLinkBD",
+        "play4u" to "Play4u"
     )
 
     private val qualityRegex = Regex("(?i)\\b(2160p|1440p|1080[pi]|720[pi]|480[pi]|360p|240p|4k|8k|uhd)\\b")

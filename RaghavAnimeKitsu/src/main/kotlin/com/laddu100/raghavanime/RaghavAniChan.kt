@@ -12,6 +12,7 @@ import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
+import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.loadExtractor
 import com.lagradost.cloudstream3.utils.newExtractorLink
 import kotlinx.coroutines.coroutineScope
@@ -72,6 +73,7 @@ class RaghavAniChan : MainAPI() {
                 ?: continue
             callback.invoke(
                 newExtractorLink(name, serverLabel(server, isDub), stream, type = ExtractorLinkType.M3U8) {
+                    quality = Qualities.P1080.value
                     this.headers = linkHeaders
                 }
             )
@@ -120,7 +122,8 @@ class RaghavAniChan : MainAPI() {
             var any = false
             for (link in RaghavAniChanVidhawk.resolveAll(anilistId, episode, embedAudio, vidServer, mainUrl)) {
                 callback.invoke(
-                    newExtractorLink(name, "AniChan ${link.label}", link.src, type = ExtractorLinkType.M3U8) {
+                    newExtractorLink(name, "AniChan ${link.label} 1080p", link.src, type = ExtractorLinkType.M3U8) {
+                        quality = Qualities.P1080.value
                         this.headers = mapOf(
                             "User-Agent" to USER_AGENT,
                             "Referer" to "$mainUrl/"
@@ -143,6 +146,7 @@ class RaghavAniChan : MainAPI() {
                     name, label, file,
                     if (file.contains(".m3u8", true)) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
                 ) {
+                    quality = Qualities.P1080.value
                     this.headers = mapOf(
                         "User-Agent" to USER_AGENT,
                         "Referer" to kwikPage
@@ -180,6 +184,7 @@ class RaghavAniChan : MainAPI() {
                 name, label, master.url,
                 if (master.url.contains(".m3u8", true)) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
             ) {
+                quality = Qualities.P1080.value
                 this.referer = master.referer
                 this.headers = master.headers
             }
@@ -194,9 +199,9 @@ class RaghavAniChan : MainAPI() {
             .trim()
         val hardsub = server.subType.equals("hard", true)
         return when {
-            hardsub -> "AniChan $raw (Hardsub)"
-            isDub -> "AniChan $raw (Dub)"
-            else -> "AniChan $raw"
+            hardsub -> "AniChan $raw (Hardsub) 1080p"
+            isDub -> "AniChan $raw (Dub) 1080p"
+            else -> "AniChan $raw 1080p"
         }
     }
 

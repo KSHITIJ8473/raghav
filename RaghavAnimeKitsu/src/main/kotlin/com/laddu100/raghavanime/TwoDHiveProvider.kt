@@ -345,7 +345,7 @@ class RaghavTwoDHive : MainAPI() {
         val label = if (type == "dub") "MegaPlay Dub" else "MegaPlay Sub"
         return MegaPlayHelper.emitLinks(
             "2DHive", label, stream.m3u8, "https://megaplay.buzz/",
-            stream.subtitles, subtitleCallback, callback
+            stream.subtitles, subtitleCallback, callback, singleLink = true
         )
     }
 
@@ -475,7 +475,8 @@ class RaghavTwoDHive : MainAPI() {
             if (resolved.contains(".m3u8") || resolved.contains(".mp4")) {
                 val linkType = if (resolved.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
                 callback(
-                    newExtractorLink("BabaStream", "BabaStream", resolved, type = linkType) {
+                    newExtractorLink("BabaStream", "BabaStream 1080p", resolved, type = linkType) {
+                        quality = Qualities.P1080.value
                         this.headers = mapOf("User-Agent" to userAgent, "Referer" to "https://babastream.top/")
                     }
                 )

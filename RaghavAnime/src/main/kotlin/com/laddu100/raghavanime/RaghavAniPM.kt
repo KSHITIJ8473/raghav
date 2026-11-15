@@ -5,6 +5,7 @@ import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
+import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.newExtractorLink
 import com.fasterxml.jackson.databind.JsonNode
 import kotlinx.coroutines.async
@@ -257,8 +258,9 @@ class RaghavAniPM : MainAPI() {
 
         if (!seenLinks.add(master)) return true
         callback.invoke(
-            newExtractorLink(name, label, master, type = ExtractorLinkType.M3U8) {
+            newExtractorLink(name, "$label 1080p", master, type = ExtractorLinkType.M3U8) {
                 referer = SETTLAR_REFERER
+                quality = Qualities.P1080.value
                 headers = playHeaders
             }
         )
@@ -281,7 +283,7 @@ class RaghavAniPM : MainAPI() {
 
         return MegaPlayHelper.emitLinks(
             name, "MegaPlay", stream.m3u8, MEGAPLAY_REFERER,
-            stream.subtitles, subtitleCallback, callback
+            stream.subtitles, subtitleCallback, callback, singleLink = true
         )
     }
 
@@ -357,8 +359,9 @@ class RaghavAniPM : MainAPI() {
                 if (res.code == 200 && res.text.startsWith("#EXTM3U")) {
                     if (seenLinks.add(masterUrl)) {
                         callback.invoke(
-                            newExtractorLink(name, "AniPm- Multi audio", masterUrl, type = ExtractorLinkType.M3U8) {
+                            newExtractorLink(name, "AniPm- Multi audio 1080p", masterUrl, type = ExtractorLinkType.M3U8) {
                                 referer = "$origin/"
+                                quality = Qualities.P1080.value
                                 headers = mapOf(
                                     "User-Agent" to USER_AGENT,
                                     "Referer" to "$origin/"

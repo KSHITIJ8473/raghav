@@ -136,7 +136,7 @@ class RaghavXanime : MainAPI() {
             val count = sameNameCount.merge(source.name, 1, Int::plus) ?: 1
             val base = "Xanime ${serverName(source.name)}"
             val nameLabel = if (count > 1) "$base $count" else base
-            val label = "$nameLabel (${audioLabel(audio)})"
+            val label = "$nameLabel 1080p (${audioLabel(audio)})"
 
             callback.invoke(
                 newExtractorLink(
@@ -146,7 +146,7 @@ class RaghavXanime : MainAPI() {
                     type = ExtractorLinkType.M3U8
                 ) {
                     this.headers = playHeaders
-                    this.quality = Qualities.Unknown.value
+                    this.quality = Qualities.P1080.value
                 }
             )
             anyEmitted = true

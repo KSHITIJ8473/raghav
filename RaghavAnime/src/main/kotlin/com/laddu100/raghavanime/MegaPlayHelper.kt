@@ -8,6 +8,7 @@ import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.newSubtitleFile
 import com.lagradost.cloudstream3.utils.newExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
+import com.lagradost.cloudstream3.utils.Qualities
 import javax.crypto.Cipher
 import javax.crypto.Mac
 import javax.crypto.spec.IvParameterSpec
@@ -74,6 +75,9 @@ object MegaPlayHelper {
 
     private const val USER_AGENT =
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+
+    // megaplay embeds back many sites, they rank under every site's own servers
+    private val EMBED_QUALITY = Qualities.P720.value
 
     class MegaPlayStream(val m3u8: String, val subtitles: List<Pair<String, String>>)
 
@@ -232,7 +236,8 @@ object MegaPlayHelper {
         subtitles: List<Pair<String, String>>,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (com.lagradost.cloudstream3.utils.ExtractorLink) -> Unit,
-        withQualitySuffix: Boolean = true
+        withQualitySuffix: Boolean = true,
+        singleLink: Boolean = false
     ): Boolean {
         val playHeaders = mapOf(
             "User-Agent" to USER_AGENT,
@@ -248,7 +253,35 @@ object MegaPlayHelper {
 
         var found = false
         val variants = masterText?.let { parseVariants(m3u8, it) } ?: emptyList()
-        if (variants.isNotEmpty()) {
+        if (variants.isEmpty()) {
+            if (masterText != null && masterText.contains("#EXTM3U")) {
+                callback.invoke(
+                    newExtractorLink(
+                        source,
+                        label,
+                        signedMaster,
+                        type = ExtractorLinkType.M3U8
+                    ) {
+                        this.referer = referer
+                        if (singleLink) quality = EMBED_QUALITY
+                        this.headers = playHeaders
+                    }
+                )
+                found = true
+            }
+        } else if (singleLink) {
+            // codec-less variants crash the ffmpeg renderer at track selection,
+            // so the best variant goes out as its own playlist
+            val best = variants.maxByOrNull { it.quality ?: 0 } ?: variants.first()
+            callback.invoke(
+                newExtractorLink(source, label, signUrl(best.url), type = ExtractorLinkType.M3U8) {
+                    this.referer = referer
+                    quality = EMBED_QUALITY
+                    this.headers = playHeaders
+                }
+            )
+            found = true
+        } else {
             for (v in variants) {
                 val suffix = if (withQualitySuffix) v.quality?.let { "${it}p" } ?: "" else ""
                 callback.invoke(
@@ -265,14 +298,6 @@ object MegaPlayHelper {
                 )
                 found = true
             }
-        } else if (masterText != null && masterText.contains("#EXTM3U")) {
-            callback.invoke(
-                newExtractorLink(source, label, signedMaster, type = ExtractorLinkType.M3U8) {
-                    this.referer = referer
-                    this.headers = playHeaders
-                }
-            )
-            found = true
         }
 
         for ((subLabel, subUrl) in subtitles) {

@@ -22,7 +22,13 @@ import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.newExtractorLink
 import java.net.URLEncoder
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 
 class RaghavAniKage : MainAPI() {
     override var mainUrl = "https://anikage.cc"
@@ -46,6 +52,8 @@ class RaghavAniKage : MainAPI() {
 
         @Volatile
         private var cachedProxyAt = 0L
+
+        private val runtimeCache = ConcurrentHashMap<String, Map<Int, Int>>()
 
         private suspend fun fallbackProxy(): String = FirebaseDomainHelper.getDomain("anikageproxy")
             ?: FirebaseDomainHelper.getDomain("akageproxy")
@@ -127,6 +135,7 @@ class RaghavAniKage : MainAPI() {
         val title: String? = null,
         val description: String? = null,
         val image: String? = null,
+        val runtime: Int? = null,
         val isFiller: Boolean = false
     )
 
@@ -147,6 +156,8 @@ class RaghavAniKage : MainAPI() {
         val sources: List<SourceInfo> = emptyList(),
         val subtitles: List<SubtitleInfo>? = null,
         val embeds: List<EmbedInfo>? = null,
+        val embedOptions: List<EmbedInfo>? = null,
+        val mirrors: List<String>? = null,
         val stale: Boolean? = null
     )
 
@@ -154,6 +165,7 @@ class RaghavAniKage : MainAPI() {
     data class SourceInfo(
         val url: String = "",
         val quality: String? = null,
+        val label: String? = null,
         val isM3U8: Boolean? = null,
         val embedUrl: String? = null,
         val type: String? = null,
@@ -170,8 +182,16 @@ class RaghavAniKage : MainAPI() {
     data class EmbedInfo(
         val url: String? = null,
         val type: String? = null,
-        val server: String? = null
+        val server: String? = null,
+        val key: String? = null,
+        val label: String? = null
     )
+
+    private data class HlsVariant(val url: String, val quality: Int?)
+
+    private val variantResolutionRegex = Regex("""RESOLUTION=\d+x(\d+)""")
+    private val variantNameRegex = Regex("""NAME="(\d{3,4})p?"""")
+    private val dubPrefixRegex = Regex("^dub\\s+", RegexOption.IGNORE_CASE)
 
     private fun buildProxyUrl(path: String, proxy: String, type: String = "stream"): String {
         return when {
@@ -266,6 +286,7 @@ class RaghavAniKage : MainAPI() {
         } catch (e: Exception) {
             return null
         }
+        cacheRuntimes(slug, episodes)
 
         val subEpisodes = mutableListOf<Episode>()
         val dubEpisodes = mutableListOf<Episode>()
@@ -359,6 +380,35 @@ class RaghavAniKage : MainAPI() {
         return parsed.data.firstOrNull { it.anilistId == anilistId }?.slug?.takeIf { it.isNotBlank() }
     }
 
+    private fun cacheRuntimes(slug: String, episodes: List<EpisodeInfo>) {
+        val map = HashMap<Int, Int>()
+        for (ep in episodes) {
+            val runtime = ep.runtime?.takeIf { it > 0 } ?: continue
+            if (ep.number > 0) map[ep.number] = runtime
+        }
+        if (map.isNotEmpty()) {
+            if (runtimeCache.size > 40) runtimeCache.clear()
+            runtimeCache[slug] = map
+        }
+    }
+
+    private suspend fun episodeRuntime(slug: String, epNum: String): Int? {
+        val number = epNum.toIntOrNull() ?: return null
+        runtimeCache[slug]?.get(number)?.let { return it }
+        val text = try {
+            app.get("${apiUrl()}/$slug/episodes", headers = apiHeaders).text
+        } catch (e: Exception) {
+            return null
+        }
+        val episodes = try {
+            parseJson<List<EpisodeInfo>>(text)
+        } catch (e: Exception) {
+            return null
+        }
+        cacheRuntimes(slug, episodes)
+        return runtimeCache[slug]?.get(number)
+    }
+
     private suspend fun getServerList(slug: String, epNum: String): List<ServerInfo> {
         val url = "${apiUrl()}/$slug/episodes/$epNum/servers"
         val response = try {
@@ -374,6 +424,33 @@ class RaghavAniKage : MainAPI() {
         }
 
         return parsed.servers.filter { it.id.isNotBlank() }
+    }
+
+    private suspend fun fetchSourcesResponse(
+        slug: String,
+        epNum: String,
+        providerId: String,
+        lang: String,
+        serverId: String
+    ): SourcesResponse? {
+        val sourcesUrl = "${apiUrl()}/$slug/episodes/$epNum/sources?provider=$providerId&lang=$lang&server=$serverId"
+
+        val responseText = try {
+            app.get(sourcesUrl, headers = apiHeaders).text
+        } catch (e: Exception) {
+            return null
+        }
+        var parsed = parseSourcesResponse(responseText) ?: return null
+
+        if (parsed.stale == true) {
+            try {
+                val freshText = app.get("$sourcesUrl&_=${System.currentTimeMillis()}", headers = apiHeaders).text
+                parseSourcesResponse(freshText)?.let { parsed = it }
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+            }
+        }
+        return parsed
     }
 
     private fun parseSourcesResponse(text: String): SourcesResponse? {
@@ -393,114 +470,307 @@ class RaghavAniKage : MainAPI() {
     ): Boolean {
         mainUrl = FirebaseDomainHelper.getDomain("anikage") ?: mainUrl
         val lang = if (type == "dub") "dub" else "sub"
-        val proxy = proxyBase(mainUrl)
 
-        val servers = getServerList(slug, epNum)
+        val proxy = proxyBase(mainUrl)
+        val runtimeMin: Int?
+        val servers: List<ServerInfo>
+        coroutineScope {
+            val runtimeJob = async(Dispatchers.IO) { episodeRuntime(slug, epNum) }
+            val serversJob = async(Dispatchers.IO) { getServerList(slug, epNum) }
+            runtimeMin = runtimeJob.await()
+            servers = serversJob.await()
+        }
         if (servers.isEmpty()) return false
 
-        var found = false
-        for (server in servers) {
-            val serverId = server.id
-            if (serverId.isBlank()) continue
-
-            if (server.subTypes.isNotEmpty() && !server.subTypes.contains(lang)) continue
-
-            val providerId = server.providerId?.takeIf { it.isNotBlank() } ?: serverId
-            try {
-                val sourcesUrl = "${apiUrl()}/$slug/episodes/$epNum/sources?provider=$providerId&lang=$lang&server=$serverId"
-
-                val responseText = app.get(sourcesUrl, headers = apiHeaders).text
-                var parsed = parseSourcesResponse(responseText)
-                if (parsed == null) continue
-
-                if (parsed.stale == true) {
+        val found = AtomicBoolean(false)
+        coroutineScope {
+            servers.map { server ->
+                async(Dispatchers.IO) {
                     try {
-                        val freshText = app.get("$sourcesUrl&_=${System.currentTimeMillis()}", headers = apiHeaders).text
-                        parseSourcesResponse(freshText)?.let { parsed = it }
-                    } catch (e: Exception) {
-                        if (e is CancellationException) throw e
-                    }
-                }
-
-                val subtitles = parsed.subtitles.orEmpty()
-                val seenSubs = LinkedHashSet<String>()
-                for (sub in subtitles) {
-                    if (sub.file.isBlank()) continue
-                    val label = sub.label?.takeIf { it.isNotBlank() } ?: lang
-                    val subUrl = buildProxyUrl(sub.file, proxy, "stream")
-                    if (seenSubs.add(subUrl)) {
-                        subtitleCallback.invoke(newSubtitleFile(label, subUrl) {
-                            this.headers = proxyHeaders()
-                        })
-                    }
-                }
-
-                val subType = if (lang == "sub") {
-                    if (subtitles.isNotEmpty()) "Softsub" else "Hardsub"
-                } else {
-                    "Dub"
-                }
-                val baseName = "AniKage ${serverId.replaceFirstChar { it.uppercase() }} $subType".trim()
-
-                val usedEmbedUrls = LinkedHashSet<String>()
-                for (src in parsed.sources) {
-                    if (src.url.isBlank() && src.embedUrl.isNullOrBlank()) continue
-
-                    val embedUrl = src.embedUrl?.takeIf { it.isNotBlank() }
-                    if (embedUrl != null && usedEmbedUrls.add(embedUrl)) {
-                        try {
-                            val embedLabel = "AniKage ${src.server ?: serverId} ${subType}"
-                            if (RaghavEmbeds.resolveEmbed(embedUrl, "$mainUrl/", embedLabel, "AniKage", lang, subtitleCallback, callback)) found = true
-                        } catch (e: Exception) {
-                            if (e is CancellationException) throw e
+                        if (loadServer(slug, epNum, lang, server, proxy, runtimeMin, subtitleCallback, callback)) {
+                            found.set(true)
                         }
-                    }
-
-                    if (src.url.isNotBlank()) {
-                        val isM3u8 = src.isM3U8 == true
-                        val videoUrl = buildProxyUrl(src.url, proxy, if (isM3u8) "m3u8" else "stream")
-                        val qualityClean = src.quality?.trim()
-                            ?.replace(Regex("^dub\\s+", RegexOption.IGNORE_CASE), "")
-                            ?.takeIf { it.isNotBlank() }
-                        val serverTag = src.server?.takeIf { it.isNotBlank() && it != serverId }
-                            ?.replaceFirstChar { it.uppercase() }
-                        val nameStr = listOfNotNull(
-                            baseName,
-                            serverTag,
-                            qualityClean?.replaceFirstChar { it.uppercase() }
-                        ).joinToString(" ")
-
-                        callback.invoke(
-                            newExtractorLink(
-                                source = name,
-                                name = nameStr,
-                                url = videoUrl,
-                                type = if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                            ) {
-                                this.quality = getQualityFromName(src.quality)
-                                this.headers = proxyHeaders()
-                            }
-                        )
-                        found = true
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (_: Exception) {
                     }
                 }
+            }.awaitAll()
+        }
 
-                for (embed in parsed.embeds.orEmpty()) {
-                    val embedUrl = embed.url?.takeIf { it.isNotBlank() } ?: continue
-                    if (usedEmbedUrls.add(embedUrl)) {
-                        try {
-                            val embedLabel = "AniKage ${embed.server ?: serverId} ${subType}"
-                            if (RaghavEmbeds.resolveEmbed(embedUrl, "$mainUrl/", embedLabel, "AniKage", lang, subtitleCallback, callback)) found = true
-                        } catch (e: Exception) {
-                            if (e is CancellationException) throw e
-                        }
-                    }
+        return found.get()
+    }
+
+    private class PendingSource(
+        val namePrefix: String,
+        val url: String,
+        val m3u8: Boolean,
+        val qualityName: String?
+    )
+
+    private class PendingEmbed(val url: String, val label: String)
+
+    private suspend fun loadServer(
+        slug: String,
+        epNum: String,
+        lang: String,
+        server: ServerInfo,
+        proxy: String,
+        runtimeMin: Int?,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
+        val serverId = server.id
+        if (server.subTypes.isNotEmpty() && !server.subTypes.contains(lang)) return false
+        val providerId = server.providerId?.takeIf { it.isNotBlank() } ?: serverId
+
+        val base = fetchSourcesResponse(slug, epNum, providerId, lang, serverId)
+        val baseMirrors = base?.mirrors.orEmpty().filter { it.isNotBlank() }
+
+        val responses = coroutineScope {
+            val mirrorJobs = baseMirrors.map { mirror ->
+                async(Dispatchers.IO) {
+                    mirror to fetchSourcesResponse(slug, epNum, providerId, lang, mirror)
                 }
-            } catch (e: Exception) {
-                if (e is CancellationException) throw e
+            }
+            (listOf(null to base) + mirrorJobs.awaitAll()).filter { it.second != null }
+        }
+        if (responses.isEmpty()) return false
+
+        val found = AtomicBoolean(false)
+        val seenSubs = LinkedHashSet<String>()
+        val seenEmbedUrls = LinkedHashSet<String>()
+        val seenLabels = LinkedHashSet<String>()
+        val pendingSources = mutableListOf<PendingSource>()
+        val pendingEmbeds = mutableListOf<PendingEmbed>()
+
+        for ((mirror, parsed) in responses) {
+            val response = parsed ?: continue
+
+            for (sub in response.subtitles.orEmpty()) {
+                if (sub.file.isBlank()) continue
+                val label = sub.label?.takeIf { it.isNotBlank() } ?: lang
+                val subUrl = buildProxyUrl(sub.file, proxy, "stream")
+                if (seenSubs.add(subUrl)) {
+                    subtitleCallback.invoke(newSubtitleFile(label, subUrl) {
+                        this.headers = proxyHeaders()
+                    })
+                }
+            }
+
+            val withSubs = response.subtitles.orEmpty().isNotEmpty()
+            val serverSubType = if (lang == "sub") {
+                if (withSubs) "Softsub" else "Hardsub"
+            } else {
+                "Dub"
+            }
+            val baseName = "AniKage ${serverId.replaceFirstChar { it.uppercase() }} $serverSubType".trim()
+
+            for (src in response.sources) {
+                val srcLabel = src.quality?.trim()
+                    ?.replace(dubPrefixRegex, "")
+                    ?.takeIf { it.isNotBlank() && it != "auto" }
+                    ?: src.label?.takeIf { it.isNotBlank() }
+                    ?: mirror
+                if (srcLabel != null && !seenLabels.add(srcLabel)) continue
+
+                val embedUrl = src.embedUrl?.takeIf { it.isNotBlank() }
+                if (embedUrl != null && seenEmbedUrls.add(embedUrl)) {
+                    val embedLabel = listOfNotNull(baseName, srcLabel?.replaceFirstChar { it.uppercase() })
+                        .joinToString(" ")
+                    pendingEmbeds.add(PendingEmbed(embedUrl, embedLabel))
+                }
+
+                if (src.url.isBlank()) continue
+
+                val serverTag = src.server?.takeIf { it.isNotBlank() && it != serverId }
+                    ?.replaceFirstChar { it.uppercase() }
+                val namePrefix = listOfNotNull(
+                    baseName,
+                    serverTag,
+                    srcLabel?.replaceFirstChar { it.uppercase() }
+                ).joinToString(" ")
+
+                val isM3u8 = src.isM3U8 == true
+                pendingSources.add(
+                    PendingSource(
+                        namePrefix,
+                        buildProxyUrl(src.url, proxy, if (isM3u8) "m3u8" else "stream"),
+                        isM3u8,
+                        src.quality
+                    )
+                )
+            }
+
+            val embedEntries = response.embeds.orEmpty().map { embed ->
+                embed.url?.takeIf { it.isNotBlank() }?.let { url ->
+                    PendingEmbed(
+                        url,
+                        "AniKage ${(embed.server ?: serverId).replaceFirstChar { it.uppercase() }} $serverSubType"
+                    )
+                }
+            } + response.embedOptions.orEmpty().map { option ->
+                option.url?.takeIf { it.isNotBlank() }?.let { url ->
+                    val optionName = (option.label ?: option.key ?: serverId).replaceFirstChar { it.uppercase() }
+                    PendingEmbed(url, "AniKage $optionName $serverSubType")
+                }
+            }
+            for (entry in embedEntries.filterNotNull()) {
+                if (seenEmbedUrls.add(entry.url)) {
+                    pendingEmbeds.add(entry)
+                }
             }
         }
 
-        return found
+        coroutineScope {
+            val jobs = pendingSources.map { source ->
+                async(Dispatchers.IO) {
+                    try {
+                        val emitted = if (source.m3u8) {
+                            emitHlsSource(source.namePrefix, source.url, runtimeMin, callback)
+                        } else {
+                            emitVideoSource(source.namePrefix, source.url, source.qualityName, callback)
+                        }
+                        if (emitted) found.set(true)
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (_: Exception) {
+                    }
+                }
+            } + pendingEmbeds.map { embed ->
+                async(Dispatchers.IO) {
+                    try {
+                        if (RaghavEmbeds.resolveEmbed(embed.url, "$mainUrl/", embed.label, "AniKage", lang, subtitleCallback, callback)) {
+                            found.set(true)
+                        }
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (_: Exception) {
+                    }
+                }
+            }
+            jobs.awaitAll()
+        }
+
+        return found.get()
+    }
+
+    private fun parseVariants(masterUrl: String, masterText: String): List<HlsVariant> {
+        val base = masterUrl.substringBefore('?').substringBeforeLast('/') + "/"
+        val out = mutableListOf<HlsVariant>()
+        val lines = masterText.lines()
+        var i = 0
+        while (i < lines.size) {
+            val line = lines[i].trim()
+            if (line.startsWith("#EXT-X-STREAM-INF:")) {
+                val quality = variantResolutionRegex.find(line)?.groupValues?.get(1)?.toIntOrNull()
+                    ?: variantNameRegex.find(line)?.groupValues?.get(1)?.toIntOrNull()
+                var j = i + 1
+                while (j < lines.size && (lines[j].isBlank() || lines[j].startsWith("#"))) j++
+                if (j < lines.size) {
+                    val uri = lines[j].trim()
+                    if (uri.isNotEmpty()) {
+                        out.add(HlsVariant(if (uri.startsWith("http")) uri else base + uri, quality))
+                    }
+                    i = j
+                }
+            }
+            i++
+        }
+        return out.distinctBy { it.url }
+    }
+
+    private fun playlistDurationSeconds(body: String): Double? {
+        if (!body.contains("#EXTM3U")) return null
+        var total = 0.0
+        for (line in body.lines()) {
+            if (line.startsWith("#EXTINF:")) {
+                line.substringAfter(":").trimEnd(',').toDoubleOrNull()?.let { total += it }
+            }
+        }
+        return total
+    }
+
+    private suspend fun remotePlaylistDurationSeconds(url: String): Double? {
+        return try {
+            playlistDurationSeconds(app.get(url, headers = proxyHeaders(), timeout = 15L).text)
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            null
+        }
+    }
+
+    // providers occasionally point at the wrong file, anything running far
+    // shorter than the episode is different content and gets dropped
+    private fun runtimeMatches(durationSeconds: Double?, runtimeMin: Int?): Boolean {
+        if (durationSeconds == null || runtimeMin == null || runtimeMin <= 0) return true
+        return durationSeconds >= runtimeMin * 60 * 0.55
+    }
+
+    private suspend fun emitHlsSource(
+        namePrefix: String,
+        url: String,
+        runtimeMin: Int?,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
+        val master = try {
+            app.get(url, headers = proxyHeaders(), timeout = 15L).text
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            null
+        } ?: return false
+        if (!master.contains("#EXTM3U")) return false
+
+        if (!master.contains("#EXT-X-STREAM-INF")) {
+            if (!runtimeMatches(playlistDurationSeconds(master), runtimeMin)) return false
+            callback.invoke(
+                newExtractorLink(source = name, name = namePrefix, url = url, type = ExtractorLinkType.M3U8) {
+                    this.headers = proxyHeaders()
+                }
+            )
+            return true
+        }
+
+        // variant playlists are linked one by one because codec-less entries in
+        // a master crash the ffmpeg renderer during track selection
+        val variants = parseVariants(url, master)
+        if (variants.isEmpty()) return false
+        if (!runtimeMatches(remotePlaylistDurationSeconds(variants.first().url), runtimeMin)) return false
+
+        for (variant in variants) {
+            val suffix = variant.quality?.let { "${it}p" }
+            callback.invoke(
+                newExtractorLink(
+                    source = name,
+                    name = if (suffix == null) namePrefix else "$namePrefix $suffix",
+                    url = variant.url,
+                    type = ExtractorLinkType.M3U8
+                ) {
+                    variant.quality?.let { this.quality = it }
+                    this.headers = proxyHeaders()
+                }
+            )
+        }
+        return true
+    }
+
+    private suspend fun emitVideoSource(
+        namePrefix: String,
+        url: String,
+        qualityName: String?,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
+        callback.invoke(
+            newExtractorLink(
+                source = name,
+                name = namePrefix,
+                url = url,
+                type = ExtractorLinkType.VIDEO
+            ) {
+                this.quality = getQualityFromName(qualityName)
+                this.headers = proxyHeaders()
+            }
+        )
+        return true
     }
 }

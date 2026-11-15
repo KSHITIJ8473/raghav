@@ -21,6 +21,7 @@ import com.lagradost.cloudstream3.newHomePageResponse
 import com.lagradost.cloudstream3.newSubtitleFile
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
+import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.newExtractorLink
 import com.lagradost.cloudstream3.LoadResponse.Companion.addAniListId
 import com.lagradost.cloudstream3.LoadResponse.Companion.addMalId
@@ -330,8 +331,9 @@ class AniPMProvider : MainAPI() {
 
         if (seenLinks.add(master)) {
             callback.invoke(
-                newExtractorLink(name, label, master, type = ExtractorLinkType.M3U8) {
+                newExtractorLink(name, "$label 1080p", master, type = ExtractorLinkType.M3U8) {
                     referer = SETTLAR_REFERER
+                    quality = Qualities.P1080.value
                     headers = playHeaders
                 }
             )
@@ -371,8 +373,9 @@ class AniPMProvider : MainAPI() {
             "Referer" to "$origin/"
         )
         callback.invoke(
-            newExtractorLink(name, "AniPm- Multi audio", master, type = ExtractorLinkType.M3U8) {
+            newExtractorLink(name, "AniPm- Multi audio 1080p", master, type = ExtractorLinkType.M3U8) {
                 referer = "$origin/"
+                quality = Qualities.P1080.value
                 headers = playHeaders
             }
         )
@@ -414,7 +417,8 @@ class AniPMProvider : MainAPI() {
                 emitSubtitle(label, url, playHeaders, seenSubUrls, seenSubLabels, subtitleCallback)
             }
             MegaPlayBackup.emitVariantLinks(
-                name, "MegaPlay", stream.m3u8, MEGAPLAY_REFERER, playHeaders, seenLinks, callback
+                name, "MegaPlay", stream.m3u8, MEGAPLAY_REFERER, playHeaders, seenLinks, callback,
+                singleLink = true
             )
             return true
         }

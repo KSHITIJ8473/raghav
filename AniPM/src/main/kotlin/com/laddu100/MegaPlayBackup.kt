@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.ObjectMapper
 import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
+import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.newExtractorLink
 import javax.crypto.Cipher
 import javax.crypto.Mac
@@ -179,6 +180,9 @@ object MegaPlayBackup {
 
     private data class VariantEntry(val url: String, val quality: Int?)
 
+    // the megaplay backup ranks under the site's own servers
+    private val EMBED_QUALITY = Qualities.P720.value
+
     private val resolutionRegex = Regex("""RESOLUTION=(\d+)x(\d+)""")
 
     private fun parseVariants(masterUrl: String, masterText: String): List<VariantEntry> {
@@ -213,7 +217,8 @@ object MegaPlayBackup {
         referer: String,
         headers: Map<String, String>,
         seenLinks: MutableSet<String>,
-        callback: (ExtractorLink) -> Unit
+        callback: (ExtractorLink) -> Unit,
+        singleLink: Boolean = false
     ): Boolean {
         val masterText = try {
             app.get(signUrl(m3u8), headers = headers, timeout = 15_000L).text
@@ -227,6 +232,20 @@ object MegaPlayBackup {
             callback.invoke(
                 newExtractorLink(source, label, signUrl(m3u8), type = ExtractorLinkType.M3U8) {
                     this.referer = referer
+                    if (singleLink) quality = EMBED_QUALITY
+                    this.headers = headers
+                }
+            )
+            return true
+        }
+
+        if (singleLink) {
+            val best = variants.maxByOrNull { it.quality ?: 0 } ?: variants.first()
+            if (!seenLinks.add(best.url)) return true
+            callback.invoke(
+                newExtractorLink(source, label, signUrl(best.url), type = ExtractorLinkType.M3U8) {
+                    this.referer = referer
+                    quality = EMBED_QUALITY
                     this.headers = headers
                 }
             )

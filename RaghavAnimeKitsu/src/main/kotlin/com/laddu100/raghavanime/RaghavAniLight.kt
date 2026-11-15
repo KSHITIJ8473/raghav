@@ -23,6 +23,7 @@ import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.AppUtils.toJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
+import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.newExtractorLink
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -218,19 +219,16 @@ class RaghavAniLight : MainAPI() {
             }.mapNotNull { it.await() }
 
             results.sortedBy { it.first }.forEach { (_, master) ->
-                val (url, maxHeight) = master
+                val (url, _) = master
                 if (!seenLinks.add(url)) return@forEach
                 callback.invoke(
                     newExtractorLink(
                         source = name,
-                        name = buildString {
-                            append("MegaPlay ").append(audioLabel)
-                            maxHeight?.let { append(" ${it}p") } ?: append(" HLS")
-                        },
+                        name = "MegaPlay $audioLabel",
                         url = url,
                         type = ExtractorLinkType.M3U8
                     ) {
-                        maxHeight?.let { quality = it }
+                        quality = Qualities.P720.value
                     }
                 )
                 emitted = true

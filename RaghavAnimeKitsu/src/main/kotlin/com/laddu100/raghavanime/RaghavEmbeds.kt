@@ -74,7 +74,7 @@ object RaghavEmbeds {
             ?: return false
         return MegaPlayHelper.emitLinks(
             sourceTag, label, stream.m3u8, "https://${hostOf(embedUrl)}/",
-            stream.subtitles, subtitleCallback, callback, singleLink = true
+            stream.subtitles, subtitleCallback, callback
         )
     }
 

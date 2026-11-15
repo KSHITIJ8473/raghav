@@ -23,7 +23,6 @@ import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.AppUtils.toJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
-import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.newExtractorLink
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -219,19 +218,35 @@ class RaghavAniLight : MainAPI() {
             }.mapNotNull { it.await() }
 
             results.sortedBy { it.first }.forEach { (_, master) ->
-                val (url, _) = master
-                if (!seenLinks.add(url)) return@forEach
-                callback.invoke(
-                    newExtractorLink(
-                        source = name,
-                        name = "MegaPlay $audioLabel",
-                        url = url,
-                        type = ExtractorLinkType.M3U8
-                    ) {
-                        quality = Qualities.P720.value
+                val variants = MegaPlayHelper.parseVariants(master.first, master.second)
+                if (variants.isEmpty()) {
+                    if (!seenLinks.add(master.first)) return@forEach
+                    callback.invoke(
+                        newExtractorLink(
+                            source = name,
+                            name = "MegaPlay $audioLabel",
+                            url = master.first,
+                            type = ExtractorLinkType.M3U8
+                        )
+                    )
+                    emitted = true
+                } else {
+                    variants.forEach { v ->
+                        val height = v.quality ?: return@forEach
+                        if (!seenLinks.add(v.url)) return@forEach
+                        callback.invoke(
+                            newExtractorLink(
+                                source = name,
+                                name = "MegaPlay $audioLabel ${height}p",
+                                url = v.url,
+                                type = ExtractorLinkType.M3U8
+                            ) {
+                                quality = height
+                            }
+                        )
+                        emitted = true
                     }
-                )
-                emitted = true
+                }
             }
         }
         backup?.tracks.orEmpty().let { emitSubtitles(it, seenSubs, subtitleCallback) }
@@ -449,16 +464,13 @@ internal object RaghavAniLightApi {
     }
 
     // backup mirrors sometimes answer forbidden for a title the scraper never captured, the playlist is fetched up front so dead mirrors are dropped
-    suspend fun hlsMaster(url: String): Pair<String, Int?>? {
+    suspend fun hlsMaster(url: String): Pair<String, String>? {
         return try {
             val res = app.get(url, headers = browserHeaders(), timeout = 20L)
             if (!res.isSuccessful) return null
             val body = res.text
             if (!body.startsWith("#EXTM3U")) return null
-            val maxHeight = Regex("RESOLUTION=(\\d+)x(\\d+)")
-                .findAll(body)
-                .maxOfOrNull { it.groupValues[2].toIntOrNull() ?: 0 }
-            url to maxHeight?.takeIf { it > 0 }
+            url to body
         } catch (e: Exception) {
             Log.d(TAG, "hls master: ${e.message}")
             null

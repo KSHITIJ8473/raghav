@@ -345,7 +345,7 @@ class RaghavTwoDHive : MainAPI() {
         val label = if (type == "dub") "MegaPlay Dub" else "MegaPlay Sub"
         return MegaPlayHelper.emitLinks(
             "2DHive", label, stream.m3u8, "https://megaplay.buzz/",
-            stream.subtitles, subtitleCallback, callback, singleLink = true
+            stream.subtitles, subtitleCallback, callback
         )
     }
 

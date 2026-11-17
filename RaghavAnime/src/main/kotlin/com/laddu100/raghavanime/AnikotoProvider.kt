@@ -315,7 +315,7 @@ class RaghavAnikoto : MainAPI() {
             ?: return false
         return MegaPlayHelper.emitLinks(
             "AniKoto", label, stream.m3u8, "https://$domain/",
-            stream.subtitles, subtitleCallback, callback
+            stream.subtitles, subtitleCallback, callback, audioType = audioType
         )
     }
 

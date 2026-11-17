@@ -22,7 +22,8 @@ class VidTubeExtractor(private val sourceName: String = "VidTube") : ExtractorAp
         }
         MegaPlayHelper.emitLinks(
             name, name, stream.m3u8, "$mainUrl/",
-            stream.subtitles, subtitleCallback, callback
+            stream.subtitles, subtitleCallback, callback,
+            audioType = stream.audioType
         )
     }
 }

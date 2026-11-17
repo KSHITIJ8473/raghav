@@ -29,7 +29,8 @@ open class MiruroMegaPlay(private val sourceName: String = "MegaPlay") : Extract
         if (stream != null) {
             MegaPlayHelper.emitLinks(
                 name, name, stream.m3u8, "$mainUrl/",
-                stream.subtitles, subtitleCallback, callback
+                stream.subtitles, subtitleCallback, callback,
+                audioType = stream.audioType
             )
             return
         }

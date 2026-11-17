@@ -283,7 +283,8 @@ class RaghavAniPM : MainAPI() {
 
         return MegaPlayHelper.emitLinks(
             name, "MegaPlay", stream.m3u8, MEGAPLAY_REFERER,
-            stream.subtitles, subtitleCallback, callback
+            stream.subtitles, subtitleCallback, callback,
+            audioType = stream.audioType
         )
     }
 

@@ -75,7 +75,7 @@ object MegaPlayHelper {
     private const val USER_AGENT =
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 
-    class MegaPlayStream(val m3u8: String, val subtitles: List<Pair<String, String>>)
+    class MegaPlayStream(val m3u8: String, val subtitles: List<Pair<String, String>>, val audioType: String? = null)
 
     fun audioTypeFromUrl(url: String): String? =
         Regex("""/(dub|sub)(?:[/?#]|$)""").find(url)?.groupValues?.get(1)
@@ -124,7 +124,7 @@ object MegaPlayHelper {
                 val streamUrl = extractStream(root, base)
                 if (streamUrl != null) {
                     val subs = parseSubtitleTracks(root, streamUrl)
-                    return MegaPlayStream(streamUrl, subs)
+                    return MegaPlayStream(streamUrl, subs, audioType)
                 }
             }
         }
@@ -198,6 +198,14 @@ object MegaPlayHelper {
 
     internal data class VariantEntry(val url: String, val quality: Int?)
 
+    private val audioRenditionRegex = Regex("""#EXT-X-MEDIA:TYPE=AUDIO[^\r\n]*URI="""")
+
+    private fun withTypeParam(url: String, audioType: String?): String {
+        if (audioType != "sub" && audioType != "dub") return url
+        val sep = if (url.contains('?')) "&" else "?"
+        return "$url${sep}t=$audioType"
+    }
+
     internal fun parseVariants(masterUrl: String, masterText: String): List<VariantEntry> {
         val base = masterUrl.substringBefore('?').let { it.substringBeforeLast('/') + "/" }
         val out = mutableListOf<VariantEntry>()
@@ -232,7 +240,8 @@ object MegaPlayHelper {
         subtitles: List<Pair<String, String>>,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (com.lagradost.cloudstream3.utils.ExtractorLink) -> Unit,
-        withQualitySuffix: Boolean = true
+        withQualitySuffix: Boolean = true,
+        audioType: String? = null
     ): Boolean {
         val playHeaders = mapOf(
             "User-Agent" to USER_AGENT,
@@ -247,32 +256,46 @@ object MegaPlayHelper {
         }
 
         var found = false
-        val variants = masterText?.let { parseVariants(m3u8, it) } ?: emptyList()
-        if (variants.isNotEmpty()) {
-            for (v in variants) {
-                val suffix = if (withQualitySuffix) v.quality?.let { "${it}p" } ?: "" else ""
+        if (masterText != null && audioRenditionRegex.containsMatchIn(masterText)) {
+            // renditions mean the variants are video-only, only the master
+            // carries audio; t= picks the language marked as default
+            val best = parseVariants(m3u8, masterText).maxOfOrNull { it.quality ?: 0 }
+            callback.invoke(
+                newExtractorLink(source, label, signUrl(withTypeParam(m3u8, audioType)), type = ExtractorLinkType.M3U8) {
+                    this.referer = referer
+                    best?.takeIf { it > 0 }?.let { quality = it }
+                    this.headers = playHeaders
+                }
+            )
+            found = true
+        } else {
+            val variants = masterText?.let { parseVariants(m3u8, it) } ?: emptyList()
+            if (variants.isNotEmpty()) {
+                for (v in variants) {
+                    val suffix = if (withQualitySuffix) v.quality?.let { "${it}p" } ?: "" else ""
+                    callback.invoke(
+                        newExtractorLink(
+                            source,
+                            if (suffix.isEmpty()) label else "$label $suffix",
+                            signUrl(v.url),
+                            type = ExtractorLinkType.M3U8
+                        ) {
+                            this.referer = referer
+                            v.quality?.let { quality = it }
+                            this.headers = playHeaders
+                        }
+                    )
+                    found = true
+                }
+            } else if (masterText != null && masterText.contains("#EXTM3U")) {
                 callback.invoke(
-                    newExtractorLink(
-                        source,
-                        if (suffix.isEmpty()) label else "$label $suffix",
-                        signUrl(v.url),
-                        type = ExtractorLinkType.M3U8
-                    ) {
+                    newExtractorLink(source, label, signedMaster, type = ExtractorLinkType.M3U8) {
                         this.referer = referer
-                        v.quality?.let { quality = it }
                         this.headers = playHeaders
                     }
                 )
                 found = true
             }
-        } else if (masterText != null && masterText.contains("#EXTM3U")) {
-            callback.invoke(
-                newExtractorLink(source, label, signedMaster, type = ExtractorLinkType.M3U8) {
-                    this.referer = referer
-                    this.headers = playHeaders
-                }
-            )
-            found = true
         }
 
         for ((subLabel, subUrl) in subtitles) {

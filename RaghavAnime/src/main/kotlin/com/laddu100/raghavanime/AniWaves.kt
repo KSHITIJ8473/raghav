@@ -306,7 +306,8 @@ class AniWaves : MainAPI() {
                                     embedUrl,
                                     stream.subtitles,
                                     subtitleCallback,
-                                    linkCallback
+                                    linkCallback,
+                                    audioType = targetType
                                 )
                             } else {
                                 false

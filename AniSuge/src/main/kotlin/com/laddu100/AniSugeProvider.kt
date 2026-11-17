@@ -372,7 +372,7 @@ class AniSugeProvider : MainAPI() {
                     val serverInfoJson = parseJson<ServerInfoResponse>(serverInfoText)
                     val playerUrl = serverInfoJson.result?.url ?: return@async false
 
-                    if (resolveEmbed(playerUrl, baseUrl, serverName, subtitleCallback, wrappedCallback)) {
+                    if (resolveEmbed(playerUrl, baseUrl, serverName, selectedType, subtitleCallback, wrappedCallback)) {
                         loadedSingle = true
                     }
                 } catch (_: Exception) {}
@@ -420,7 +420,7 @@ class AniSugeProvider : MainAPI() {
                 if (embedUrl.isNullOrBlank()) embedUrl = streamUrl
 
                 try {
-                    if (resolveEmbed(embedUrl, baseUrl, displayName, subtitleCallback, callback)) {
+                    if (resolveEmbed(embedUrl, baseUrl, displayName, selectedType, subtitleCallback, callback)) {
                         anyLoaded = true
                     }
                 } catch (_: Exception) {}
@@ -455,6 +455,7 @@ class AniSugeProvider : MainAPI() {
         playerUrl: String,
         baseUrl: String,
         serverName: String,
+        audioType: String,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
@@ -492,7 +493,7 @@ class AniSugeProvider : MainAPI() {
             if (stream != null) {
                 return MegaPlayResolver.emitLinks(
                     name, "$name $serverName", stream.m3u8, "https://$embedHost/",
-                    stream.subtitles, subtitleCallback, callback
+                    stream.subtitles, subtitleCallback, callback, audioType
                 )
             }
             return false

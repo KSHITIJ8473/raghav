@@ -20,6 +20,7 @@ import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONObject
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 
 @JsonIgnoreProperties(ignoreUnknown = true)
@@ -177,10 +178,6 @@ class JustPlay : MainAPI() {
         Pair("/discover/tv&with_original_language=ko&sort_by=popularity.desc", "Korean Shows")
     )
 
-    override var sequentialMainPage = true
-    override var sequentialMainPageDelay = 150L
-    override var sequentialMainPageScrollDelay = 250L
-
     override val mainPage: List<MainPageData>
         get() {
             val rows = ArrayList<MainPageData>(48)
@@ -202,11 +199,28 @@ class JustPlay : MainAPI() {
             return rows
         }
 
+    init {
+        widenClient()
+    }
+
     private val prefetchScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val prefetchRunning = AtomicBoolean(false)
+
+    // all rows fire at once, one prefetch in flight is enough
+    private fun prefetchNetMirror() {
+        if (!prefetchRunning.compareAndSet(false, true)) return
+        prefetchScope.launch {
+            try {
+                NetMirrorSite.prefetch()
+            } finally {
+                prefetchRunning.set(false)
+            }
+        }
+    }
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         DonationManager.checkAndShow()
-        prefetchScope.launch { NetMirrorSite.prefetch() }
+        prefetchNetMirror()
         val data = request.data
         if (data == LIVE_ROW) {
             if (!liveSportsEnabled()) {
@@ -243,7 +257,7 @@ class JustPlay : MainAPI() {
 
     override suspend fun search(query: String): List<SearchResponse>? {
         if (query.isBlank()) return null
-        prefetchScope.launch { NetMirrorSite.prefetch() }
+        prefetchNetMirror()
         val json = PlayTmdb.get(
             "/search/multi",
             mapOf("query" to query, "include_adult" to "false", "page" to "1", "language" to "en-US")
@@ -300,7 +314,7 @@ class JustPlay : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse? {
-        prefetchScope.launch { NetMirrorSite.prefetch() }
+        prefetchNetMirror()
         val live = try {
             parseJson<LiveLoadData>(url)
         } catch (_: Exception) {
@@ -536,8 +550,6 @@ class JustPlay : MainAPI() {
 
         val dlOnly = downloadOnlyEnabled()
         val streamOnly = streamOnlyEnabled() || !dlOnly
-
-        widenClient()
 
         val seenUrls = ConcurrentHashMap.newKeySet<String>()
         val sourceCounts = ConcurrentHashMap<String, AtomicInteger>()

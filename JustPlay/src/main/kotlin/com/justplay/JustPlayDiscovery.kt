@@ -21,17 +21,59 @@ internal object PlayTmdb {
     private const val KEY = "1865f43a0549ca50d341dd9ab8b29f49"
     private const val KEY_ALT = "98ae14df2b8d8f8f8136499daf79f0e0"
 
+    private const val CACHE_TTL_MS = 10 * 60 * 1000L
+    private const val CACHE_LIMIT = 64
+    private const val OUTAGE_MS = 60 * 1000L
+
+    private class CacheEntry(val body: String, val at: Long)
+
+    // the homepage hits the same endpoints on every visit, a short ttl cache keeps
+    // a reopen from refetching every row over the network
+    private val cache = object : LinkedHashMap<String, CacheEntry>(32, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, CacheEntry>): Boolean =
+            size > CACHE_LIMIT
+    }
+    private val cacheLock = Any()
+
+    // when both keys fail the api is unreachable, back off so a dead network does
+    // not stall every row for the full timeout twice
+    @Volatile
+    private var outageUntil = 0L
+
+    private fun snapshot(url: String, maxAge: Long): JSONObject? {
+        val hit = synchronized(cacheLock) { cache[url] } ?: return null
+        if (System.currentTimeMillis() - hit.at >= maxAge) return null
+        return try {
+            JSONObject(hit.body)
+        } catch (_: Exception) {
+            null
+        }
+    }
+
     suspend fun get(path: String, params: Map<String, String> = emptyMap()): JSONObject? {
         val query = params.entries.joinToString("&") { "${it.key}=${Uri.encode(it.value)}" }
-        return try {
-            JSONObject(app.get("$BASE$path?api_key=$KEY&$query", timeout = 12000L).text)
-        } catch (e: Exception) {
+        val url = "$BASE$path?api_key=$KEY&$query"
+        snapshot(url, CACHE_TTL_MS)?.let { return it }
+        if (System.currentTimeMillis() < outageUntil) return snapshot(url, Long.MAX_VALUE)
+        val body = try {
+            app.get(url, timeout = 12000L).text
+        } catch (_: Exception) {
             try {
-                JSONObject(app.get("$BASE$path?api_key=$KEY_ALT&$query", timeout = 12000L).text)
+                app.get("$BASE$path?api_key=$KEY_ALT&$query", timeout = 12000L).text
             } catch (_: Exception) {
-                null
+                outageUntil = System.currentTimeMillis() + OUTAGE_MS
+                return snapshot(url, Long.MAX_VALUE)
             }
         }
+        val json = try {
+            JSONObject(body)
+        } catch (_: Exception) {
+            return null
+        }
+        synchronized(cacheLock) {
+            cache[url] = CacheEntry(body, System.currentTimeMillis())
+        }
+        return json
     }
 
     fun imageUrl(path: String?): String? {

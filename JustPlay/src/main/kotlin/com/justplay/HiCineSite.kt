@@ -1,7 +1,6 @@
 package com.justplay
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties
-import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
@@ -41,16 +40,20 @@ internal object HiCineSite {
         "ten" to "10Gbps",
         "gdirect" to "G-Direct",
         "server1" to "Server 1",
-        "gofile" to "Gofile",
-        "transferit" to "TransferIt",
-        "buzzheavier" to "BuzzHeavier",
-        "vikingfile" to "VikingFile"
+        "gofile" to "Gofile"
     )
+
+    // same order the site's player uses when it picks a server
+    private val OPTION_ORDER = listOf("pixel", "fsl2", "fsl", "server1", "ten", "gdirect")
+
+    // these only open an html download page, they cannot be played
+    private val PAGE_HOSTS = setOf("transferit", "buzzheavier", "vikingfile")
 
     private val QUALITY_ORDER = listOf("2160p", "1080p", "720p", "480p", "1440p", "360p")
 
-    // the api starts refusing when too many calls land at once
-    private val gate = Semaphore(3)
+    // the api 429s wide bursts and bounces some go calls with 403 until asked again
+    private val dlGate = Semaphore(6)
+    private val goGate = Semaphore(3)
 
     @JsonIgnoreProperties(ignoreUnknown = true)
     private data class SearchItem(
@@ -114,17 +117,15 @@ internal object HiCineSite {
     private data class GoResponse(val url: String? = null)
 
     private suspend fun fetchJson(url: String): String? {
-        return gate.withPermit {
-            try {
-                val text = app.get(
-                    url,
-                    headers = PlayNet.headers(referer = PlayNet.getBaseUrl(url)),
-                    timeout = 15L
-                ).text
-                text.takeIf { it.trimStart().startsWith("{") }
-            } catch (_: Exception) {
-                null
-            }
+        return try {
+            val text = app.get(
+                url,
+                headers = PlayNet.headers(referer = PlayNet.getBaseUrl(url)),
+                timeout = 12L
+            ).text
+            text.takeIf { it.trimStart().startsWith("{") }
+        } catch (_: Exception) {
+            null
         }
     }
 
@@ -158,8 +159,9 @@ internal object HiCineSite {
     }
 
     private suspend fun fetchDlOptions(k: String): List<DlOption> {
-        val text = fetchJson("${api()}/hapi/dl?k=${URLEncoder.encode(k, "UTF-8")}")
-            ?: return emptyList()
+        val text = dlGate.withPermit {
+            fetchJson("${api()}/hapi/dl?k=${URLEncoder.encode(k, "UTF-8")}")
+        } ?: return emptyList()
         return try {
             parseJson<DlResponse>(text).options.orEmpty()
         } catch (_: Exception) {
@@ -170,10 +172,8 @@ internal object HiCineSite {
     private suspend fun resolveGoUrl(option: DlOption): String? {
         val key = option.ks?.takeIf { it.isNotBlank() } ?: option.k ?: return null
         val url = "${api()}/hapi/go?k=${URLEncoder.encode(key, "UTF-8")}&m=u"
-        // the endpoint bounces a share of calls with 403 and expects the client
-        // to ask again, same as the site's own download button
-        repeat(5) { attempt ->
-            val text = fetchJson(url)
+        repeat(3) { attempt ->
+            val text = goGate.withPermit { fetchJson(url) }
             if (text != null) {
                 val resolved = try {
                     parseJson<GoResponse>(text).url?.takeIf { it.startsWith("http") }
@@ -182,7 +182,7 @@ internal object HiCineSite {
                 }
                 if (resolved != null) return resolved
             }
-            if (attempt < 4) delay(500L)
+            if (attempt < 2) delay(400L)
         }
         return null
     }
@@ -243,6 +243,11 @@ internal object HiCineSite {
         )
     }
 
+    private fun optionRank(id: String?): Int {
+        val idx = OPTION_ORDER.indexOf(id)
+        return if (idx < 0) OPTION_ORDER.size else idx
+    }
+
     private suspend fun emitOption(
         option: DlOption,
         info: String,
@@ -250,15 +255,17 @@ internal object HiCineSite {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
+        val id = option.id ?: ""
+        if (id in PAGE_HOSTS) return
         val url = resolveGoUrl(option) ?: return
-        val server = SERVER_LABELS[option.id] ?: option.name?.takeIf { it.isNotBlank() } ?: option.id ?: "Server"
+        val server = SERVER_LABELS[id] ?: option.name?.takeIf { it.isNotBlank() } ?: id.ifBlank { "Server" }
         when {
-            option.id == "pixel" || url.contains("pixeldrain.dev/u/") ->
+            id == "pixel" || url.contains("pixeldrain.dev/u/") ->
                 pixelDirect(url)?.let { emitDirect(it, server, info, quality, callback) }
-            option.id == "gofile" || url.contains("gofile.io") ->
+            id == "gofile" || url.contains("gofile.io") ->
                 PlayNet.emitSiteLink("hicine", url, info, quality, null, subtitleCallback, callback)
-            url.contains("buzzheavier") || url.contains("vikingfile") || url.contains("transferit") ->
-                PlayNet.emitSiteLink("hicine", url, info, quality, null, subtitleCallback, callback)
+            url.contains("transfer.it") || url.contains("bzzhr.co") ||
+                url.contains("buzzheavier") || url.contains("vikingfile") -> Unit
             else -> emitDirect(url, server, info, quality, callback)
         }
     }
@@ -271,10 +278,11 @@ internal object HiCineSite {
         callback: (ExtractorLink) -> Unit
     ) {
         coroutineScope {
-            hosts.take(3).forEach { host ->
+            hosts.distinctBy { it.id }.take(4).forEach { host ->
                 val key = host.k ?: return@forEach
                 async(Dispatchers.IO) {
-                    fetchDlOptions(key).take(3).forEach { option ->
+                    val options = fetchDlOptions(key).sortedBy { optionRank(it.id) }
+                    options.forEach { option ->
                         emitOption(option, info, quality, subtitleCallback, callback)
                     }
                 }
@@ -309,8 +317,12 @@ internal object HiCineSite {
                         val quality = QUALITY_RE.find(group.head.orEmpty())?.value
                             ?: group.quality
                         val info = listOfNotNull(quality, group.size?.take(12)).joinToString(" ").trim()
-                        scoped.take(2).forEach { item ->
-                            emitHosts(item.hosts.orEmpty(), info, PlayNet.getIndexQuality(quality), subtitleCallback, callback)
+                        coroutineScope {
+                            scoped.take(2).forEach { item ->
+                                async(Dispatchers.IO) {
+                                    emitHosts(item.hosts.orEmpty(), info, PlayNet.getIndexQuality(quality), subtitleCallback, callback)
+                                }
+                            }
                         }
                     }
                 }

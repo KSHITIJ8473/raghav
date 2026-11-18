@@ -11,6 +11,7 @@ import com.lagradost.cloudstream3.utils.newExtractorLink
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import java.net.URLEncoder
@@ -115,7 +116,11 @@ internal object HiCineSite {
     private suspend fun fetchJson(url: String): String? {
         return gate.withPermit {
             try {
-                val text = app.get(url, headers = PlayNet.headers(), timeout = 15L).text
+                val text = app.get(
+                    url,
+                    headers = PlayNet.headers(referer = PlayNet.getBaseUrl(url)),
+                    timeout = 15L
+                ).text
                 text.takeIf { it.trimStart().startsWith("{") }
             } catch (_: Exception) {
                 null
@@ -164,13 +169,22 @@ internal object HiCineSite {
 
     private suspend fun resolveGoUrl(option: DlOption): String? {
         val key = option.ks?.takeIf { it.isNotBlank() } ?: option.k ?: return null
-        val text = fetchJson("${api()}/hapi/go?k=${URLEncoder.encode(key, "UTF-8")}&m=u")
-            ?: return null
-        return try {
-            parseJson<GoResponse>(text).url?.takeIf { it.startsWith("http") }
-        } catch (_: Exception) {
-            null
+        val url = "${api()}/hapi/go?k=${URLEncoder.encode(key, "UTF-8")}&m=u"
+        // the endpoint bounces a share of calls with 403 and expects the client
+        // to ask again, same as the site's own download button
+        repeat(5) { attempt ->
+            val text = fetchJson(url)
+            if (text != null) {
+                val resolved = try {
+                    parseJson<GoResponse>(text).url?.takeIf { it.startsWith("http") }
+                } catch (_: Exception) {
+                    null
+                }
+                if (resolved != null) return resolved
+            }
+            if (attempt < 4) delay(500L)
         }
+        return null
     }
 
     private fun yearOk(item: SearchItem, want: Int?): Boolean {

@@ -43,10 +43,16 @@ class HiCine : MainAPI() {
     override var lang = "hi"
 
     companion object {
-        @Volatile
-        private var API = "https://hicine.biz"
+        private const val DEFAULT_API = "https://hicine.biz"
 
-        private val QUALITY_RE = Regex("""(?i)\b(2160p|1440p|1080p|720p|480p|360p|4K)\b""")
+        // the firebase entry can point at a host that stopped serving the api
+        private val FALLBACK_APIS = listOf("https://hicine.biz", "https://hicine.lol")
+
+        @Volatile
+        private var API = DEFAULT_API
+
+        @Volatile
+        private var domainChecked = false
 
         private val SERVER_LABELS = mapOf(
             "fsl" to "FSL",
@@ -64,9 +70,15 @@ class HiCine : MainAPI() {
         // these only open an html download page, they cannot be played
         private val PAGE_HOSTS = setOf("transferit", "buzzheavier", "vikingfile")
 
-        // the api 429s wide bursts and bounces some go calls with 403 until asked again
+        // the api 429s wide bursts, so keep the dl and go calls throttled
         private val dlGate = Semaphore(6)
         private val goGate = Semaphore(3)
+
+        private val variantRegex = Regex(
+            """(?i)\b(2160p|1440p|1080p|720p|480p|360p|4k|60fps|imax|10bit|8bit|""" +
+                """x264|x265|h\.?264|h\.?265|hevc|av1|dv|hdr10\+|hdr10|hdr|sdr|""" +
+                """ddp5\.1|dd5\.1|atmos|ddp|aac)\b"""
+        )
     }
 
     @JsonIgnoreProperties(ignoreUnknown = true)
@@ -157,10 +169,29 @@ class HiCine : MainAPI() {
         val ep: Int? = null
     )
 
+    private suspend fun servesApi(base: String): Boolean {
+        return try {
+            app.get("$base/hapi/home", headers = mapOf("Referer" to "$base/"), timeout = 8L)
+                .text.trimStart().startsWith("{")
+        } catch (_: Exception) {
+            false
+        }
+    }
+
     private suspend fun refreshDomain() {
-        FirebaseDomainHelper.getDomain("hicine")?.takeIf { it.contains("hicine") }?.let {
-            mainUrl = it.trimEnd('/')
-            API = mainUrl
+        if (domainChecked) return
+        domainChecked = true
+        val remote = FirebaseDomainHelper.getDomain("hicine")?.trimEnd('/')
+        val candidates = buildList {
+            remote?.takeIf { it.startsWith("http") }?.let { add(it) }
+            addAll(FALLBACK_APIS)
+        }
+        for (base in candidates) {
+            if (servesApi(base)) {
+                API = base
+                mainUrl = base
+                return
+            }
         }
     }
 
@@ -280,7 +311,7 @@ class HiCine : MainAPI() {
                 async(Dispatchers.IO) {
                     val seasonGroups = groups.filter { it.season == season }
                     var collected: List<GroupItem> = emptyList()
-                    for (group in seasonGroups.take(2)) {
+                    for (group in seasonGroups) {
                         val items = fetchGroup(group.k ?: continue)
                         if (items.isNotEmpty()) {
                             collected = items
@@ -327,22 +358,17 @@ class HiCine : MainAPI() {
         }
     }
 
-    private suspend fun resolveGoUrl(option: DlOption): String? {
+    // a go key answers once, the site throws it away right after
+    private suspend fun goUrl(option: DlOption): String? {
         val key = option.ks?.takeIf { it.isNotBlank() } ?: option.k ?: return null
-        val url = "$API/hapi/go?k=${URLEncoder.encode(key, "UTF-8")}&m=u"
-        repeat(3) { attempt ->
-            val text = goGate.withPermit { fetchJson(url) }
-            if (text != null) {
-                val resolved = try {
-                    parseJson<GoResponse>(text).url?.takeIf { it.startsWith("http") }
-                } catch (_: Exception) {
-                    null
-                }
-                if (resolved != null) return resolved
-            }
-            if (attempt < 2) delay(400L)
+        val text = goGate.withPermit {
+            fetchJson("$API/hapi/go?k=${URLEncoder.encode(key, "UTF-8")}&m=u")
+        } ?: return null
+        return try {
+            parseJson<GoResponse>(text).url?.takeIf { it.startsWith("http") }
+        } catch (_: Exception) {
+            null
         }
-        return null
     }
 
     private fun optionRank(id: String?): Int {
@@ -354,6 +380,24 @@ class HiCine : MainAPI() {
         val id = pageUrl.substringBefore("?").trimEnd('/').substringAfterLast('/')
         if (id.length !in 5..15) return null
         return "https://pixeldrain.dev/api/file/$id"
+    }
+
+    private fun variantLabel(head: String?): String {
+        if (head.isNullOrBlank()) return ""
+        val found = variantRegex.findAll(head).map { it.value.lowercase() }.distinct().toMutableList()
+        if ("x265" in found) found.removeAll(listOf("hevc", "h.265", "h265"))
+        if ("x264" in found) found.removeAll(listOf("h.264", "h264"))
+        return found.joinToString(" ")
+    }
+
+    private fun qualityValue(quality: String?): Int = when (quality?.lowercase()) {
+        "2160p", "4k" -> Qualities.P2160.value
+        "1440p" -> Qualities.P1440.value
+        "1080p" -> Qualities.P1080.value
+        "720p" -> Qualities.P720.value
+        "480p" -> Qualities.P480.value
+        "360p" -> Qualities.P360.value
+        else -> Qualities.Unknown.value
     }
 
     override suspend fun loadLinks(
@@ -376,6 +420,7 @@ class HiCine : MainAPI() {
             null
         } ?: return false
 
+        // every group is a separate encode, the same quality can show up many times
         val all = detail.groups.orEmpty().filter { !it.k.isNullOrBlank() }
         val groups = if (payload.season != null) {
             all.filter { it.season == payload.season }.ifEmpty { all }
@@ -385,7 +430,7 @@ class HiCine : MainAPI() {
         if (groups.isEmpty()) return false
 
         coroutineScope {
-            groups.take(4).forEach { group ->
+            groups.forEach { group ->
                 async(Dispatchers.IO) {
                     val items = fetchGroup(group.k ?: return@async)
                     val scoped = if (payload.ep != null) {
@@ -394,14 +439,9 @@ class HiCine : MainAPI() {
                     } else {
                         items.filter { it.ep == null }.ifEmpty { items.take(1) }
                     }
-                    val quality = QUALITY_RE.find(group.head.orEmpty())?.value ?: group.quality
-                    coroutineScope {
-                        scoped.take(2).forEach { item ->
-                            async(Dispatchers.IO) {
-                                emitHosts(item.hosts.orEmpty(), quality, group.size, subtitleCallback, callback)
-                            }
-                        }
-                    }
+                    val item = scoped.firstOrNull() ?: return@async
+                    val variant = variantLabel(group.head)
+                    emitHosts(item.hosts.orEmpty(), variant, group.quality, group.size, subtitleCallback, callback)
                 }
             }
         }
@@ -410,6 +450,7 @@ class HiCine : MainAPI() {
 
     private suspend fun emitHosts(
         hosts: List<Host>,
+        variant: String,
         quality: String?,
         size: String?,
         subtitleCallback: (SubtitleFile) -> Unit,
@@ -417,31 +458,49 @@ class HiCine : MainAPI() {
     ) {
         coroutineScope {
             hosts.distinctBy { it.id }.take(4).forEach { host ->
-                val key = host.k ?: return@forEach
+                val hostKey = host.k ?: return@forEach
                 async(Dispatchers.IO) {
-                    val options = fetchDlOptions(key).sortedBy { optionRank(it.id) }
-                    options.forEach { option ->
-                        emitOption(option, quality, size, subtitleCallback, callback)
+                    val first = fetchDlOptions(hostKey)
+                        .filter { it.id !in PAGE_HOSTS }
+                    if (first.isEmpty()) return@async
+                    val failed = mutableListOf<DlOption>()
+                    first.sortedBy { optionRank(it.id) }.forEach { option ->
+                        val url = goUrl(option)
+                        if (url == null) {
+                            failed.add(option)
+                        } else {
+                            emitResolved(option, url, variant, quality, size, subtitleCallback, callback)
+                        }
+                    }
+                    if (failed.isEmpty()) return@async
+                    // the go call drops keys it already used, so ask dl for new ones
+                    delay(600L)
+                    val second = fetchDlOptions(hostKey).filter { it.id !in PAGE_HOSTS }
+                    failed.forEach { option ->
+                        val retry = second.firstOrNull { it.id == option.id } ?: return@forEach
+                        goUrl(retry)?.let { url ->
+                            emitResolved(retry, url, variant, quality, size, subtitleCallback, callback)
+                        }
                     }
                 }
             }
         }
     }
 
-    private suspend fun emitOption(
+    private suspend fun emitResolved(
         option: DlOption,
+        url: String,
+        variant: String,
         quality: String?,
         size: String?,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
         val id = option.id ?: ""
-        if (id in PAGE_HOSTS) return
-        val url = resolveGoUrl(option) ?: return
         val server = SERVER_LABELS[id] ?: option.name?.takeIf { it.isNotBlank() } ?: id.ifBlank { "Server" }
         when {
             id == "pixel" || url.contains("pixeldrain.dev/u/") -> {
-                pixelDirect(url)?.let { emit(it, server, quality, size, callback) }
+                pixelDirect(url)?.let { emit(it, server, variant, quality, size, callback) }
             }
             id == "gofile" || url.contains("gofile.io") -> {
                 try {
@@ -451,6 +510,7 @@ class HiCine : MainAPI() {
                         emit(
                             link.url,
                             server,
+                            variant,
                             quality,
                             size,
                             callback,
@@ -463,13 +523,14 @@ class HiCine : MainAPI() {
             }
             url.contains("transfer.it") || url.contains("bzzhr.co") ||
                 url.contains("buzzheavier") || url.contains("vikingfile") -> Unit
-            else -> emit(url, server, quality, size, callback)
+            else -> emit(url, server, variant, quality, size, callback)
         }
     }
 
     private suspend fun emit(
         url: String,
         server: String,
+        variant: String,
         quality: String?,
         size: String?,
         callback: (ExtractorLink) -> Unit,
@@ -477,7 +538,8 @@ class HiCine : MainAPI() {
         headers: Map<String, String>? = null,
         referer: String? = null
     ) {
-        val name = listOfNotNull(server, quality, size?.let { "[$it]" }).joinToString(" ")
+        val name = listOfNotNull(server, variant.ifBlank { null }, size?.let { "[$it]" })
+            .joinToString(" ")
         callback(
             newExtractorLink("HiCine", name, url, type) {
                 this.quality = qualityValue(quality)
@@ -485,15 +547,5 @@ class HiCine : MainAPI() {
                 if (referer != null) this.referer = referer
             }
         )
-    }
-
-    private fun qualityValue(quality: String?): Int = when (quality?.lowercase()) {
-        "2160p", "4k" -> Qualities.P2160.value
-        "1440p" -> Qualities.P1440.value
-        "1080p" -> Qualities.P1080.value
-        "720p" -> Qualities.P720.value
-        "480p" -> Qualities.P480.value
-        "360p" -> Qualities.P360.value
-        else -> Qualities.Unknown.value
     }
 }

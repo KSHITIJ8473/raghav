@@ -31,8 +31,6 @@ internal object HiCineSite {
         return DEFAULT_API
     }
 
-    private val QUALITY_RE = Regex("""(?i)\b(2160p|1440p|1080p|720p|480p|360p|4K)\b""")
-
     private val SERVER_LABELS = mapOf(
         "fsl" to "FSL",
         "fsl2" to "FSLv2",
@@ -51,7 +49,7 @@ internal object HiCineSite {
 
     private val QUALITY_ORDER = listOf("2160p", "1080p", "720p", "480p", "1440p", "360p")
 
-    // the api 429s wide bursts and bounces some go calls with 403 until asked again
+    // the api 429s wide bursts, so keep the dl and go calls throttled
     private val dlGate = Semaphore(6)
     private val goGate = Semaphore(3)
 
@@ -96,10 +94,7 @@ internal object HiCineSite {
     )
 
     @JsonIgnoreProperties(ignoreUnknown = true)
-    private data class GroupResponse(
-        val zip: Boolean? = null,
-        val items: List<GroupItem>? = null
-    )
+    private data class GroupResponse(val items: List<GroupItem>? = null)
 
     @JsonIgnoreProperties(ignoreUnknown = true)
     private data class DlOption(
@@ -169,22 +164,17 @@ internal object HiCineSite {
         }
     }
 
-    private suspend fun resolveGoUrl(option: DlOption): String? {
+    // a go key answers once, the site throws it away right after
+    private suspend fun goUrl(option: DlOption): String? {
         val key = option.ks?.takeIf { it.isNotBlank() } ?: option.k ?: return null
-        val url = "${api()}/hapi/go?k=${URLEncoder.encode(key, "UTF-8")}&m=u"
-        repeat(3) { attempt ->
-            val text = goGate.withPermit { fetchJson(url) }
-            if (text != null) {
-                val resolved = try {
-                    parseJson<GoResponse>(text).url?.takeIf { it.startsWith("http") }
-                } catch (_: Exception) {
-                    null
-                }
-                if (resolved != null) return resolved
-            }
-            if (attempt < 2) delay(400L)
+        val text = goGate.withPermit {
+            fetchJson("${api()}/hapi/go?k=${URLEncoder.encode(key, "UTF-8")}&m=u")
+        } ?: return null
+        return try {
+            parseJson<GoResponse>(text).url?.takeIf { it.startsWith("http") }
+        } catch (_: Exception) {
+            null
         }
-        return null
     }
 
     private fun yearOk(item: SearchItem, want: Int?): Boolean {
@@ -203,22 +193,18 @@ internal object HiCineSite {
         return pool.firstOrNull { yearOk(it, res.matchYear) } ?: pool.firstOrNull()
     }
 
+    // every group is a separate encode, the same quality can show up many times
     private fun pickGroups(groups: List<Group>, res: PlayLinkData): List<Group> {
         val withKey = groups.filter { !it.k.isNullOrBlank() }
-        val seasonMatch = if (res.season != null) {
-            withKey.filter { it.season == res.season }
+        val pool = if (res.season != null) {
+            withKey.filter { it.season == res.season }.ifEmpty { withKey }
         } else {
             withKey
         }
-        val pool = if (seasonMatch.isNotEmpty()) seasonMatch else withKey
-        val seen = mutableSetOf<String>()
         return pool.sortedBy { g ->
             val idx = QUALITY_ORDER.indexOf(g.quality?.lowercase() ?: "")
             if (idx < 0) QUALITY_ORDER.size else idx
-        }.filter { g ->
-            val q = g.quality?.lowercase() ?: g.head.orEmpty()
-            seen.add(q)
-        }.take(3)
+        }
     }
 
     private fun pixelDirect(pageUrl: String): String? {
@@ -248,16 +234,15 @@ internal object HiCineSite {
         return if (idx < 0) OPTION_ORDER.size else idx
     }
 
-    private suspend fun emitOption(
+    private suspend fun emitResolved(
         option: DlOption,
+        url: String,
         info: String,
         quality: Int?,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
         val id = option.id ?: ""
-        if (id in PAGE_HOSTS) return
-        val url = resolveGoUrl(option) ?: return
         val server = SERVER_LABELS[id] ?: option.name?.takeIf { it.isNotBlank() } ?: id.ifBlank { "Server" }
         when {
             id == "pixel" || url.contains("pixeldrain.dev/u/") ->
@@ -279,11 +264,29 @@ internal object HiCineSite {
     ) {
         coroutineScope {
             hosts.distinctBy { it.id }.take(4).forEach { host ->
-                val key = host.k ?: return@forEach
+                val hostKey = host.k ?: return@forEach
                 async(Dispatchers.IO) {
-                    val options = fetchDlOptions(key).sortedBy { optionRank(it.id) }
-                    options.forEach { option ->
-                        emitOption(option, info, quality, subtitleCallback, callback)
+                    val first = fetchDlOptions(hostKey)
+                        .filter { it.id !in PAGE_HOSTS }
+                    if (first.isEmpty()) return@async
+                    val failed = mutableListOf<DlOption>()
+                    first.sortedBy { optionRank(it.id) }.forEach { option ->
+                        val url = goUrl(option)
+                        if (url == null) {
+                            failed.add(option)
+                        } else {
+                            emitResolved(option, url, info, quality, subtitleCallback, callback)
+                        }
+                    }
+                    if (failed.isEmpty()) return@async
+                    // the go call drops keys it already used, so ask dl for new ones
+                    delay(600L)
+                    val second = fetchDlOptions(hostKey).filter { it.id !in PAGE_HOSTS }
+                    failed.forEach { option ->
+                        val retry = second.firstOrNull { it.id == option.id } ?: return@forEach
+                        goUrl(retry)?.let { url ->
+                            emitResolved(retry, url, info, quality, subtitleCallback, callback)
+                        }
                     }
                 }
             }
@@ -312,18 +315,18 @@ internal object HiCineSite {
                             val exact = items.filter { it.ep == res.episode }
                             if (exact.isNotEmpty()) exact else items.filter { it.ep == null }
                         } else {
-                            items
+                            items.filter { it.ep == null }.ifEmpty { items.take(1) }
                         }
-                        val quality = QUALITY_RE.find(group.head.orEmpty())?.value
-                            ?: group.quality
-                        val info = listOfNotNull(quality, group.size?.take(12)).joinToString(" ").trim()
-                        coroutineScope {
-                            scoped.take(2).forEach { item ->
-                                async(Dispatchers.IO) {
-                                    emitHosts(item.hosts.orEmpty(), info, PlayNet.getIndexQuality(quality), subtitleCallback, callback)
-                                }
-                            }
-                        }
+                        val item = scoped.firstOrNull() ?: return@async
+                        val head = group.head.orEmpty()
+                        val info = head.ifBlank { listOfNotNull(group.quality, group.size).joinToString(" ") }
+                        emitHosts(
+                            item.hosts.orEmpty(),
+                            info,
+                            PlayNet.getIndexQuality(head),
+                            subtitleCallback,
+                            callback
+                        )
                     }
                 }
             }

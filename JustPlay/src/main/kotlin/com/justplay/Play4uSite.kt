@@ -137,8 +137,7 @@ internal object Play4uSite {
             }
             val text = out.toString()
             if (text.isEmpty() || text.any { it < ' ' || it > '~' }) "" else text
-        } catch (e: IllegalArgumentException) {
-            Log.d(TAG, "unseal: ${e.message}")
+        } catch (_: IllegalArgumentException) {
             ""
         }
     }
@@ -182,8 +181,7 @@ internal object Play4uSite {
         extractVar(html, "__PA_PLAY__")?.let {
             try {
                 parseJson<Play4uPlayPayload>(it)
-            } catch (e: Exception) {
-                Log.d(TAG, "play var: ${e.message}")
+            } catch (_: Exception) {
                 null
             }
         }
@@ -192,8 +190,7 @@ internal object Play4uSite {
         extractVar(html, "__PA_SERIES__")?.let {
             try {
                 parseJson<Play4uSeriesPayload>(it)
-            } catch (e: Exception) {
-                Log.d(TAG, "series var: ${e.message}")
+            } catch (_: Exception) {
                 null
             }
         }
@@ -214,8 +211,7 @@ internal object Play4uSite {
             val res = app.get(url, headers = apiHeaders(base), timeout = 20L)
             if (!res.isSuccessful) return emptyList()
             parseJson<Play4uSearchPage>(res.text).items
-        } catch (e: Exception) {
-            Log.d(TAG, "search: ${e.message}")
+        } catch (_: Exception) {
             emptyList()
         }
     }

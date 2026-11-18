@@ -12,11 +12,10 @@ import com.lagradost.cloudstream3.newMovieSearchResponse
 import com.lagradost.cloudstream3.utils.AppUtils.toJson
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import org.json.JSONObject
-import java.util.concurrent.ConcurrentHashMap
-import kotlin.random.Random
 
 internal object PlayTmdb {
     private const val BASE = "https://api.themoviedb.org/3"
@@ -25,9 +24,11 @@ internal object PlayTmdb {
 
     private const val CACHE_TTL_MS = 10 * 60 * 1000L
     private const val CACHE_LIMIT = 64
-    private const val OUTAGE_MS = 20 * 1000L
+    private const val TIMEOUT_MS = 10_000L
+    private const val RETRY_GAP_MS = 500L
+    private const val DEAD_NET_MS = 5_000L
 
-    // the homepage opens ~50 rows at once, tmdb rejects that burst on mobile
+    // the homepage opens ~35 rows at once, tmdb rejects that burst on mobile
     // networks so the calls are spread out instead
     private val gate = Semaphore(10)
 
@@ -41,10 +42,14 @@ internal object PlayTmdb {
     }
     private val cacheLock = Any()
 
-    // when both keys fail the api is unreachable, back off so a dead network does
-    // not stall every row for the full timeout twice
+    // mobile networks drop single calls to tmdb all the time, both keys plus one
+    // repeat ride out the bad moment
+    private val attemptKeys = arrayOf(KEY, KEY_ALT, KEY)
+
+    // when the network is fully down the remaining rows should not each burn
+    // their whole retry chain, a short pause caps the damage
     @Volatile
-    private var outageUntil = 0L
+    private var deadNetUntil = 0L
 
     private fun snapshot(url: String, maxAge: Long): JSONObject? {
         val hit = synchronized(cacheLock) { cache[url] } ?: return null
@@ -56,10 +61,12 @@ internal object PlayTmdb {
         }
     }
 
+    // lists carry results, detail pages and seasons carry id, anything else is
+    // an error payload from the api
     private fun parseResult(body: String?): JSONObject? {
         if (body.isNullOrBlank()) return null
         return try {
-            JSONObject(body).takeIf { it.has("results") }
+            JSONObject(body).takeIf { it.has("results") || it.has("id") }
         } catch (_: Exception) {
             null
         }
@@ -67,7 +74,10 @@ internal object PlayTmdb {
 
     private suspend fun fetchRaw(path: String, key: String, query: String): String? {
         return try {
-            app.get("$BASE$path?api_key=$key&$query", timeout = 12_000L).text
+            val res = app.get("$BASE$path?api_key=$key&$query", timeout = TIMEOUT_MS)
+            val body = res.text
+            res.close()
+            body
         } catch (_: Exception) {
             null
         }
@@ -77,16 +87,18 @@ internal object PlayTmdb {
         val query = params.entries.joinToString("&") { "${it.key}=${Uri.encode(it.value)}" }
         val url = "$BASE$path?api_key=$KEY&$query"
         snapshot(url, CACHE_TTL_MS)?.let { return it }
-        if (System.currentTimeMillis() < outageUntil) return snapshot(url, Long.MAX_VALUE)
+        if (System.currentTimeMillis() < deadNetUntil) return snapshot(url, Long.MAX_VALUE)
 
         gate.withPermit {
             snapshot(url, CACHE_TTL_MS)?.let { return it }
-            var body = parseResult(fetchRaw(path, KEY, query))
-            if (body == null) {
-                body = parseResult(fetchRaw(path, KEY_ALT, query))
+            var body: JSONObject? = null
+            for (i in attemptKeys.indices) {
+                if (i > 0) delay(RETRY_GAP_MS)
+                body = parseResult(fetchRaw(path, attemptKeys[i], query))
+                if (body != null) break
             }
             if (body == null) {
-                outageUntil = System.currentTimeMillis() + OUTAGE_MS
+                deadNetUntil = System.currentTimeMillis() + DEAD_NET_MS
                 return snapshot(url, Long.MAX_VALUE)
             }
             val raw = body.toString()
@@ -122,7 +134,6 @@ internal object PlayTmdb {
 
 internal object PlayDiscovery {
 
-    const val ROW_SURPRISE = "surprise_me"
     const val ROW_GENRE = "mixed_genre"
 
     fun genreData(genreId: Int): String = "$ROW_GENRE&with_genres=$genreId"
@@ -161,10 +172,6 @@ internal object PlayDiscovery {
     fun languageData(row: LanguageRow): String =
         "/discover/movie&with_original_language=${row.code}" +
             "&sort_by=popularity.desc&vote_count.gte=${row.minVotes}"
-
-    private val shownUrls = ConcurrentHashMap.newKeySet<String>()
-    private const val SHOWN_CAP = 3000
-    private const val SURPRISE_BATCH = 20
 
     private fun emptyRow(name: String): HomePageResponse =
         newHomePageResponse(name, emptyList<SearchResponse>(), hasNext = false)
@@ -239,44 +246,5 @@ internal object PlayDiscovery {
             page
         )
         return newHomePageResponse(name, list, hasNext = hasNext)
-    }
-
-    private suspend fun topRatedBatch(
-        api: MainAPI,
-        path: String,
-        maxPage: Int,
-        fallbackType: String
-    ): List<SearchResponse> {
-        val json = PlayTmdb.get(
-            path,
-            mapOf("page" to "${Random.nextInt(1, maxPage + 1)}", "language" to "en-US")
-        ) ?: return emptyList()
-        val arr = json.optJSONArray("results") ?: return emptyList()
-        val out = ArrayList<SearchResponse>(arr.length())
-        for (i in 0 until arr.length()) {
-            val item = arr.optJSONObject(i) ?: continue
-            if (PlayTmdb.imageUrl(item.optString("poster_path")) == null) continue
-            PlayTmdb.toSearchResponse(api, item, fallbackType)?.let(out::add)
-        }
-        return out
-    }
-
-    suspend fun surprisePage(api: MainAPI, name: String): HomePageResponse {
-        if (shownUrls.size > SHOWN_CAP) shownUrls.clear()
-        val out = ArrayList<SearchResponse>(SURPRISE_BATCH + 4)
-        var attempts = 0
-        while (out.size < SURPRISE_BATCH && attempts < 3) {
-            attempts++
-            val batch = coroutineScope {
-                val movies = async { topRatedBatch(api, "/movie/top_rated", 500, "movie") }
-                val shows = async { topRatedBatch(api, "/tv/top_rated", 120, "tv") }
-                (movies.await() + shows.await()).shuffled()
-            }
-            for (card in batch) {
-                if (out.size >= SURPRISE_BATCH + 4) break
-                if (shownUrls.add(card.url)) out.add(card)
-            }
-        }
-        return newHomePageResponse(name, out, hasNext = true)
     }
 }

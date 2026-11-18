@@ -170,22 +170,19 @@ class JustPlay : MainAPI() {
         Pair("/tv/popular", "Popular TV Shows"),
         Pair("/movie/top_rated", "Top Rated Movies"),
         Pair("/tv/top_rated", "Top Rated TV Shows"),
-        Pair("/tv/airing_today", "Airing Today"),
         Pair("/discover/tv&with_networks=213", "Netflix"),
         Pair("/discover/tv&with_networks=1024", "Amazon Prime"),
         Pair("/discover/movie&with_origin_country=IN&sort_by=popularity.desc", "Indian Movies"),
-        Pair("/discover/tv&with_origin_country=IN&sort_by=popularity.desc", "Indian Web Series"),
         Pair("/discover/tv&with_original_language=ko&sort_by=popularity.desc", "Korean Shows")
     )
 
     override val mainPage: List<MainPageData>
         get() {
-            val rows = ArrayList<MainPageData>(48)
+            val rows = ArrayList<MainPageData>(34)
             if (liveSportsEnabled() && liveSportsOnTop()) {
                 rows.add(MainPageData("Live Sports", LIVE_ROW))
             }
             rows.add(MainPageData(tmdbRows[0].second, tmdbRows[0].first))
-            rows.add(MainPageData("Surprise Me", PlayDiscovery.ROW_SURPRISE))
             tmdbRows.drop(1).forEach { rows.add(MainPageData(it.second, it.first)) }
             PlayDiscovery.genreRows.forEach { (id, label) ->
                 rows.add(MainPageData(label, PlayDiscovery.genreData(id)))
@@ -227,9 +224,6 @@ class JustPlay : MainAPI() {
                 return newHomePageResponse(request.name, emptyList<SearchResponse>(), hasNext = false)
             }
             return LiveSports.homePage(this)
-        }
-        if (data == PlayDiscovery.ROW_SURPRISE) {
-            return PlayDiscovery.surprisePage(this, request.name)
         }
         if (data.startsWith(PlayDiscovery.ROW_GENRE)) {
             return PlayDiscovery.genrePage(this, page, data, request.name)

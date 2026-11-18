@@ -1,7 +1,6 @@
 package com.justplay
 
 import android.net.Uri
-import android.util.Log
 import com.lagradost.cloudstream3.CloudStreamApp
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.app
@@ -29,7 +28,6 @@ import org.json.JSONObject
 
 internal object NetMirrorSite {
 
-    private const val TAG = "NM"
     private const val DEFAULT_BASE = "https://net52.cc"
 
     @Volatile
@@ -243,12 +241,10 @@ internal object NetMirrorSite {
             if (res.text.contains("\"statusup\":\"All Done\"")) {
                 val solved = res.cookies["t_hash_t"].orEmpty()
                 if (solved.isNotEmpty()) {
-                    Log.d(TAG, "solve ok")
                     return solved
                 }
             }
         }
-        Log.d(TAG, "solve failed")
         return null
     }
 
@@ -492,7 +488,6 @@ internal object NetMirrorSite {
                 }
             )
         }
-        if (verified.isNotEmpty()) Log.d(TAG, "links ${verified.size} ${ott.code}")
         return verified.isNotEmpty()
     }
 

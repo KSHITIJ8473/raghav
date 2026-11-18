@@ -11,15 +11,12 @@ import com.lagradost.cloudstream3.utils.newExtractorLink
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
-import okhttp3.OkHttpClient
-import okhttp3.Request
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import java.net.URLEncoder
-import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.TimeUnit
 
 internal object HiCineSite {
-    private const val DEFAULT_API = "https://api.hicine.biz"
-    private const val TOKEN_TTL = 3 * 60 * 1000L
+    private const val DEFAULT_API = "https://hicine.biz"
 
     @Volatile
     private var apiOverride: String? = null
@@ -34,331 +31,180 @@ internal object HiCineSite {
         return DEFAULT_API
     }
 
-    private val URL_RE = Regex("""https?://[^\s,]+""")
     private val QUALITY_RE = Regex("""(?i)\b(2160p|1440p|1080p|720p|480p|360p|4K)\b""")
-    private val SIZE_RE = Regex("""(?i)\d+(?:\.\d+)?\s*(?:MB|GB)""")
-    private val EPISODE_RE = Regex("""Episode\s+(\d+)\s*:\s*(.*)""")
 
     private val SERVER_LABELS = mapOf(
         "fsl" to "FSL",
         "fsl2" to "FSLv2",
         "pixel" to "PixelDrain",
         "ten" to "10Gbps",
+        "gdirect" to "G-Direct",
+        "server1" to "Server 1",
         "gofile" to "Gofile",
-        "server1" to "Server 1"
+        "transferit" to "TransferIt",
+        "buzzheavier" to "BuzzHeavier",
+        "vikingfile" to "VikingFile"
     )
 
-    private val MOVIE_TABLES = setOf("hollywood_movies", "bollywood_movies")
-    private val SERIES_TABLES = setOf("hollywood_series", "bollywood_series")
+    private val QUALITY_ORDER = listOf("2160p", "1080p", "720p", "480p", "1440p", "360p")
 
-    private val TITLE_YEAR_RE = Regex("""\s*\((19|20)\d{2}\)\s*$""")
-    private val ANY_YEAR_RE = Regex("""\b(19|20)\d{2}\b""")
-
-    @JsonIgnoreProperties(ignoreUnknown = true)
-    data class Item(
-        @JsonProperty("record_id") val recordId: Int? = null,
-        @JsonProperty("title") val title: String? = null,
-        @JsonProperty("links") val links: String? = null,
-        @JsonProperty("cloudlinks") val cloudlinks: String? = null,
-        @JsonProperty("date") val date: String? = null,
-        @JsonProperty("season_1") val season1: String? = null,
-        @JsonProperty("season_2") val season2: String? = null,
-        @JsonProperty("season_3") val season3: String? = null,
-        @JsonProperty("season_4") val season4: String? = null,
-        @JsonProperty("season_5") val season5: String? = null,
-        @JsonProperty("season_6") val season6: String? = null,
-        @JsonProperty("season_7") val season7: String? = null,
-        @JsonProperty("season_8") val season8: String? = null,
-        @JsonProperty("season_9") val season9: String? = null,
-        @JsonProperty("season_10") val season10: String? = null,
-        @JsonProperty("season_11") val season11: String? = null,
-        @JsonProperty("season_12") val season12: String? = null,
-        @JsonProperty("season_13") val season13: String? = null,
-        @JsonProperty("season_14") val season14: String? = null,
-        @JsonProperty("season_15") val season15: String? = null
-    ) {
-        fun seasons(): List<String?> = listOf(
-            season1, season2, season3, season4, season5,
-            season6, season7, season8, season9, season10,
-            season11, season12, season13, season14, season15
-        )
-
-        fun hasSeasons(): Boolean = seasons().any { !it.isNullOrBlank() }
-    }
+    // the api starts refusing when too many calls land at once
+    private val gate = Semaphore(3)
 
     @JsonIgnoreProperties(ignoreUnknown = true)
-    private data class SearchHit(
-        @JsonProperty("source_table") val sourceTable: String? = null,
-        @JsonProperty("data") val data: Item? = null
-    )
-
-    @JsonIgnoreProperties(ignoreUnknown = true)
-    private data class FileEntry(
-        val url: String,
-        val quality: String? = null,
-        val size: String? = null
-    )
-
-    @JsonIgnoreProperties(ignoreUnknown = true)
-    private data class ServerToken(
-        val ts: String? = null,
-        val sig: String? = null
-    )
-
-    @JsonIgnoreProperties(ignoreUnknown = true)
-    private data class LinksResponse(
+    private data class SearchItem(
+        val id: String? = null,
         val title: String? = null,
-        val size: String? = null,
-        val watchable: Boolean? = null,
-        val tokens: Map<String, ServerToken>? = null
+        val year: Int? = null,
+        val kind: String? = null
     )
 
-    private fun tableMatches(table: String?, item: Item, wantSeries: Boolean): Boolean {
-        return when (table) {
-            in MOVIE_TABLES -> !wantSeries
-            in SERIES_TABLES -> wantSeries
-            "anime" -> item.hasSeasons() == wantSeries
-            else -> true
-        }
-    }
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    private data class SearchResponse(val items: List<SearchItem>? = null)
 
-    private suspend fun search(query: String): List<Pair<String, Item>> {
-        val text = PlayNet.retry {
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    private data class Group(
+        val head: String? = null,
+        val season: Int? = null,
+        val quality: String? = null,
+        val size: String? = null,
+        val k: String? = null
+    )
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    private data class TitleResponse(
+        val title: String? = null,
+        val kind: String? = null,
+        val groups: List<Group>? = null
+    )
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    private data class Host(
+        val id: String? = null,
+        val name: String? = null,
+        val k: String? = null
+    )
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    private data class GroupItem(
+        val ep: Int? = null,
+        val hosts: List<Host>? = null
+    )
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    private data class GroupResponse(
+        val zip: Boolean? = null,
+        val items: List<GroupItem>? = null
+    )
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    private data class DlOption(
+        val id: String? = null,
+        val name: String? = null,
+        val kind: String? = null,
+        val k: String? = null,
+        val ks: String? = null
+    )
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    private data class DlResponse(val options: List<DlOption>? = null)
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    private data class GoResponse(val url: String? = null)
+
+    private suspend fun fetchJson(url: String): String? {
+        return gate.withPermit {
             try {
-                app.get(
-                    "${api()}/rpc/search/${URLEncoder.encode(query, "UTF-8")}?limit=50",
-                    headers = PlayNet.headers(),
-                    timeout = 15L
-                ).text
+                val text = app.get(url, headers = PlayNet.headers(), timeout = 15L).text
+                text.takeIf { it.trimStart().startsWith("{") }
             } catch (_: Exception) {
                 null
             }
-        } ?: return emptyList()
+        }
+    }
+
+    private suspend fun search(query: String): List<SearchItem> {
+        val text = fetchJson("${api()}/hapi/search?q=${URLEncoder.encode(query, "UTF-8")}&page=1")
+            ?: return emptyList()
         return try {
-            parseJson<List<SearchHit>>(text).mapNotNull { hit ->
-                val item = hit.data ?: return@mapNotNull null
-                if (item.recordId == null || item.title.isNullOrBlank()) return@mapNotNull null
-                (hit.sourceTable ?: "") to item
-            }
+            parseJson<SearchResponse>(text).items.orEmpty().filter { !it.id.isNullOrBlank() }
         } catch (_: Exception) {
             emptyList()
         }
     }
 
-    private suspend fun fetchDetail(table: String, recordId: Int): Item? {
-        val text = PlayNet.retry {
-            try {
-                app.get("${api()}/api/$table/$recordId", headers = PlayNet.headers(), timeout = 15L).text
-            } catch (_: Exception) {
-                null
-            }
-        } ?: return null
+    private suspend fun fetchTitle(id: String): TitleResponse? {
+        val text = fetchJson("${api()}/hapi/t?c=${URLEncoder.encode(id, "UTF-8")}") ?: return null
         return try {
-            parseJson<Item>(text)
+            parseJson<TitleResponse>(text)
         } catch (_: Exception) {
             null
         }
     }
 
-    private fun cleanTitle(title: String?): String =
-        (title ?: "").replace(TITLE_YEAR_RE, "").trim()
-
-    private fun knownYears(item: Item): List<Int> {
-        return ANY_YEAR_RE.findAll(item.title ?: "")
-            .mapNotNull { it.value.toIntOrNull() }.toList()
+    private suspend fun fetchGroup(k: String): List<GroupItem> {
+        val text = fetchJson("${api()}/hapi/g?k=${URLEncoder.encode(k, "UTF-8")}")
+            ?: return emptyList()
+        return try {
+            parseJson<GroupResponse>(text).items.orEmpty()
+        } catch (_: Exception) {
+            emptyList()
+        }
     }
 
-    private fun yearOk(item: Item, want: Int?): Boolean {
-        val years = knownYears(item)
-        if (years.isEmpty() || want == null) return true
-        return years.any { kotlin.math.abs(it - want) <= 1 }
+    private suspend fun fetchDlOptions(k: String): List<DlOption> {
+        val text = fetchJson("${api()}/hapi/dl?k=${URLEncoder.encode(k, "UTF-8")}")
+            ?: return emptyList()
+        return try {
+            parseJson<DlResponse>(text).options.orEmpty()
+        } catch (_: Exception) {
+            emptyList()
+        }
     }
 
-    private suspend fun pickAndLoad(
-        hits: List<Pair<String, Item>>,
-        res: PlayLinkData
-    ): Item? {
-        val title = res.title ?: return null
+    private suspend fun resolveGoUrl(option: DlOption): String? {
+        val key = option.ks?.takeIf { it.isNotBlank() } ?: option.k ?: return null
+        val text = fetchJson("${api()}/hapi/go?k=${URLEncoder.encode(key, "UTF-8")}&m=u")
+            ?: return null
+        return try {
+            parseJson<GoResponse>(text).url?.takeIf { it.startsWith("http") }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun yearOk(item: SearchItem, want: Int?): Boolean {
+        if (want == null || item.year == null) return true
+        return kotlin.math.abs(item.year - want) <= 1
+    }
+
+    private fun pickTitle(hits: List<SearchItem>, res: PlayLinkData): SearchItem? {
         val wantSeries = res.season != null
-        val wanted = PlayNet.normalizeTitle(title)
-        val candidates = hits.filter { (_, item) ->
-            PlayNet.titleMatches(cleanTitle(item.title), title)
-        }.filter { (table, item) ->
-            tableMatches(table, item, wantSeries)
-        }.ifEmpty { hits.filter { (_, item) -> PlayNet.titleMatches(cleanTitle(item.title), title) } }
-
-        val exact = candidates.filter { (_, item) ->
-            PlayNet.normalizeTitle(cleanTitle(item.title)) == wanted
+        val title = res.title ?: return null
+        val matches = hits.filter { hit ->
+            hit.title != null && PlayNet.titleMatches(hit.title, title)
         }
-        val pool = if (exact.isNotEmpty()) {
-            exact.filter { (_, item) -> yearOk(item, res.matchYear) }
+        val byKind = matches.filter { (it.kind == "series") == wantSeries }
+        val pool = if (byKind.isNotEmpty()) byKind else matches
+        return pool.firstOrNull { yearOk(it, res.matchYear) } ?: pool.firstOrNull()
+    }
+
+    private fun pickGroups(groups: List<Group>, res: PlayLinkData): List<Group> {
+        val withKey = groups.filter { !it.k.isNullOrBlank() }
+        val seasonMatch = if (res.season != null) {
+            withKey.filter { it.season == res.season }
         } else {
-            candidates.filter { (_, item) -> yearOk(item, res.matchYear) }
+            withKey
         }
-        for ((table, item) in pool.take(3)) {
-            val detail = fetchDetail(table, item.recordId ?: continue) ?: continue
-            if (tableMatches(table, detail, wantSeries)) return detail
-        }
-        return null
-    }
-
-    private fun parseMovieLinks(raw: String?): List<FileEntry> {
-        if (raw.isNullOrBlank()) return emptyList()
-        return raw.lines().flatMap { line ->
-            val urls = URL_RE.findAll(line).map { it.value }.toList()
-            if (urls.isEmpty()) return@flatMap emptyList()
-            val parts = line.split(", ")
-            val qualityText = parts.getOrNull(parts.size - 2).orEmpty()
-            val sizeText = parts.getOrNull(parts.size - 1).orEmpty()
-            val quality = QUALITY_RE.find(qualityText)?.value
-            val size = SIZE_RE.find(sizeText)?.value ?: SIZE_RE.find(qualityText)?.value
-            urls.map { url -> FileEntry(url, quality, size) }
-        }
-    }
-
-    private fun parseEntry(raw: String): FileEntry? {
-        val url = URL_RE.find(raw)?.value ?: return null
-        val quality = QUALITY_RE.find(raw)?.value
-        val size = SIZE_RE.find(raw)?.value
-        if (quality == null && size == null) return null
-        return FileEntry(url, quality, size)
-    }
-
-    private fun episodeEntries(item: Item, season: Int?, episode: Int?): List<FileEntry> {
-        if (season == null) return emptyList()
-        val seasonText = item.seasons().getOrNull(season - 1) ?: return emptyList()
-        val lines = seasonText?.lines().orEmpty()
-        val parsed = if (episode != null) {
-            lines.mapNotNull { line ->
-                val match = EPISODE_RE.find(line) ?: return@mapNotNull null
-                val epNum = match.groupValues[1].toIntOrNull() ?: return@mapNotNull null
-                if (epNum != episode) return@mapNotNull null
-                match.groupValues[2].split(" : ").mapNotNull(::parseEntry)
-            }.flatten()
-        } else {
-            lines.mapNotNull { line ->
-                val match = EPISODE_RE.find(line) ?: return@mapNotNull null
-                match.groupValues[2].split(" : ").mapNotNull(::parseEntry)
-            }.flatten()
-        }
-        return parsed.sortedByDescending { it.quality != null }.distinctBy { it.url }
-    }
-
-    private suspend fun emitDirect(
-        url: String,
-        server: String,
-        info: String,
-        callback: (ExtractorLink) -> Unit
-    ) {
-        if (!PlayNet.alive(url, ExtractorLinkType.VIDEO)) return
-        val name = PlayLabels.buildLabel("hicine", server, info)
-        callback(
-            newExtractorLink("[HiCine]", name, url, ExtractorLinkType.VIDEO) {
-                this.quality = PlayNet.getIndexQuality(info)
-            }
-        )
-    }
-
-    private suspend fun emitEntry(
-        entry: FileEntry,
-        subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Unit
-    ) {
-        if (entry.url.contains("pixeldrain")) {
-            pixelDirect(entry.url)?.let {
-                val info = listOfNotNull(entry.quality, entry.size).joinToString(" ")
-                emitDirect(it, "PixelDrain", info, callback)
-            }
-            return
-        }
-
-        val base = entry.url.substringBefore("/?")
-        val vcloud = entry.url.substringAfter("vcloud=", "")
-        if (vcloud.isBlank()) return
-
-        val links = serverTokens(base, vcloud) ?: return
-        if (links.watchable == false) return
-        val info = links.title
-            ?: listOfNotNull(entry.quality, entry.size).joinToString(" ")
-        coroutineScope {
-            links.tokens.orEmpty().forEach { (type, token) ->
-                val ts = token.ts ?: return@forEach
-                val sig = token.sig ?: return@forEach
-                async(Dispatchers.IO) {
-                    val server = SERVER_LABELS[type] ?: return@async
-                    val target = resolveServer(base, type, vcloud, ts, sig) ?: return@async
-                    if (type == "gofile") {
-                        PlayNet.emitSiteLink(
-                            "hicine", target, info,
-                            PlayNet.getIndexQuality(info), null, subtitleCallback, callback
-                        )
-                    } else {
-                        emitDirect(target, server, info, callback)
-                    }
-                }
-            }
-        }
-    }
-
-    private val tokenCache = ConcurrentHashMap<String, Pair<Long, LinksResponse?>>()
-
-    private suspend fun serverTokens(base: String, vcloud: String): LinksResponse? {
-        val cached = tokenCache[vcloud]
-        if (cached != null && System.currentTimeMillis() - cached.first < TOKEN_TTL) {
-            return cached.second
-        }
-        val response = try {
-            app.get(
-                "$base/api/links?vcloud=${URLEncoder.encode(vcloud, "UTF-8")}",
-                headers = PlayNet.headers(),
-                timeout = 15L
-            )
-        } catch (_: Exception) {
-            null
-        }
-        val parsed = response?.let {
-            try {
-                parseJson<LinksResponse>(it.text)
-            } catch (_: Exception) {
-                null
-            }
-        }
-        tokenCache[vcloud] = System.currentTimeMillis() to parsed
-        return parsed
-    }
-
-    private val noRedirectClient: OkHttpClient by lazy {
-        app.baseClient.newBuilder()
-            .followRedirects(false)
-            .connectTimeout(20, TimeUnit.SECONDS)
-            .readTimeout(45, TimeUnit.SECONDS)
-            .build()
-    }
-
-    private fun hopLocation(url: String): String? = try {
-        noRedirectClient.newCall(
-            Request.Builder().url(url).header("User-Agent", PLAY_UA).build()
-        ).execute().use { response ->
-            if (response.code in 300..399) response.header("Location") else null
-        }
-    } catch (_: Exception) {
-        null
-    }
-
-    private suspend fun resolveServer(
-        base: String,
-        type: String,
-        vcloud: String,
-        ts: String,
-        sig: String
-    ): String? {
-        val enc = URLEncoder.encode(vcloud, "UTF-8")
-        val goUrl = "$base/go?type=$type&vcloud=$enc&ts=$ts&sig=$sig"
-        return when (type) {
-            "pixel" -> hopLocation(goUrl)?.let { pixelDirect(it) }
-            "ten" -> resolveTen(goUrl)
-            else -> hopLocation(goUrl)
-        }
+        val pool = if (seasonMatch.isNotEmpty()) seasonMatch else withKey
+        val seen = mutableSetOf<String>()
+        return pool.sortedBy { g ->
+            val idx = QUALITY_ORDER.indexOf(g.quality?.lowercase() ?: "")
+            if (idx < 0) QUALITY_ORDER.size else idx
+        }.filter { g ->
+            val q = g.quality?.lowercase() ?: g.head.orEmpty()
+            seen.add(q)
+        }.take(3)
     }
 
     private fun pixelDirect(pageUrl: String): String? {
@@ -367,12 +213,59 @@ internal object HiCineSite {
         return "https://pixeldrain.dev/api/file/$id"
     }
 
-    private fun resolveTen(goUrl: String): String? {
-        val hubcloud = hopLocation(goUrl) ?: return null
-        val workerHop = hopLocation(hubcloud) ?: return null
-        val dlPage = hopLocation(workerHop) ?: return null
-        val link = dlPage.substringAfter("link=", "").substringBefore("&")
-        return link.takeIf { it.startsWith("http") }
+    private suspend fun emitDirect(
+        url: String,
+        server: String,
+        info: String,
+        quality: Int?,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        if (!PlayNet.alive(url, ExtractorLinkType.VIDEO)) return
+        val name = PlayLabels.buildLabel("hicine", server, info)
+        callback(
+            newExtractorLink("[HiCine]", name, url, ExtractorLinkType.VIDEO) {
+                this.quality = quality ?: PlayNet.getIndexQuality(info)
+            }
+        )
+    }
+
+    private suspend fun emitOption(
+        option: DlOption,
+        info: String,
+        quality: Int?,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        val url = resolveGoUrl(option) ?: return
+        val server = SERVER_LABELS[option.id] ?: option.name?.takeIf { it.isNotBlank() } ?: option.id ?: "Server"
+        when {
+            option.id == "pixel" || url.contains("pixeldrain.dev/u/") ->
+                pixelDirect(url)?.let { emitDirect(it, server, info, quality, callback) }
+            option.id == "gofile" || url.contains("gofile.io") ->
+                PlayNet.emitSiteLink("hicine", url, info, quality, null, subtitleCallback, callback)
+            url.contains("buzzheavier") || url.contains("vikingfile") || url.contains("transferit") ->
+                PlayNet.emitSiteLink("hicine", url, info, quality, null, subtitleCallback, callback)
+            else -> emitDirect(url, server, info, quality, callback)
+        }
+    }
+
+    private suspend fun emitHosts(
+        hosts: List<Host>,
+        info: String,
+        quality: Int?,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        coroutineScope {
+            hosts.take(3).forEach { host ->
+                val key = host.k ?: return@forEach
+                async(Dispatchers.IO) {
+                    fetchDlOptions(key).take(3).forEach { option ->
+                        emitOption(option, info, quality, subtitleCallback, callback)
+                    }
+                }
+            }
+        }
     }
 
     suspend fun invoke(
@@ -384,20 +277,27 @@ internal object HiCineSite {
             val title = res.title ?: return
             val hits = search(title)
             if (hits.isEmpty()) return
-            val item = pickAndLoad(hits, res) ?: return
-
-            val entries = if (res.season == null) {
-                parseMovieLinks(item.links).ifEmpty { parseMovieLinks(item.cloudlinks) }
-                    .sortedByDescending { it.quality != null }.distinctBy { it.url }
-            } else {
-                episodeEntries(item, res.season, res.episode)
-            }
-            if (entries.isEmpty()) return
+            val picked = pickTitle(hits, res) ?: return
+            val detail = fetchTitle(picked.id ?: return) ?: return
+            val groups = pickGroups(detail.groups.orEmpty(), res)
+            if (groups.isEmpty()) return
 
             coroutineScope {
-                entries.forEach { entry ->
+                groups.forEach { group ->
                     async(Dispatchers.IO) {
-                        emitEntry(entry, subtitleCallback, callback)
+                        val items = fetchGroup(group.k ?: return@async)
+                        val scoped = if (res.season != null && res.episode != null) {
+                            val exact = items.filter { it.ep == res.episode }
+                            if (exact.isNotEmpty()) exact else items.filter { it.ep == null }
+                        } else {
+                            items
+                        }
+                        val quality = QUALITY_RE.find(group.head.orEmpty())?.value
+                            ?: group.quality
+                        val info = listOfNotNull(quality, group.size?.take(12)).joinToString(" ").trim()
+                        scoped.take(2).forEach { item ->
+                            emitHosts(item.hosts.orEmpty(), info, PlayNet.getIndexQuality(quality), subtitleCallback, callback)
+                        }
                     }
                 }
             }

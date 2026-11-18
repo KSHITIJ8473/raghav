@@ -12,6 +12,8 @@ import com.lagradost.cloudstream3.newMovieSearchResponse
 import com.lagradost.cloudstream3.utils.AppUtils.toJson
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import org.json.JSONObject
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.random.Random
@@ -23,7 +25,11 @@ internal object PlayTmdb {
 
     private const val CACHE_TTL_MS = 10 * 60 * 1000L
     private const val CACHE_LIMIT = 64
-    private const val OUTAGE_MS = 60 * 1000L
+    private const val OUTAGE_MS = 20 * 1000L
+
+    // the homepage opens ~50 rows at once, tmdb rejects that burst on mobile
+    // networks so the calls are spread out instead
+    private val gate = Semaphore(10)
 
     private class CacheEntry(val body: String, val at: Long)
 
@@ -50,30 +56,45 @@ internal object PlayTmdb {
         }
     }
 
+    private fun parseResult(body: String?): JSONObject? {
+        if (body.isNullOrBlank()) return null
+        return try {
+            JSONObject(body).takeIf { it.has("results") }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private suspend fun fetchRaw(path: String, key: String, query: String): String? {
+        return try {
+            app.get("$BASE$path?api_key=$key&$query", timeout = 12_000L).text
+        } catch (_: Exception) {
+            null
+        }
+    }
+
     suspend fun get(path: String, params: Map<String, String> = emptyMap()): JSONObject? {
         val query = params.entries.joinToString("&") { "${it.key}=${Uri.encode(it.value)}" }
         val url = "$BASE$path?api_key=$KEY&$query"
         snapshot(url, CACHE_TTL_MS)?.let { return it }
         if (System.currentTimeMillis() < outageUntil) return snapshot(url, Long.MAX_VALUE)
-        val body = try {
-            app.get(url, timeout = 12000L).text
-        } catch (_: Exception) {
-            try {
-                app.get("$BASE$path?api_key=$KEY_ALT&$query", timeout = 12000L).text
-            } catch (_: Exception) {
+
+        gate.withPermit {
+            snapshot(url, CACHE_TTL_MS)?.let { return it }
+            var body = parseResult(fetchRaw(path, KEY, query))
+            if (body == null) {
+                body = parseResult(fetchRaw(path, KEY_ALT, query))
+            }
+            if (body == null) {
                 outageUntil = System.currentTimeMillis() + OUTAGE_MS
                 return snapshot(url, Long.MAX_VALUE)
             }
+            val raw = body.toString()
+            synchronized(cacheLock) {
+                cache[url] = CacheEntry(raw, System.currentTimeMillis())
+            }
+            return body
         }
-        val json = try {
-            JSONObject(body)
-        } catch (_: Exception) {
-            return null
-        }
-        synchronized(cacheLock) {
-            cache[url] = CacheEntry(body, System.currentTimeMillis())
-        }
-        return json
     }
 
     fun imageUrl(path: String?): String? {

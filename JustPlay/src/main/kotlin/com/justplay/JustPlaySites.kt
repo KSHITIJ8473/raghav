@@ -251,10 +251,19 @@ internal object HdHub4uSite {
             if (res.season != null) {
                 emitEpisodes(doc, domain, res, subtitleCallback, callback)
             } else {
-                for (el in doc.select("h3 a:matches((?i)480|720|1080|2160|4K), h4 a:matches((?i)480|720|1080|2160|4K)")) {
-                    val href = el.absUrl("href").ifBlank { el.attr("href") }
-                    if (!href.startsWith("http")) continue
-                    emitResolved(href, el.text().trim(), domain, subtitleCallback, callback)
+                // each quality link resolves through its own id page, running them
+                // one by one made hdhub4u the slowest source in the list
+                val semaphore = Semaphore(4)
+                coroutineScope {
+                    for (el in doc.select("h3 a:matches((?i)480|720|1080|2160|4K), h4 a:matches((?i)480|720|1080|2160|4K)")) {
+                        val href = el.absUrl("href").ifBlank { el.attr("href") }
+                        if (!href.startsWith("http")) continue
+                        async(Dispatchers.IO) {
+                            semaphore.withPermit {
+                                emitResolved(href, el.text().trim(), domain, subtitleCallback, callback)
+                            }
+                        }
+                    }
                 }
             }
         } catch (_: Exception) {}

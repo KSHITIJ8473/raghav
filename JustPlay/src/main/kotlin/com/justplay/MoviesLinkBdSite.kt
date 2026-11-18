@@ -216,7 +216,11 @@ internal object MoviesLinkBdSite {
         return emptyList()
     }
 
-    private data class BdDetail(val pageUrl: String, val files: List<BdFile>)
+    private data class BdDetail(
+        val pageUrl: String,
+        val files: List<BdFile>,
+        val watchPath: String? = null
+    )
 
     private data class BdFile(val info: String, val path: String)
 
@@ -239,6 +243,8 @@ internal object MoviesLinkBdSite {
         session.absorb(response)
         val doc = response.document
         val pageUrl = response.url
+        val watchPath = doc.selectFirst("iframe#mlbdHdFrame[src]")?.attr("src")?.trim()
+            ?.takeIf { it.startsWith("/p/") }
         val buttons: List<Element> = if (res.season == null) {
             doc.select("a[data-dl][data-ds][data-dr]")
         } else {
@@ -261,7 +267,7 @@ internal object MoviesLinkBdSite {
             }
             BdFile(info, path)
         }.distinctBy { it.path }
-        return BdDetail(pageUrl, files)
+        return BdDetail(pageUrl, files, watchPath)
     }
 
     private class BdRow(val host: String, val path: String)
@@ -389,7 +395,8 @@ internal object MoviesLinkBdSite {
             val href = a.attr("href").trim()
             if (!href.startsWith("http")) continue
             when {
-                href.contains("fsldownload") -> emitFsl(href, info, quality, pageUrl, callback)
+                href.contains("fsldownload") || PlayNet.hostOf(href).startsWith("fsl.") ->
+                    emitFsl(href, info, quality, pageUrl, callback)
                 directMedia.containsMatchIn(href) -> emitDirect(href, "Instant MP4", info, quality, callback)
                 else -> PlayNet.emitOwnLink(
                     "movielinkbd", href, info, quality, pageUrl,
@@ -486,6 +493,138 @@ internal object MoviesLinkBdSite {
     private val xcloudGate = Mutex()
     private val mediaPattern = Regex("""(?i)\.(m3u8|mp4|mkv)(?:\?|$)""")
 
+    private fun pd2Json(text: String): org.json.JSONObject? {
+        val start = text.indexOf("window.__PD2")
+        if (start < 0) return null
+        var i = text.indexOf('{', start)
+        if (i < 0) return null
+        var depth = 0
+        var inString = false
+        var escaped = false
+        while (i < text.length) {
+            val c = text[i]
+            if (escaped) {
+                escaped = false
+            } else if (c == '\\' && inString) {
+                escaped = true
+            } else if (c == '"') {
+                inString = !inString
+            } else if (!inString) {
+                if (c == '{') depth++
+                else if (c == '}') {
+                    depth--
+                    if (depth == 0) {
+                        return try {
+                            org.json.JSONObject(text.substring(text.indexOf('{', start), i + 1))
+                        } catch (_: Exception) {
+                            null
+                        }
+                    }
+                }
+            }
+            i++
+        }
+        return null
+    }
+
+    private data class HlsVariant(val url: String, val height: Int)
+
+    private fun parseVariants(master: String): List<HlsVariant> {
+        val out = mutableListOf<HlsVariant>()
+        val lines = master.lines()
+        var pending: Int? = null
+        for (line in lines) {
+            val trimmed = line.trim()
+            if (trimmed.startsWith("#EXT-X-STREAM-INF")) {
+                pending = Regex("""RESOLUTION=\d+x(\d+)""").find(trimmed)
+                    ?.groupValues?.get(1)?.toIntOrNull()
+            } else if (!trimmed.startsWith("#") && trimmed.isNotEmpty() && pending != null) {
+                out.add(HlsVariant(trimmed, pending))
+                pending = null
+            }
+        }
+        return out
+    }
+
+    private suspend fun emitWatch(
+        domain: String,
+        watchPath: String,
+        res: PlayLinkData,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        try {
+            val page = try {
+                app.get(
+                    PlayNet.absolute(watchPath, domain),
+                    headers = PlayNet.headers("$domain/"),
+                    timeout = 15L
+                ).text
+            } catch (_: Exception) {
+                return
+            }
+            val config = pd2Json(page) ?: return
+            var master = config.optString("master").takeIf { it.startsWith("http") }
+            var label = "Watch"
+            if (res.season != null) {
+                val episode = res.episode ?: return
+                val episodes = config.optJSONArray("episodes") ?: return
+                var found: String? = null
+                for (i in 0 until episodes.length()) {
+                    val ep = episodes.optJSONObject(i) ?: continue
+                    if (ep.optInt("season", -1) != res.season) continue
+                    val from = ep.optInt("number", -1)
+                    val to = ep.optInt("num_end", from)
+                    if (episode in from..to) {
+                        found = ep.optString("master").takeIf { it.startsWith("http") }
+                        if (found != null) break
+                    }
+                }
+                master = found ?: return
+                label = "Episode $episode Watch"
+            }
+            if (master == null) return
+
+            val streamHeaders = mapOf("Origin" to domain, "Referer" to "$domain/")
+            val playlist = try {
+                app.get(master, headers = PlayNet.headers() + streamHeaders, timeout = 15L).text
+            } catch (_: Exception) {
+                return
+            }
+            if (!playlist.trimStart().startsWith("#EXTM3U")) return
+            val variants = parseVariants(playlist)
+            val best = variants.maxOfOrNull { it.height } ?: Qualities.Unknown.value
+            val name = PlayLabels.buildLabel("movielinkbd", label, "Multi Audio")
+            try {
+                callback(
+                    newExtractorLink(
+                        "[${PlayLabels.siteName("movielinkbd")}]",
+                        name,
+                        master,
+                        ExtractorLinkType.M3U8
+                    ) {
+                        this.quality = best
+                        this.headers = streamHeaders
+                    }
+                )
+            } catch (_: Exception) {}
+            variants.sortedByDescending { it.height }.take(4).forEach { variant ->
+                try {
+                    callback(
+                        newExtractorLink(
+                            "[${PlayLabels.siteName("movielinkbd")}]",
+                            PlayLabels.buildLabel("movielinkbd", "$label ${variant.height}p", ""),
+                            variant.url,
+                            ExtractorLinkType.M3U8
+                        ) {
+                            this.quality = variant.height
+                            this.headers = streamHeaders
+                        }
+                    )
+                } catch (_: Exception) {}
+            }
+        } catch (_: Exception) {}
+    }
+
     private suspend fun emitXCloud(
         url: String,
         info: String,
@@ -579,6 +718,10 @@ internal object MoviesLinkBdSite {
             }
             if (domain == null || detail == null) return
             workingDomain = domain
+
+            detail.watchPath?.let { watchPath ->
+                emitWatch(domain, watchPath, res, callback)
+            }
 
             val semaphore = Semaphore(4)
             coroutineScope {

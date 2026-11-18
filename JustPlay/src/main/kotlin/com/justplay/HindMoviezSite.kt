@@ -161,15 +161,22 @@ internal object HindMoviezSite {
         val (info, quality) = shareInfo(doc)
         if (info.isBlank()) return
 
-        for (a in doc.select("div.btn-group a.btn, a.btn")) {
-            val href = a.attr("abs:href").ifBlank { a.attr("href") }.trim()
-            if (!href.startsWith("http")) continue
-            when {
-                a.classNames().contains("btn-info") ->
-                    hpageTarget(href)?.let { emitLink(it, info, quality, callback) }
-                href.contains("gdshine.org/s/") ->
-                    gdshineTarget(href.substringAfter("/s/").substringBefore("?"))
-                        ?.let { emitLink(it, info, quality, callback) }
+        val semaphore = Semaphore(4)
+        coroutineScope {
+            for (a in doc.select("div.btn-group a.btn, a.btn")) {
+                val href = a.attr("abs:href").ifBlank { a.attr("href") }.trim()
+                if (!href.startsWith("http")) continue
+                async(Dispatchers.IO) {
+                    semaphore.withPermit {
+                        when {
+                            a.classNames().contains("btn-info") ->
+                                hpageTarget(href)?.let { emitLink(it, info, quality, callback) }
+                            href.contains("gdshine.org/s/") ->
+                                gdshineTarget(href.substringAfter("/s/").substringBefore("?"))
+                                    ?.let { emitLink(it, info, quality, callback) }
+                        }
+                    }
+                }
             }
         }
     }

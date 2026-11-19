@@ -11,14 +11,16 @@ import okhttp3.RequestBody.Companion.toRequestBody
 internal const val RAI_UA =
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36"
 
-internal const val MAIN_HOST = "www.rareanimes.mov"
+internal const val MAIN_HOST = "www.rareanimes.foo"
+internal const val LEGACY_HOST = "www.rareanimes.mov"
 internal const val STORE_HOST = "store.animetoonhindi.com"
-internal const val CODEDEW_HOST = "codedew.com"
+internal const val CODEDEW_HOST = "animetoonhindi.com"
 internal const val ARGON_HOST = "argon.razorshell.space"
 
 // argon signs every URL against the exact UA and Accept-Language that requested it
 internal const val ARGON_AL = "en-US,en;q=0.9"
 internal const val HUBCLOUD_HOST = "hubcloud.ist"
+internal const val HUBCLOUD_ALT_HOST = "hubcloud.mov"
 internal const val PIXELDRAIN_HOST = "pixeldrain.net"
 
 private val hostMutex = Mutex()
@@ -49,12 +51,13 @@ private fun buildHeaders(url: String, extra: Map<String, String> = emptyMap()): 
 internal suspend fun raiGet(
     url: String,
     headers: Map<String, String> = emptyMap(),
-    allowRedirects: Boolean = true
+    allowRedirects: Boolean = true,
+    timeoutMs: Long = 30_000L
 ): NiceResponse {
     var response = app.get(
         url,
         headers = buildHeaders(url, headers),
-        timeout = 30_000L,
+        timeout = timeoutMs,
         allowRedirects = allowRedirects
     )
 
@@ -68,7 +71,7 @@ internal suspend fun raiGet(
             response = app.get(
                 url,
                 headers = buildHeaders(url, headers),
-                timeout = 30_000L,
+                timeout = timeoutMs,
                 allowRedirects = allowRedirects
             )
             if (!isRAICloudflareBlocked(response)) return response
@@ -80,7 +83,7 @@ internal suspend fun raiGet(
             response = app.get(
                 url,
                 headers = buildHeaders(url, headers),
-                timeout = 30_000L,
+                timeout = timeoutMs,
                 allowRedirects = allowRedirects
             )
             if (!isRAICloudflareBlocked(response)) return response
@@ -93,7 +96,8 @@ internal suspend fun raiPostBody(
     url: String,
     body: String,
     contentType: String,
-    headers: Map<String, String> = emptyMap()
+    headers: Map<String, String> = emptyMap(),
+    timeoutMs: Long = 30_000L
 ): NiceResponse {
     val requestHeaders = buildHeaders(url, headers).toMutableMap().apply {
         put("Content-Type", contentType)
@@ -102,7 +106,7 @@ internal suspend fun raiPostBody(
         url,
         requestBody = body.toRequestBody(contentType.toMediaType()),
         headers = requestHeaders,
-        timeout = 30_000L
+        timeout = timeoutMs
     )
 
     if (!isRAICloudflareBlocked(response)) return response
@@ -116,7 +120,7 @@ internal suspend fun raiPostBody(
                 url,
                 requestBody = body.toRequestBody(contentType.toMediaType()),
                 headers = requestHeaders,
-                timeout = 30_000L
+                timeout = timeoutMs
             )
             if (!isRAICloudflareBlocked(response)) return response
         }
@@ -128,7 +132,7 @@ internal suspend fun raiPostBody(
                 url,
                 requestBody = body.toRequestBody(contentType.toMediaType()),
                 headers = requestHeaders,
-                timeout = 30_000L
+                timeout = timeoutMs
             )
             if (!isRAICloudflareBlocked(response)) return response
         }
@@ -209,8 +213,8 @@ internal class CodedewResolver {
                 val id = Uri.parse(u).getQueryParameter("url")
                 if (id.isNullOrBlank()) null else ResolvedTarget.PixelDrain(id)
             }
-            u.contains("$HUBCLOUD_HOST/drive/") -> {
-                val id = u.substringAfter("$HUBCLOUD_HOST/drive/").substringBefore("?").substringBefore("/")
+            u.contains("$HUBCLOUD_HOST/drive/") || u.contains("$HUBCLOUD_ALT_HOST/drive/") -> {
+                val id = u.substringAfter("/drive/").substringBefore("?").substringBefore("/")
                 if (id.isBlank()) null else ResolvedTarget.HubCloud(id)
             }
             u.contains("pixeldrain.net/u/") || u.contains("pixeldrain.dev/u/") ||
@@ -241,8 +245,9 @@ internal class CodedewResolver {
                 url.contains("$CODEDEW_HOST/watchbeta/") ||
                 url.contains("$CODEDEW_HOST/streambeta/") -> url
             url.contains("$CODEDEW_HOST/zipcloud/") -> {
-                val afterQ = url.substringAfter("zipcloud/", "").substringAfter("?")
-                val id = afterQ.substringBefore("&").substringBefore("/")
+                val q = Uri.parse(url).getQueryParameter("url")
+                val id = if (!q.isNullOrBlank()) q
+                else url.substringAfter("zipcloud/", "").substringBefore("?").substringBefore("/")
                 if (id.isBlank()) throw CodedewChainException("empty zipcloud id")
                 return ResolvedTarget.HubCloud(id)
             }
@@ -258,14 +263,21 @@ internal class CodedewResolver {
 
         var target = current
         var referer = "https://$CODEDEW_HOST/"
+        val visited = mutableSetOf(target)
 
         for (hop in 0 until 8) {
-            val resp = raiGet(target, headers = mapOf("Referer" to referer), allowRedirects = false)
+            val resp = raiGet(
+                target,
+                headers = mapOf("Referer" to referer),
+                allowRedirects = false,
+                timeoutMs = 15_000L
+            )
 
             if (resp.code in 300..399) {
                 val loc = resp.headers["location"] ?: throw CodedewChainException("redirect without location")
                 target = absolutize(target, htmlUnescape(loc))
                 referer = "https://$CODEDEW_HOST/"
+                if (!visited.add(target)) throw CodedewChainException("redirect chain loops on itself")
                 classifyUrl(target)?.let { return it }
                 continue
             }
@@ -278,6 +290,7 @@ internal class CodedewResolver {
             val dh = DATA_HREF.find(body) ?: throw CodedewChainException("no data-href on codedew page")
             target = absolutize(target, htmlUnescape(dh.groupValues[1]))
             referer = target
+            if (!visited.add(target)) throw CodedewChainException("zipper steps loop on themselves")
             classifyUrl(target)?.let { return it }
             if (isForeignAdLink(target)) {
                 throw CodedewChainException("codedew step button leads to ad site ${hostOf(target)}")
@@ -292,7 +305,7 @@ internal class CodedewResolver {
         if (host.isBlank()) return false
         if (host == CODEDEW_HOST) return false
         val knownHosts = listOf(
-            ARGON_HOST, HUBCLOUD_HOST, PIXELDRAIN_HOST, "pixeldrain.dev",
+            ARGON_HOST, HUBCLOUD_HOST, HUBCLOUD_ALT_HOST, PIXELDRAIN_HOST, "pixeldrain.dev",
             "pixeldra.in", "gofile.io", "mediafire.com", "mega.nz", "mega.io",
             STORE_HOST
         )

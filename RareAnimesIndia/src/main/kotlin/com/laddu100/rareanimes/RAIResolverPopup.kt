@@ -42,9 +42,9 @@ internal class RAIResolvedLink(
 )
 
 private val ALLOWED_HOSTS = listOf(
+    "rareanimes.foo",
     "rareanimes.mov",
     "animetoonhindi.com",
-    "codedew.com",
     "argon.razorshell.space",
     "groovy.monster",
     "hubcloud.ist",

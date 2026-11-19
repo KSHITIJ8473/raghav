@@ -136,22 +136,15 @@ internal object RAICFStore {
 }
 
 internal fun isRAICloudflareBlocked(response: NiceResponse): Boolean {
-    val code = response.code
-    if (code == 503) return true
     val body = try { response.text.lowercase() } catch (_: Exception) { "" }
-    if (code == 403) {
-        if (body.contains("just a moment") && body.contains("challenge-platform")) return true
-        if (body.contains("checking your browser") && body.contains("cloudflare")) return true
-        if (body.contains("cf-browser-verification")) return true
-        if (body.contains("checking if the site connection is secure")) return true
-        if (body.contains("just a moment")) return true
-        return false
-    }
-    if (body.contains("just a moment") && body.contains("challenge-platform")) return true
-    if (body.contains("checking your browser") && body.contains("cloudflare")) return true
-    if (body.contains("cf-browser-verification")) return true
-    if (body.contains("checking if the site connection is secure")) return true
-    return false
+    val challengePage = body.contains("challenge-platform") ||
+        body.contains("cf-browser-verification") ||
+        body.contains("checking if the site connection is secure")
+    if (!challengePage) return false
+    return body.contains("just a moment") ||
+        body.contains("checking your browser") ||
+        body.contains("attention required") ||
+        body.contains("cf-chl")
 }
 
 private fun isChallengeTitle(title: String): Boolean {

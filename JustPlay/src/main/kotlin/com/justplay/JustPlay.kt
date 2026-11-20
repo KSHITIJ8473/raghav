@@ -47,6 +47,13 @@ data class PlayTmdbData(
     val type: String? = null
 )
 
+data class HomeRow(
+    val id: String,
+    val label: String,
+    val sub: String,
+    val data: String
+)
+
 class JustPlay : MainAPI() {
     override var mainUrl = "https://www.themoviedb.org"
     override var name = "JustPlay"
@@ -62,6 +69,8 @@ class JustPlay : MainAPI() {
         private const val KEY_CONCURRENCY = "JUSTPLAY_CONCURRENCY"
         private const val KEY_LIVE_SPORTS = "JUSTPLAY_LIVE_SPORTS"
         private const val KEY_LIVE_SPORTS_TOP = "JUSTPLAY_LIVE_SPORTS_TOP"
+        private const val KEY_ROW_ORDER = "JUSTPLAY_ROW_ORDER"
+        private const val KEY_ROW_HIDDEN = "JUSTPLAY_ROW_HIDDEN"
         private const val LIVE_ROW = "live_sports"
         private const val LINKS_PER_SOURCE = 40
 
@@ -102,6 +111,28 @@ class JustPlay : MainAPI() {
             SiteRow("movielinkbd", "MovieLinkBD", "Movies and series download servers"),
             SiteRow("play4u", "Play4u", "Multi language movies and series")
         )
+
+        private val tmdbRows = listOf(
+            "/trending/all/day" to "Trending Now",
+            "/movie/popular" to "Popular Movies",
+            "/tv/popular" to "Popular TV Shows",
+            "/movie/top_rated" to "Top Rated Movies",
+            "/tv/top_rated" to "Top Rated TV Shows",
+            "/discover/tv&with_networks=213" to "Netflix",
+            "/discover/tv&with_networks=1024" to "Amazon Prime",
+            "/discover/movie&with_origin_country=IN&sort_by=popularity.desc" to "Indian Movies",
+            "/discover/tv&with_original_language=ko&sort_by=popularity.desc" to "Korean Shows"
+        )
+
+        val homeRows = buildList {
+            tmdbRows.forEach { (path, label) -> add(HomeRow("tmdb:$path", label, "TMDB", path)) }
+            PlayDiscovery.genreRows.forEach { (id, label) ->
+                add(HomeRow("genre:$id", label, "Genre mix", PlayDiscovery.genreData(id)))
+            }
+            PlayDiscovery.languageRows.forEach { row ->
+                add(HomeRow("lang:${row.code}", row.label, "Language", PlayDiscovery.languageData(row)))
+            }
+        }
 
         fun downloadOnlyEnabled(): Boolean = try {
             CloudStreamApp.getKey<Boolean>(KEY_DL_ONLY) ?: false
@@ -151,6 +182,42 @@ class JustPlay : MainAPI() {
             } catch (_: Exception) {}
         }
 
+        fun homeRowOrder(): List<String> = try {
+            CloudStreamApp.getKey<String>(KEY_ROW_ORDER)
+                ?.split(",")
+                ?.filter { it.isNotBlank() }
+                .orEmpty()
+        } catch (_: Exception) {
+            emptyList()
+        }
+
+        fun hiddenHomeRows(): Set<String> = try {
+            CloudStreamApp.getKey<String>(KEY_ROW_HIDDEN)
+                ?.split(",")
+                ?.filter { it.isNotBlank() }
+                ?.toSet()
+                .orEmpty()
+        } catch (_: Exception) {
+            emptySet()
+        }
+
+        fun setHomeRows(order: List<String>, hidden: Set<String>) {
+            try {
+                CloudStreamApp.setKey(KEY_ROW_ORDER, order.joinToString(","))
+                CloudStreamApp.setKey(KEY_ROW_HIDDEN, hidden.joinToString(","))
+            } catch (_: Exception) {}
+        }
+
+        // rows the user never reordered keep their shipped position, rows added
+        // in a later update land after everything the order already knows
+        fun orderedHomeRows(): List<HomeRow> {
+            val saved = homeRowOrder()
+            val hidden = hiddenHomeRows()
+            return homeRows
+                .filter { it.id !in hidden }
+                .sortedBy { row -> saved.indexOf(row.id).takeIf { it >= 0 } ?: saved.size }
+        }
+
         fun setDownloadOnly(on: Boolean) {
             try {
                 CloudStreamApp.setKey(KEY_DL_ONLY, on)
@@ -164,32 +231,13 @@ class JustPlay : MainAPI() {
         }
     }
 
-    private val tmdbRows = listOf(
-        Pair("/trending/all/day", "Trending Now"),
-        Pair("/movie/popular", "Popular Movies"),
-        Pair("/tv/popular", "Popular TV Shows"),
-        Pair("/movie/top_rated", "Top Rated Movies"),
-        Pair("/tv/top_rated", "Top Rated TV Shows"),
-        Pair("/discover/tv&with_networks=213", "Netflix"),
-        Pair("/discover/tv&with_networks=1024", "Amazon Prime"),
-        Pair("/discover/movie&with_origin_country=IN&sort_by=popularity.desc", "Indian Movies"),
-        Pair("/discover/tv&with_original_language=ko&sort_by=popularity.desc", "Korean Shows")
-    )
-
     override val mainPage: List<MainPageData>
         get() {
             val rows = ArrayList<MainPageData>(34)
             if (liveSportsEnabled() && liveSportsOnTop()) {
                 rows.add(MainPageData("Live Sports", LIVE_ROW))
             }
-            rows.add(MainPageData(tmdbRows[0].second, tmdbRows[0].first))
-            tmdbRows.drop(1).forEach { rows.add(MainPageData(it.second, it.first)) }
-            PlayDiscovery.genreRows.forEach { (id, label) ->
-                rows.add(MainPageData(label, PlayDiscovery.genreData(id)))
-            }
-            PlayDiscovery.languageRows.forEach { langRow ->
-                rows.add(MainPageData(langRow.label, PlayDiscovery.languageData(langRow)))
-            }
+            orderedHomeRows().forEach { rows.add(MainPageData(it.label, it.data)) }
             if (liveSportsEnabled() && !liveSportsOnTop()) {
                 rows.add(MainPageData("Live Sports", LIVE_ROW))
             }

@@ -489,6 +489,9 @@ object JustPlaySettings {
         val liveRow = homeRow(ctx, "Live Sports", "Live matches on the home page") { openLiveSports(ctx) }
         root.addView(liveRow)
 
+        val homepageRow = homeRow(ctx, "Homepage", "Show, hide and order rows") { openHomepage(ctx) }
+        root.addView(homepageRow)
+
         root.addView(View(ctx), LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f
         ))
@@ -516,6 +519,7 @@ object JustPlaySettings {
         manageRow.alpha = 0f; manageRow.translationX = 70f
         perfRow.alpha = 0f; perfRow.translationX = 70f
         liveRow.alpha = 0f; liveRow.translationX = 70f
+        homepageRow.alpha = 0f; homepageRow.translationX = 70f
         close.alpha = 0f
 
         dlg.setContentView(root)
@@ -532,6 +536,7 @@ object JustPlaySettings {
             slideIn(manageRow, 2)
             slideIn(perfRow, 3)
             slideIn(liveRow, 4)
+            slideIn(homepageRow, 5)
             close.animate().alpha(1f).setStartDelay(320).setDuration(350)
                 .setInterpolator(DecelerateInterpolator()).start()
         }
@@ -799,6 +804,158 @@ object JustPlaySettings {
                 confirmRestart(ctx, "Live sports saved. Restart CloudStream now to apply them?")
             })
         }
+    }
+
+    private fun openHomepage(ctx: Context) {
+        subWindow(ctx, "HOMEPAGE") { body ->
+            body.addView(labelBlock(ctx, "Home page rows",
+                "Turn rows on or off and move them up and down, live sports keeps its own section"))
+
+            val known = JustPlay.homeRows.map { it.id }
+            var order = JustPlay.homeRowOrder().filter { it in known }.toMutableList()
+            order.addAll(known.filter { it !in order })
+            val hidden = JustPlay.hiddenHomeRows().toMutableSet()
+
+            val summary = TextView(ctx).apply {
+                setTextColor(SUBTEXT); textSize = 11f
+                setPadding(dp(ctx, 4), 0, dp(ctx, 4), dp(ctx, 10))
+            }
+            body.addView(summary)
+
+            val list = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL }
+            body.addView(list)
+
+            fun refreshSummary() {
+                summary.text = "${order.size - hidden.size} of ${order.size} rows shown"
+            }
+
+            fun rebuild(focusId: String? = null) {
+                list.removeAllViews()
+                order.forEachIndexed { index, id ->
+                    val row = JustPlay.homeRows.first { it.id == id }
+                    val card = homepageRowCard(
+                        ctx, row, index, order.size, id !in hidden,
+                        onMove = { step ->
+                            val target = index + step
+                            if (target in order.indices) {
+                                order[index] = order[target].also { order[target] = order[index] }
+                                rebuild(id)
+                            }
+                        },
+                        onToggle = { on ->
+                            if (on) hidden.remove(id) else hidden.add(id)
+                            refreshSummary()
+                        }
+                    )
+                    list.addView(card)
+                    if (id == focusId) {
+                        card.isFocusable = true
+                        card.requestFocus()
+                    }
+                }
+                refreshSummary()
+            }
+            rebuild()
+
+            body.addView(actionRow(ctx, "Reset rows",
+                "Default order with every row back on", "RESET") {
+                order = known.toMutableList()
+                hidden.clear()
+                rebuild()
+            })
+
+            body.addView(saveAndRestartButton(ctx) {
+                JustPlay.setHomeRows(order, hidden)
+                confirmRestart(ctx, "Homepage saved. Restart CloudStream now to apply it?")
+            })
+
+            body.addView(TextView(ctx).apply {
+                text = "Changes apply after the app restarts"
+                textSize = 11f; setTextColor(SUBTEXT); gravity = Gravity.CENTER
+                setPadding(0, dp(ctx, 10), 0, 0)
+            })
+        }
+    }
+
+    private fun homepageRowCard(
+        ctx: Context,
+        row: HomeRow,
+        index: Int,
+        total: Int,
+        visible: Boolean,
+        onMove: (Int) -> Unit,
+        onToggle: (Boolean) -> Unit
+    ): LinearLayout {
+        val card = LinearLayout(ctx).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            background = shape(SURFACE, 16, ctx, 1, BORDER)
+            setPadding(dp(ctx, 14), dp(ctx, 12), dp(ctx, 14), dp(ctx, 12))
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { bottomMargin = dp(ctx, 8) }
+        }
+
+        val bar = View(ctx)
+        card.addView(bar, LinearLayout.LayoutParams(dp(ctx, 3), dp(ctx, 40)).apply {
+            rightMargin = dp(ctx, 13)
+        })
+
+        val col = LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        }
+        val title = TextView(ctx).apply {
+            text = row.label
+            textSize = 14f
+            setTypeface(typeface, Typeface.BOLD)
+        }
+        val sub = TextView(ctx).apply {
+            textSize = 11f
+            setPadding(0, dp(ctx, 3), 0, 0)
+        }
+        col.addView(title)
+        col.addView(sub)
+        card.addView(col)
+
+        fun paint(on: Boolean) {
+            bar.background = shape(if (on) ACCENT else BORDER_HI, 2, ctx)
+            title.setTextColor(if (on) TEXT else SUBTEXT)
+            sub.setTextColor(SUBTEXT)
+            sub.text = if (on) row.sub else "Hidden - ${row.sub}"
+        }
+        paint(visible)
+
+        fun moveButton(label: String, enabled: Boolean, step: Int): Button =
+            Button(ctx).apply {
+                text = label; textSize = 14f
+                setTextColor(if (enabled) TEXT else 0x66FFFFFF.toInt())
+                background = shape(SURFACE_2, 14, ctx, 1, BORDER_HI)
+                isAllCaps = false; setTypeface(typeface, Typeface.BOLD)
+                setPadding(dp(ctx, 13), dp(ctx, 6), dp(ctx, 13), dp(ctx, 6))
+                minHeight = 0; minWidth = 0
+                isClickable = enabled
+                isFocusable = enabled
+                alpha = if (enabled) 1f else 0.4f
+                setOnClickListener {
+                    performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                    onMove(step)
+                }
+            }
+        card.addView(moveButton("↑", index > 0, -1))
+        card.addView(moveButton("↓", index < total - 1, 1))
+
+        val sw = themedSwitch(ctx)
+        sw.isChecked = visible
+        sw.setOnCheckedChangeListener { _: CompoundButton, on: Boolean ->
+            paint(on)
+            onToggle(on)
+        }
+        card.addView(sw, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        ).apply { leftMargin = dp(ctx, 10) })
+
+        return card
     }
 
     private fun actionRow(

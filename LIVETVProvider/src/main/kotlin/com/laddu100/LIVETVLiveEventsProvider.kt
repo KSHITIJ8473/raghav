@@ -28,7 +28,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 class LIVETVLiveEventsProvider(
-    override var name: String = "⚡ LIVE TV Live Events",
+    override var name: String = "LIVE TV Live Events",
     private val mode: String = "live",
 ) : MainAPI() {
     companion object {
@@ -77,9 +77,9 @@ class LIVETVLiveEventsProvider(
             val endTime = eventInfo.endTime?.let { dateFormat.parse(it)?.time }
 
             when {
-                endTime != null && now >= endTime -> "✅"
-                startTime != null && now < startTime -> "🔜"
-                startTime != null && now >= startTime -> "🔴"
+                endTime != null && now >= endTime -> "ENDED"
+                startTime != null && now < startTime -> "UPCOMING"
+                startTime != null && now >= startTime -> "LIVE"
                 else -> ""
             }
         } catch (_: Exception) {
@@ -173,23 +173,13 @@ class LIVETVLiveEventsProvider(
 
         return newHomePageResponse(
             channels.groupBy { it.category ?: "Other" }.map { (category, categoryChannels) ->
-                val icon = when (category.lowercase()) {
-                    "boxing" -> "🥊"
-                    "tennis" -> "🎾"
-                    "ice hockey" -> "🏒"
-                    "football" -> "⚽"
-                    "motorsport" -> "🏎️"
-                    "basketball" -> "🏀"
-                    "cricket" -> "🏏"
-                    else -> "📺"
-                }
                 val searchResponses = categoryChannels
                     .sortedWith(
                         compareBy<LIVETVChannel> { channel ->
-                            when {
-                                getEventStatus(channel).contains("🔴") -> 0
-                                getEventStatus(channel).contains("🔜") -> 1
-                                getEventStatus(channel).contains("✅") -> 2
+                            when (getEventStatus(channel)) {
+                                "LIVE" -> 0
+                                "UPCOMING" -> 1
+                                "ENDED" -> 2
                                 else -> 3
                             }
                         }.thenBy { channel ->
@@ -204,7 +194,7 @@ class LIVETVLiveEventsProvider(
                     )
                     .map { channel -> channel.toSearchResponse() }
                 HomePageList(
-                    name = "$icon $category",
+                    name = category,
                     list = searchResponses,
                     isHorizontalImages = true,
                 )
@@ -261,19 +251,19 @@ class LIVETVLiveEventsProvider(
 
         val plot = buildString {
             data.eventInfo?.let { info ->
-                info.eventName?.let { append("🏆 $it\n") }
+                info.eventName?.let { append("Tournament: $it\n") }
                 info.startTime?.let { startTime ->
                     try {
                         val dateFormat = SimpleDateFormat("yyyy/MM/dd HH:mm:ss Z", Locale.US)
                         val displayFormat = SimpleDateFormat("MMM dd, yyyy HH:mm z", Locale.US)
-                        append("🕐 " + displayFormat.format(dateFormat.parse(startTime)!!) + "\n")
+                        append("Starts: " + displayFormat.format(dateFormat.parse(startTime)!!) + "\n")
                     } catch (_: Exception) {
-                        append("🕐 $startTime\n")
+                        append("Starts: $startTime\n")
                     }
                 }
             }
             if (data.formats.isNotEmpty()) {
-                append("\n📡 Available Servers: ${data.formats.size}")
+                append("\nAvailable servers: ${data.formats.size}")
             }
         }
 

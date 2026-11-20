@@ -18,8 +18,8 @@ class LIVETVPlugin : Plugin() {
         LIVETV.context = context
         LIVETVLiveEventsProvider.context = context
 
-        registerMainAPI(LIVETVLiveEventsProvider("⚡ LIVE TV Live Events", "live"))
-        registerMainAPI(LIVETVLiveEventsProvider("🎬 LIVE TV Highlights", "highlights"))
+        registerMainAPI(LIVETVLiveEventsProvider("LIVE TV Live Events", "live"))
+        registerMainAPI(LIVETVLiveEventsProvider("LIVE TV Highlights", "highlights"))
 
         iptvProviders = runBlocking {
             LIVETVProviderManager.fetchProviders()
@@ -33,7 +33,7 @@ class LIVETVPlugin : Plugin() {
         selectedProviders.forEach { provider ->
             val title = provider["title"] as String
             val catLink = provider["catLink"] as String
-            registerMainAPI(LIVETV("📺 $title", catLink))
+            registerMainAPI(LIVETV(title, catLink))
         }
 
         val activity = context as AppCompatActivity

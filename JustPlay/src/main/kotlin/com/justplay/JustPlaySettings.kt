@@ -926,24 +926,34 @@ object JustPlaySettings {
         }
         paint(visible)
 
-        fun moveButton(label: String, enabled: Boolean, step: Int): Button =
-            Button(ctx).apply {
-                text = label; textSize = 14f
+        fun moveCell(label: String, enabled: Boolean, step: Int): TextView =
+            TextView(ctx).apply {
+                text = label; textSize = 15f
+                gravity = Gravity.CENTER
                 setTextColor(if (enabled) TEXT else 0x66FFFFFF.toInt())
-                background = shape(SURFACE_2, 14, ctx, 1, BORDER_HI)
-                isAllCaps = false; setTypeface(typeface, Typeface.BOLD)
-                setPadding(dp(ctx, 13), dp(ctx, 6), dp(ctx, 13), dp(ctx, 6))
-                minHeight = 0; minWidth = 0
+                setTypeface(typeface, Typeface.BOLD)
                 isClickable = enabled
                 isFocusable = enabled
-                alpha = if (enabled) 1f else 0.4f
                 setOnClickListener {
                     performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
                     onMove(step)
                 }
             }
-        card.addView(moveButton("↑", index > 0, -1))
-        card.addView(moveButton("↓", index < total - 1, 1))
+        val moveGroup = LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+            background = shape(SURFACE_2, 11, ctx, 1, BORDER_HI)
+        }
+        moveGroup.addView(
+            moveCell("↑", index > 0, -1),
+            LinearLayout.LayoutParams(dp(ctx, 34), dp(ctx, 27))
+        )
+        moveGroup.addView(View(ctx).apply { background = shape(BORDER, 0, ctx) },
+            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(ctx, 1)))
+        moveGroup.addView(
+            moveCell("↓", index < total - 1, 1),
+            LinearLayout.LayoutParams(dp(ctx, 34), dp(ctx, 27))
+        )
+        card.addView(moveGroup)
 
         val sw = themedSwitch(ctx)
         sw.isChecked = visible

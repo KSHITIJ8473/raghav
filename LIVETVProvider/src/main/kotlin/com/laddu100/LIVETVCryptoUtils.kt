@@ -31,9 +31,8 @@ object LIVETVCryptoUtils {
 
     private fun u32(v: Long): Long = v and MASK32
 
-    // the key and iv are picked character by character out of the lora
-    // alphabet, the walk is steered by a hash of the signature so both sides
-    // only need the two strings to rebuild them
+    // key and iv are walked out of the lora alphabet, steered by a hash of
+    // the signature so both sides only need the two strings
     private fun deriveKey(lora: String, sig: String): ByteArray {
         var h = fnv1a32(sig.toByteArray(Charsets.ISO_8859_1), 2166136261L)
         val key = ByteArray(16)

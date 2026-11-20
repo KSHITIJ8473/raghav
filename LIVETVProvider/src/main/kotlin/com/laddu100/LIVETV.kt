@@ -12,7 +12,6 @@ import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.newDrmExtractorLink
 import com.lagradost.cloudstream3.utils.newExtractorLink
 import com.raghav.donation.DonationManager
-import java.io.InputStream
 import java.nio.charset.StandardCharsets
 import java.util.UUID
 import javax.crypto.Cipher
@@ -134,7 +133,8 @@ class LIVETV(
         }
     }
 
-    // Try direct content first, then attempt AES decryption with embedded key/iv
+    // playlists arrive in three shapes: plain m3u, a hex blob rotated by the
+    // digit at index 3, or base64 with the key and iv embedded at fixed offsets
     private fun decryptContent(content: String): String {
         return try {
             if (content.startsWith(EXT_M3U) || content.startsWith(EXT_INF) || content.startsWith("#KODIPROP")) {
@@ -145,6 +145,21 @@ class LIVETV(
 
             if (trimmedContent.length < 79) {
                 return trimmedContent
+            }
+
+            val prefix = trimmedContent.substring(0, 3)
+            val suffix = trimmedContent.substring(trimmedContent.length - 3)
+            val shift = trimmedContent[3].digitToIntOrNull(16)
+
+            if (prefix.reversed() == suffix && shift != null) {
+                val hexStr = trimmedContent.substring(4, trimmedContent.length - 3)
+                if (hexStr.length >= 64 && hexStr.length % 2 == 0 && hexStr.matches(Regex("^[0-9a-fA-F]+$"))) {
+                    val decrypted = decryptHexPayload(hexStr, shift)
+                    if (decrypted != null) {
+                        val extIndex = decrypted.indexOf("#EXT")
+                        return if (extIndex != -1) decrypted.substring(extIndex) else decrypted
+                    }
+                }
             }
 
             val part1 = trimmedContent.substring(0, 10)
@@ -168,6 +183,30 @@ class LIVETV(
             String(decrypted, StandardCharsets.UTF_8)
         } catch (_: Exception) {
             content
+        }
+    }
+
+    // the rotation moves every hex character by the shift amount, then the
+    // first 16 bytes become the key, the next 16 the iv and the rest the payload
+    private fun decryptHexPayload(hexStr: String, shift: Int): String? {
+        return try {
+            val hexChar = { idx: Int ->
+                if (shift == 0) hexStr[idx] else hexStr[(shift + idx) % hexStr.length]
+            }
+            val getByte = { idx: Int ->
+                ((Character.digit(hexChar(idx * 2), 16) shl 4) or
+                    Character.digit(hexChar(idx * 2 + 1), 16)).toByte()
+            }
+
+            val key = ByteArray(16) { getByte(it) }
+            val iv = ByteArray(16) { getByte(it + 16) }
+            val ct = ByteArray(hexStr.length / 2) { getByte(it) }
+
+            val cipher = Cipher.getInstance("AES/CBC/PKCS5PADDING")
+            cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(key, "AES"), IvParameterSpec(iv))
+            String(cipher.doFinal(ct), StandardCharsets.UTF_8)
+        } catch (_: Exception) {
+            null
         }
     }
 

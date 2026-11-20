@@ -18,35 +18,22 @@ class LIVETVPlugin : Plugin() {
         LIVETV.context = context
         LIVETVLiveEventsProvider.context = context
 
-        registerMainAPI(LIVETVLiveEventsProvider())
+        registerMainAPI(LIVETVLiveEventsProvider("⚡ LIVE TV Live Events", "live"))
+        registerMainAPI(LIVETVLiveEventsProvider("🎬 LIVE TV Highlights", "highlights"))
 
         iptvProviders = runBlocking {
             LIVETVProviderManager.fetchProviders()
         }
 
-        val providerSettings = iptvProviders.mapNotNull { provider ->
-            val title = provider["title"] as? String ?: return@mapNotNull null
-            title to (sharedPref?.getBoolean(title, false) ?: false)
-        }.toMap()
-
-        val selectedProviders = iptvProviders.filter {
-            val title = it["title"] as? String
-            title != null && providerSettings[title] == true
+        val selectedProviders = iptvProviders.filter { provider ->
+            val title = provider["title"] as? String
+            title != null && sharedPref?.getBoolean(title, false) == true
         }
 
         selectedProviders.forEach { provider ->
             val title = provider["title"] as String
             val catLink = provider["catLink"] as String
-            var type = provider["type"] as? String
-            if (type == null) {
-                type = "m3u"
-            }
-            val displayTitle = title
-            if (type == "custom") {
-                registerMainAPI(LIVETVLiveEventsProvider(displayTitle, catLink))
-            } else {
-                registerMainAPI(LIVETV(displayTitle, catLink))
-            }
+            registerMainAPI(LIVETV("📺 $title", catLink))
         }
 
         val activity = context as AppCompatActivity

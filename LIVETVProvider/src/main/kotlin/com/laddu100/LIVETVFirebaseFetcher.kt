@@ -12,16 +12,17 @@ import java.util.concurrent.TimeUnit
 
 object LIVETVFirebaseFetcher {
 
-    private const val PACKAGE_NAME = "com.cricfy.tv"
+    private const val PACKAGE_NAME = "com.playfy.tv"
+    private const val ANDROID_CERT = "31CD6939D1BEAE32D1B0EF2D9460B170116A1885"
 
     private val API_KEY: String
-        get() = "AIzaSyAh9jkEU0E_UYxH0m_BKAt-uUSTiTPqhb8"
+        get() = "AIzaSyDdHIwVAD3XgP5bEwZOcR1QIz7gO5q5EoM"
 
     private val APP_ID: String
-        get() = "1:963020218535:android:47ec53252c64fb3c9c7b82"
+        get() = "1:239487160038:android:308875071ce6f0fd48f527"
 
     private val PROJECT_NUMBER: String
-        get() = "963020218535"
+        get() = "239487160038"
 
     private val client = OkHttpClient.Builder()
         .connectTimeout(30, TimeUnit.SECONDS)
@@ -30,7 +31,6 @@ object LIVETVFirebaseFetcher {
 
     data class RemoteConfigResponse(
         val entries: Map<String, String>? = null,
-        val appName: String? = null,
         val state: String? = null,
         val templateVersion: String? = null,
     )
@@ -48,52 +48,55 @@ object LIVETVFirebaseFetcher {
 
                 val payload = """
                     {
-                        "appInstanceId": "$appInstanceId",
+                        "appVersion": "1.7",
                         "appInstanceIdToken": "",
+                        "languageCode": "en-IN",
+                        "appBuild": "8",
+                        "appInstanceId": "$appInstanceId",
+                        "countryCode": "IN",
+                        "analyticsUserProperties": {},
                         "appId": "$APP_ID",
-                        "countryCode": "US",
-                        "languageCode": "en-US",
-                        "platformVersion": "30",
-                        "timeZone": "UTC",
-                        "appVersion": "5.0",
-                        "appBuild": "50",
-                        "packageName": "$PACKAGE_NAME",
-                        "sdkVersion": "22.1.0",
-                        "analyticsUserProperties": {}
+                        "platformVersion": "33",
+                        "sdkVersion": "22.1.2",
+                        "packageName": "$PACKAGE_NAME"
                     }
                 """.trimIndent()
 
                 val request = Request.Builder()
                     .url(url)
                     .post(payload.toRequestBody("application/json".toMediaType()))
-                    .header("Content-Type", "application/json")
                     .header("Accept", "application/json")
+                    .header("Connection", "Keep-Alive")
+                    .header("Content-Type", "application/json")
+                    .header("User-Agent", "Dalvik/2.1.0 (Linux; U; Android 13; Pixel 5 Build/TQ3A.230901.001)")
+                    .header("X-Android-Cert", ANDROID_CERT)
                     .header("X-Android-Package", PACKAGE_NAME)
+                    .header("X-Firebase-RC-Fetch-Type", "BASE/1")
                     .header("X-Goog-Api-Key", API_KEY)
                     .header("X-Google-GFE-Can-Retry", "yes")
                     .build()
 
-                val response = client.newCall(request).execute()
-
-                if (response.isSuccessful) {
-                    val responseBody = response.body.string()
-                    if (!responseBody.isNullOrBlank()) {
-                        val configResponse = parseJson<RemoteConfigResponse>(responseBody)
-                        return@withContext configResponse.entries
+                client.newCall(request).execute().use { response ->
+                    if (response.isSuccessful) {
+                        val responseBody = response.body.string()
+                        if (!responseBody.isNullOrBlank()) {
+                            val configResponse = parseJson<RemoteConfigResponse>(responseBody)
+                            return@withContext configResponse.entries
+                        }
                     }
+                    null
                 }
-
-                null
             } catch (_: Exception) {
                 null
             }
         }
     }
 
-    // cric_api2 is the working endpoint most of the time, cric_api1 is the spare
-    suspend fun getProviderApiUrl(): String? {
-        val entries = fetchRemoteConfig()
-        return entries?.get("cric_api2") ?: entries?.get("cric_api1")
+    suspend fun getLora(): String? {
+        return fetchRemoteConfig()?.get("lora")
     }
 
+    suspend fun getBaseUrl(): String? {
+        return fetchRemoteConfig()?.get("baseUrl")?.trimEnd('/')
+    }
 }

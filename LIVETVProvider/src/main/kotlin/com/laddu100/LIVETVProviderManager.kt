@@ -7,66 +7,76 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.util.concurrent.TimeUnit
 
-data class LIVETVProviderData(
-    val id: Int,
-    val title: String,
-    val image: String,
-    val catLink: String?,
-    val type: String? = null,
-)
-
-data class LIVETVEventData(
-    val id: Int,
-    val title: String,
-    val image: String?,
-    val slug: String,
-    val cat: String?,
-    val eventInfo: LIVETVEventInfo?,
-    val publish: Int,
-    val formats: List<LIVETVEventFormat>?,
+data class LIVETVCategoryData(
+    val id: String? = null,
+    val title: String? = null,
+    val image: String? = null,
+    val catLink: String? = null,
+    val position: String? = null,
+    val publish: String? = null,
 )
 
 data class LIVETVEventInfo(
-    val teamA: String?,
-    val teamB: String?,
-    val teamAFlag: String?,
-    val teamBFlag: String?,
-    val eventCat: String?,
-    val eventName: String?,
-    val eventLogo: String?,
-    val isHot: String?,
-    val eventType: String?,
-    val startTime: String?,
-    val endTime: String?,
+    val eventName: String? = null,
+    val teamA: String? = null,
+    val teamAFlag: String? = null,
+    val teamB: String? = null,
+    val teamBFlag: String? = null,
+    val startTime: String? = null,
+    val endTime: String? = null,
+    val eventBanner: String? = null,
+    val isPinned: Int? = null,
 )
 
-data class LIVETVEventFormat(
-    val title: String?,
-    val webLink: String?,
+data class LIVETVChannel(
+    val id: String? = null,
+    val title: String? = null,
+    val image: String? = null,
+    val cat: String? = null,
+    val category: String? = null,
+    val publish: String? = null,
+    val formats: List<String>? = null,
+    val eventInfo: LIVETVEventInfo? = null,
 )
 
-data class LIVETVChannelData(
-    val name: String? = null,
-    val logo: String? = null,
-    val visible: Boolean? = null,
-    val links: String? = null,
-    val link_names: List<String>? = null,
-    val is_playlist: Boolean? = null,
+data class LIVETVCatFilter(
+    val id: String? = null,
+    val image: String? = null,
+    val position: String? = null,
+    val publish: String? = null,
+    val title: String? = null,
 )
 
-data class LIVETVChannelWrapper(
-    val channel: String = "",
+data class LIVETVChannelListResponse(
+    val cats: List<LIVETVCatFilter>? = null,
+    val channels: List<LIVETVChannel>? = null,
+)
+
+data class LIVETVStreamEntry(
+    val id: Int? = null,
+    val title: String? = null,
+    val link: String? = null,
+    val api: String? = null,
+    val type: String? = null,
+    val webLink: String? = null,
+    val defaultLanguage: String? = null,
 )
 
 object LIVETVProviderManager {
-    private const val DEFAULT_BASE_URL = "https://cfymarkscanjiostar80.top"
+    private const val DEFAULT_BASE_URL = "https://reliablewebcenter.online"
+    private const val USER_AGENT = "PLAYFy/1.7 (Android)"
 
-    private val baseUrlValue = ExpiringRemoteValue()
+    private const val CONFIG_TTL_MS = 1_800_000L
+    private const val FALLBACK_TTL_MS = 120_000L
+    private const val MIN_REFETCH_MS = 60_000L
+
+    private val baseUrl = ExpiringRemoteValue(CONFIG_TTL_MS, FALLBACK_TTL_MS, MIN_REFETCH_MS)
+    private val lora = ExpiringRemoteValue(CONFIG_TTL_MS, FALLBACK_TTL_MS, MIN_REFETCH_MS)
 
     private val client = OkHttpClient.Builder()
         .connectTimeout(30, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS)
-        .addInterceptor(StaleDomainInterceptor(baseUrlValue))
+        .addInterceptor(StaleDomainInterceptor(baseUrl))
         .build()
 
     private val fallbackProviders = listOf(
@@ -88,7 +98,7 @@ object LIVETVProviderManager {
         mapOf("id" to 104, "title" to "ZEE5", "image" to "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQS0OT2NFe9Jb4ofg_DrXx42EKLgyGnSGwoLg&usqp=CAU", "catLink" to "https://zee5.cloud-hatchh.workers.dev/?token=42e4f5-2d413b-3c37d8-7f3f35"),
         mapOf("id" to 106, "title" to "JIOTV+", "image" to "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcRh5KeAyYdOyxaCWDPbiUsJW7Oy4v_7uFqf06rIwGxaWc6nQuNVqZ2Q_Qej&s=10", "catLink" to "https://raw.githubusercontent.com/alex8875/m3u/refs/heads/main/jtv.m3u"),
         mapOf("id" to 110, "title" to "JIOLIVE IND", "image" to "https://lens-storage.storage.googleapis.com/png/bb364a303da24e5db23f01bac26949cf", "catLink" to "https://raw.githubusercontent.com/alex8875/jc_live/refs/heads/main/jevents_live.m3u"),
-        mapOf("id" to 111, "title" to "ISLAMIC TV", "image" to "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcTcTOpdBeIBA52NTSANHC6Ow0v-k6hAr76vWg&usqp=CAU", "catLink" to "null"),
+        mapOf("id" to 111, "title" to "ISLAMIC TV", "image" to "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcTcTOpdBeIBA52NTSANHC6Ow0v-k6hAr76vWg&usqp=CAU", "catLink" to "https://tv.noobon.top/playlist/islamic.php"),
         mapOf("id" to 114, "title" to "TAPMAD PK", "image" to "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcT4X-7suwtvYWwoa6m0ngFTKZt5Hg5Z2kQF1g&usqp=CAU", "catLink" to "https://tv.noobon.top/playlist/tapmad.php"),
         mapOf("id" to 117, "title" to "ZEE5 IN", "image" to "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQS0OT2NFe9Jb4ofg_DrXx42EKLgyGnSGwoLg&usqp=CAU", "catLink" to "https://ranapk.short.gy/Z5in.php"),
         mapOf("id" to 126, "title" to "WORLD TV", "image" to "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcSg8OiEwOT5UL5UttBZ5Tnhgsod8i2EQlfB97FFchdBOo8e_PfxvR8RJ68&s=10", "catLink" to "https://ranapk.short.gy/WorldTV11.m3u"),
@@ -112,7 +122,6 @@ object LIVETVProviderManager {
         mapOf("id" to 164, "title" to "JIOTV+ S3", "image" to "https://i.ibb.co/VY9ND7rY/image.png", "catLink" to "https://jiotv.edge-nexus.workers.dev/?token=42e4f5-2d863b-3c37d8-8f3f51"),
         mapOf("id" to 165, "title" to "ICC TV", "image" to "https://m.media-amazon.com/images/I/31F7ropt9OL.png", "catLink" to "https://icc.alpha-circuit.workers.dev/?token=42e4f5-2d863b-3c37d8-7f3f69"),
         mapOf("id" to 166, "title" to "Pluto Tv", "image" to "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcRI_jYjppElN7Tb6Ok3bL_J0K7QQPzfQbzPeAWzVilH9y7CYKzAy-XJbi4&s=10", "catLink" to "https://tv.noobon.top/playlist/plutotv.php"),
-        mapOf("id" to 167, "title" to "Movies", "image" to "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcSZsNCiIfBGnyhPuE6n-t37ma_baSTkX_trJ45qtXvwLhxsdVWzNW0dt8u7&s=10", "catLink" to "ok"),
         mapOf("id" to 168, "title" to "FANCODE BD", "image" to "https://play-lh.googleusercontent.com/lp1Tdhp75MQyrHqrsyRBV74HxoL3Ko8KRAjOUI1wUHREAxuuVwKR6vnamgvMEn4C4Q", "catLink" to "https://ranapk.short.gy/FCBD/playlist.php"),
         mapOf("id" to 169, "title" to "EPL BD IP", "image" to "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQye0cNsXab_lPM3Zv2pklCk2ZT92X3micxy7jF2n5F46-kaSgnIBjHq3KY&s=10", "catLink" to "https://bdix.short.gy/EPLxBDIX/playlist.php"),
         mapOf("id" to 170, "title" to "JIO BD", "image" to "https://uxwing.com/wp-content/themes/uxwing/download/brands-and-social-media/jio-logo-icon.png", "catLink" to "https://ranapk.short.gy/JIOBD.m3u"),
@@ -137,13 +146,14 @@ object LIVETVProviderManager {
     )
 
     fun refreshFromFirebase() {
-        baseUrlValue.reset()
+        baseUrl.reset()
+        lora.reset()
     }
 
-    suspend fun getBaseUrl(): String {
-        return baseUrlValue.get(
+    private suspend fun getBaseUrl(): String {
+        return baseUrl.get(
             fetch = {
-                LIVETVFirebaseFetcher.getProviderApiUrl()?.trimEnd('/')
+                LIVETVFirebaseFetcher.getBaseUrl()?.trimEnd('/')
             },
             fallback = {
                 DEFAULT_BASE_URL
@@ -151,144 +161,113 @@ object LIVETVProviderManager {
         )
     }
 
-    private suspend fun getProvidersUrl(): String {
-        val baseUrl = getBaseUrl()
-        return "$baseUrl/cats.txt"
+    private suspend fun getLora(): String {
+        return lora.get(
+            fetch = {
+                LIVETVFirebaseFetcher.getLora()
+            },
+            fallback = {
+                LIVETVCryptoUtils.DEFAULT_LORA
+            },
+        )
     }
 
-    private suspend fun getLiveEventsUrl(): String {
-        val baseUrl = getBaseUrl()
-        return "$baseUrl/categories/live-events.txt"
+    // a failed call invalidates the cached domain or key, one immediate
+    // retry picks up the fresh value instead of failing the whole page
+    private suspend fun fetchAndDecrypt(path: String): String? {
+        for (i in 0 until 2) {
+            try {
+                val url = "${getBaseUrl()}/$path"
+                val request = Request.Builder()
+                    .url(url)
+                    .header("User-Agent", USER_AGENT)
+                    .header("Accept", "application/json")
+                    .build()
+
+                val raw = client.newCall(request).execute().use { response ->
+                    if (!response.isSuccessful) {
+                        baseUrl.invalidate()
+                        null
+                    } else {
+                        response.body.string()
+                    }
+                }
+
+                if (raw.isNullOrBlank()) {
+                    continue
+                }
+
+                val encoded = LIVETVCryptoUtils.extractDataField(raw)
+                if (!encoded.startsWith("[") && !encoded.startsWith("{")) {
+                    val decrypted = LIVETVCryptoUtils.decryptPlayFy(
+                        encoded,
+                        getLora(),
+                        LIVETVCryptoUtils.DEFAULT_SIG,
+                    )
+                    if (decrypted != null) {
+                        return decrypted
+                    }
+                    lora.invalidate()
+                    continue
+                }
+                return encoded
+            } catch (_: Exception) {
+                baseUrl.invalidate()
+            }
+        }
+        return null
     }
 
     suspend fun fetchProviders(): List<Map<String, Any>> {
         return withContext(Dispatchers.IO) {
             try {
-                val providersUrl = getProvidersUrl()
-
-                val request = Request.Builder()
-                    .url(providersUrl)
-                    .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-                    .build()
-
-                val response = client.newCall(request).execute()
-                if (response.isSuccessful) {
-                    val encryptedData = response.body.string()
-                    if (!encryptedData.isNullOrBlank()) {
-                        val decryptedData = LIVETVCryptoUtils.decryptData(encryptedData.trim())
-                        if (!decryptedData.isNullOrBlank()) {
-                            val providers = parseJson<List<LIVETVProviderData>>(decryptedData)
-                            return@withContext providers.filter { !it.catLink.isNullOrBlank() }
-                                .map { provider ->
-                                    mapOf(
-                                        "id" to provider.id,
-                                        "title" to provider.title,
-                                        "image" to provider.image,
-                                        "catLink" to provider.catLink!!,
-                                        "type" to (provider.type ?: "custom"),
-                                    )
-                                }
-                        }
+                val json = fetchAndDecrypt("cc.json") ?: return@withContext fallbackProviders
+                val providers = parseJson<List<LIVETVCategoryData>>(json)
+                providers
+                    .filter { !it.catLink.isNullOrBlank() && it.catLink != "null" }
+                    .map { provider ->
+                        mapOf(
+                            "id" to (provider.id ?: ""),
+                            "title" to (provider.title ?: ""),
+                            "image" to (provider.image ?: ""),
+                            "catLink" to provider.catLink!!,
+                            "type" to "m3u",
+                        )
                     }
-                }
-            } catch (_: Exception) {}
-            fallbackProviders
+            } catch (_: Exception) {
+                fallbackProviders
+            }
         }
     }
 
-    suspend fun fetchLiveEvents(): List<LIVETVEventData> {
+    suspend fun fetchLiveEvents(): List<LIVETVChannel> {
+        return fetchChannelList("cats/live-events.json")
+    }
+
+    suspend fun fetchHighlights(): List<LIVETVChannel> {
+        return fetchChannelList("cats/highlights.json")
+    }
+
+    private suspend fun fetchChannelList(path: String): List<LIVETVChannel> {
         return withContext(Dispatchers.IO) {
             try {
-                val liveEventsUrl = getLiveEventsUrl()
-
-                val request = Request.Builder()
-                    .url(liveEventsUrl)
-                    .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-                    .build()
-
-                val response = client.newCall(request).execute()
-                if (response.isSuccessful) {
-                    val encryptedData = response.body.string()
-                    if (!encryptedData.isNullOrBlank()) {
-                        val decryptedData = LIVETVCryptoUtils.decryptData(encryptedData.trim())
-                        if (!decryptedData.isNullOrBlank()) {
-                            val events = parseJson<List<LIVETVEventData>>(decryptedData)
-                            return@withContext events.filter { it.publish == 1 }
-                        }
-                    }
-                }
-            } catch (_: Exception) {}
-            emptyList()
+                val json = fetchAndDecrypt(path) ?: return@withContext emptyList()
+                val response = parseJson<LIVETVChannelListResponse>(json)
+                response.channels?.filter { it.publish == "1" } ?: emptyList()
+            } catch (_: Exception) {
+                emptyList()
+            }
         }
     }
 
-    // custom playlists arrive as an encrypted list of channel wrappers
-    suspend fun fetchCustomEvents(catLink: String): List<LIVETVEventData> {
+    suspend fun fetchChannelStreams(channelId: String): List<LIVETVStreamEntry> {
         return withContext(Dispatchers.IO) {
             try {
-                val request = Request.Builder()
-                    .url(catLink)
-                    .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-                    .build()
-
-                val response = client.newCall(request).execute()
-                if (response.isSuccessful) {
-                    val encryptedData = response.body.string()
-                    if (!encryptedData.isNullOrBlank()) {
-                        val decryptedData = LIVETVCryptoUtils.decryptData(encryptedData.trim())
-                        if (!decryptedData.isNullOrBlank()) {
-                            val wrappers = parseJson<List<LIVETVChannelWrapper>>(decryptedData)
-                            val events = wrappers.mapIndexedNotNull { index, wrapper ->
-                                try {
-                                    val channelData = parseJson<LIVETVChannelData>(wrapper.channel)
-                                    if (channelData.visible == false) {
-                                        return@mapIndexedNotNull null
-                                    }
-                                    val links = channelData.links
-                                    if (links == null || links.isBlank()) {
-                                        return@mapIndexedNotNull null
-                                    }
-                                    val name = channelData.name ?: "Unknown Channel"
-                                    val eventInfo = LIVETVEventInfo(
-                                        teamA = null,
-                                        teamB = null,
-                                        teamAFlag = null,
-                                        teamBFlag = null,
-                                        eventCat = null,
-                                        eventName = channelData.name,
-                                        eventLogo = channelData.logo,
-                                        isHot = "0",
-                                        eventType = null,
-                                        startTime = null,
-                                        endTime = null,
-                                    )
-                                    val formats = links.split(", ").mapIndexed { i, link ->
-                                        val linkNames = channelData.link_names
-                                        LIVETVEventFormat(
-                                            title = linkNames?.getOrNull(i) ?: "Link ${i + 1}",
-                                            webLink = link,
-                                        )
-                                    }
-                                    LIVETVEventData(
-                                        id = index + 1,
-                                        title = name,
-                                        image = channelData.logo,
-                                        slug = links.substringBeforeLast("."),
-                                        cat = "Custom",
-                                        eventInfo = eventInfo,
-                                        publish = 1,
-                                        formats = formats,
-                                    )
-                                } catch (_: Exception) {
-                                    null
-                                }
-                            }
-                            return@withContext events.filter { it.publish == 1 }
-                        }
-                    }
-                }
-            } catch (_: Exception) {}
-            emptyList()
+                val json = fetchAndDecrypt("channels/$channelId.json") ?: return@withContext emptyList()
+                parseJson<List<LIVETVStreamEntry>>(json)
+            } catch (_: Exception) {
+                emptyList()
+            }
         }
     }
 }

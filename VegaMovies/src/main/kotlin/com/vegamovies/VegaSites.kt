@@ -7,6 +7,8 @@ import com.lagradost.cloudstream3.TvType
 import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.newMovieSearchResponse
 import com.lagradost.cloudstream3.newTvSeriesSearchResponse
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import org.json.JSONObject
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
@@ -39,13 +41,18 @@ internal object VegaSites {
 
     @Volatile
     private var domainsCheckedAt = 0L
+    private val domainLock = Mutex()
 
-    // firebase carries the live domains when the baked ones fall behind
+    // firebase carries the live domains when the baked ones fall behind,
+    // every homepage row lands here at once so the fetch rides one lock
     suspend fun refreshDomains() {
         if (System.currentTimeMillis() - domainsCheckedAt < 5 * 60_000L) return
-        domainsCheckedAt = System.currentTimeMillis()
-        FirebaseDomainHelper.getDomain("vegamovies")?.let { VEGA.rebase(it) }
-        FirebaseDomainHelper.getDomain("rogmovies")?.let { ROG.rebase(it) }
+        domainLock.withLock {
+            if (System.currentTimeMillis() - domainsCheckedAt < 5 * 60_000L) return@withLock
+            domainsCheckedAt = System.currentTimeMillis()
+            FirebaseDomainHelper.getDomain("vegamovies")?.let { VEGA.rebase(it) }
+            FirebaseDomainHelper.getDomain("rogmovies")?.let { ROG.rebase(it) }
+        }
     }
 
     fun siteOf(url: String): Site? = ALL.firstOrNull { site ->
@@ -319,61 +326,57 @@ internal object VegaSites {
         val seasons = mutableListOf<SeasonBlock>()
         val movieGroups = mutableListOf<QualityGroup>()
 
-        // season headline then quality headlines with server buttons
-        val seasonHeads = content.select("h1, h2").filter { el ->
-            Regex("""(?i)season\s*\d+|part\s*\d+""").containsMatchIn(el.text())
+        // layouts differ per post: "Season 8 ... 480p" can sit in any heading level,
+        // some posts use a lone season line with quality lines below it
+        val skipHead = Regex("""(?i)info|synopsis|screenshot|comment|winding""")
+        val seasonMark = Regex("""(?i)season\s*(\d{1,2})|part\s*(\d{1,2})|\bS(\d{1,2})\b""")
+        val qualityMark = Regex("""\b(480p|720p|1080p|2160p|4K|60FPS)\b""", RegexOption.IGNORE_CASE)
+
+        fun seasonNumOf(text: String): Int? {
+            val m = seasonMark.find(text) ?: return null
+            return m.groupValues[1].toIntOrNull() ?: m.groupValues[2].toIntOrNull()
+                ?: m.groupValues[3].toIntOrNull() ?: 1
         }
-        if (seasonHeads.isNotEmpty()) {
-            for (head in seasonHeads) {
-                val num = Regex("""(?i)season\s*(\d+)""").find(head.text())?.groupValues?.get(1)?.toIntOrNull()
-                    ?: Regex("""(?i)part\s*(\d+)""").find(head.text())?.groupValues?.get(1)?.toIntOrNull()
-                    ?: 1
-                val season = SeasonBlock(head.text().replace(Regex("""\s+"""), " ").trim(), num)
-                var sib: Element? = head.nextElementSibling()
-                while (sib != null) {
-                    val tag = sib.tagName()
-                    if (tag == "h1" || tag == "h2") break
-                    if (tag == "h3" || tag == "h4" || tag == "h5") {
-                        val label = sib.text().replace(Regex("""\s+"""), " ").trim()
-                        if (label.isBlank() || Regex("""(?i)info|synopsis|screenshot|comment""").containsMatchIn(label)) {
-                            sib = sib.nextElementSibling()
-                            continue
-                        }
-                        if (!Regex("""\b(480p|720p|1080p|2160p|4K|60FPS)\b""", RegexOption.IGNORE_CASE).containsMatchIn(label)) {
-                            sib = sib.nextElementSibling()
-                            continue
-                        }
-                        val group = QualityGroup(label)
-                        var p: Element? = sib.nextElementSibling()
-                        while (p != null && !listOf("h1", "h2", "h3", "h4", "h5").contains(p.tagName())) {
-                            collectButtons(p, group)
-                            p = p.nextElementSibling()
-                        }
-                        if (group.links.isNotEmpty()) season.groups.add(group)
-                    }
-                    sib = sib.nextElementSibling()
-                }
-                if (season.groups.isNotEmpty()) seasons.add(season)
+
+        fun blockFor(num: Int, label: String): SeasonBlock =
+            seasons.firstOrNull { it.number == num } ?: SeasonBlock(label, num).also { seasons.add(it) }
+
+        fun groupsBelow(head: Element, group: QualityGroup) {
+            var p: Element? = head.nextElementSibling()
+            while (p != null && !listOf("h1", "h2", "h3", "h4", "h5").contains(p.tagName())) {
+                collectButtons(p, group)
+                p = p.nextElementSibling()
             }
         }
 
-        if (seasons.isEmpty()) {
-            // an h5 quality line followed by a paragraph with the download button
-            for (head in content.select("h3, h4, h5")) {
-                val label = head.text().replace(Regex("""\s+"""), " ").trim()
-                if (label.isBlank()) continue
-                if (Regex("""(?i)info|synopsis|screenshot|comment|download\s+.*\b(?:movie|series)\b.*(?:480p|720p|1080p)\s*(?:,|&|and)""").containsMatchIn(label)) continue
-                val hasQuality = Regex("""\b(480p|720p|1080p|2160p|4K|60FPS)\b""", RegexOption.IGNORE_CASE).containsMatchIn(label)
-                if (!hasQuality) continue
-                val group = QualityGroup(label)
-                var sib: Element? = head.nextElementSibling()
-                while (sib != null && !listOf("h1", "h2", "h3", "h4", "h5").contains(sib.tagName())) {
-                    collectButtons(sib, group)
-                    sib = sib.nextElementSibling()
+        var openSeason: SeasonBlock? = null
+        for (head in content.select("h1, h2, h3, h4, h5")) {
+            val label = head.text().replace(Regex("""\s+"""), " ").trim()
+            // title and intro lines name the whole post, not one quality
+            if (label.isBlank() || skipHead.containsMatchIn(label)) continue
+            if (label.contains("Download", true)) continue
+            val num = seasonNumOf(label)
+            val hasQuality = qualityMark.containsMatchIn(label)
+            when {
+                num != null && hasQuality -> {
+                    val block = blockFor(num, label)
+                    val group = QualityGroup(label)
+                    groupsBelow(head, group)
+                    if (group.links.isNotEmpty()) block.groups.add(group)
+                    openSeason = null
                 }
-                if (group.links.isNotEmpty()) movieGroups.add(group)
+                num != null -> openSeason = blockFor(num, label)
+                hasQuality -> {
+                    val group = QualityGroup(label)
+                    groupsBelow(head, group)
+                    if (group.links.isEmpty()) continue
+                    val block = openSeason
+                    if (block != null) block.groups.add(group) else movieGroups.add(group)
+                }
             }
         }
+
+        seasons.removeAll { it.groups.isEmpty() }
 
         val isSeries = seasons.isNotEmpty() ||
             (movieGroups.isEmpty() && looksLikeSeries(title)) ||

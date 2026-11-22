@@ -48,9 +48,7 @@ class VegaMovies : MainAPI() {
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)
     override var lang = "en"
 
-    // keep the burst small for low end devices
-    override var sequentialMainPage = true
-    override var sequentialMainPageDelay = 120L
+    override var sequentialMainPage = false
 
     private val pageRows by lazy { VegaSites.rows() }
 
@@ -261,7 +259,7 @@ class VegaMovies : MainAPI() {
         }
 
         coroutineScope {
-            val gate = Semaphore(4)
+            val gate = Semaphore(6)
             groups.forEach { group ->
                 async(Dispatchers.IO) {
                     gate.withPermit {

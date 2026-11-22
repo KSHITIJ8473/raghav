@@ -65,9 +65,9 @@ internal object VegaMoviesSite {
 
     private suspend fun searchPosts(domain: String, query: String): List<VegaDoc> {
         val url = "$domain/ts-search.php?q=${Uri.encode(query)}&page=1"
-        val text = PlayNet.retry(attempts = 3, gapMs = 800L) {
+        val text = PlayNet.retry(attempts = 2, gapMs = 600L) {
             try {
-                val res = app.get(url, headers = PlayNet.browserHeaders("$domain/"), timeout = 15L)
+                val res = app.get(url, headers = PlayNet.browserHeaders("$domain/"), timeout = 12L)
                 if (res.code == 200) res.text else null
             } catch (_: Exception) {
                 null
@@ -113,7 +113,16 @@ internal object VegaMoviesSite {
             if (stripped.startsWith(prefix)) stripped = stripped.substring(prefix.length)
         }
         val base = PlayNet.normalizeTitle(title)
-        if (base.isBlank() || !stripped.startsWith(base)) return false
+        if (base.isBlank()) return false
+        // posts carry rating tags like [18+] in front of the name, drop the
+        // digits only when what follows is the show itself
+        if (!stripped.startsWith(base)) {
+            Regex("^\\d{1,2}").find(stripped)?.let { tag ->
+                val cut = stripped.substring(tag.value.length)
+                if (cut.startsWith(base)) stripped = cut
+            }
+        }
+        if (!stripped.startsWith(base)) return false
         val rest = stripped.substring(base.length)
         return rest.isEmpty() ||
             Regex("""^(season|part|chapter|s\d|vol(ume)?|19\d\d|20\d\d)""").containsMatchIn(rest)
@@ -138,58 +147,55 @@ internal object VegaMoviesSite {
         val content = doc.selectFirst(".entry-content, .post-content, article") ?: doc
         val qualityRegex = Regex("""\b(480p|720p|1080p|2160p|4K|60FPS)\b""", RegexOption.IGNORE_CASE)
 
-        fun groupsAfter(head: org.jsoup.nodes.Element): MutableList<QualityGroup> {
-            val out = mutableListOf<QualityGroup>()
-            var sib: org.jsoup.nodes.Element? = head.nextElementSibling()
-            while (sib != null) {
-                val tag = sib.tagName()
-                if (tag == "h1" || tag == "h2") break
-                if (tag == "h3" || tag == "h4" || tag == "h5") {
-                    val label = sib.text().replace(Regex("""\s+"""), " ").trim()
-                    if (label.isBlank() || !qualityRegex.containsMatchIn(label)) {
-                        sib = sib.nextElementSibling()
-                        continue
-                    }
-                    val group = QualityGroup(label)
-                    var p: org.jsoup.nodes.Element? = sib.nextElementSibling()
-                    while (p != null && !listOf("h1", "h2", "h3", "h4", "h5").contains(p.tagName())) {
-                        collectButtons(p, group)
-                        p = p.nextElementSibling()
-                    }
-                    if (group.links.isNotEmpty()) out.add(group)
-                }
-                sib = sib.nextElementSibling()
-            }
-            return out
-        }
-
         val seasons = mutableListOf<SeasonBlock>()
-        val seasonHeads = content.select("h1, h2").filter { el ->
-            Regex("""(?i)season\s*\d+|part\s*\d+""").containsMatchIn(el.text())
-        }
-        for (head in seasonHeads) {
-            val num = Regex("""(?i)season\s*(\d+)""").find(head.text())?.groupValues?.get(1)?.toIntOrNull()
-                ?: Regex("""(?i)part\s*(\d+)""").find(head.text())?.groupValues?.get(1)?.toIntOrNull()
-                ?: 1
-            val season = SeasonBlock(head.text().replace(Regex("""\s+"""), " ").trim(), num)
-            season.groups.addAll(groupsAfter(head))
-            if (season.groups.isNotEmpty()) seasons.add(season)
-        }
-
         val movieGroups = mutableListOf<QualityGroup>()
-        if (seasons.isEmpty()) {
-            for (head in content.select("h3, h4, h5")) {
-                val label = head.text().replace(Regex("""\s+"""), " ").trim()
-                if (label.isBlank() || !qualityRegex.containsMatchIn(label)) continue
-                val group = QualityGroup(label)
-                var sib: org.jsoup.nodes.Element? = head.nextElementSibling()
-                while (sib != null && !listOf("h1", "h2", "h3", "h4", "h5").contains(sib.tagName())) {
-                    collectButtons(sib, group)
-                    sib = sib.nextElementSibling()
-                }
-                if (group.links.isNotEmpty()) movieGroups.add(group)
+
+        // layouts differ per post: "Season 8 ... 480p" can sit in any heading
+        // level, some posts use a lone season line with quality lines below it
+        val seasonMark = Regex("""(?i)season\s*(\d{1,2})|part\s*(\d{1,2})|\bS(\d{1,2})\b""")
+        val skipHead = Regex("""(?i)info|synopsis|screenshot|comment|winding""")
+
+        fun groupsBelow(head: org.jsoup.nodes.Element, group: QualityGroup) {
+            var p: org.jsoup.nodes.Element? = head.nextElementSibling()
+            while (p != null && !listOf("h1", "h2", "h3", "h4", "h5").contains(p.tagName())) {
+                collectButtons(p, group)
+                p = p.nextElementSibling()
             }
         }
+
+        fun blockFor(num: Int, label: String): SeasonBlock =
+            seasons.firstOrNull { it.number == num } ?: SeasonBlock(label, num).also { seasons.add(it) }
+
+        var openSeason: SeasonBlock? = null
+        for (head in content.select("h1, h2, h3, h4, h5")) {
+            val label = head.text().replace(Regex("""\s+"""), " ").trim()
+            // title and intro lines name the whole post, not one quality
+            if (label.isBlank() || skipHead.containsMatchIn(label)) continue
+            if (label.contains("Download", true)) continue
+            val m = seasonMark.find(label)
+            val num = m?.groupValues?.let { g ->
+                g[1].toIntOrNull() ?: g[2].toIntOrNull() ?: g[3].toIntOrNull()
+            }
+            val hasQuality = qualityRegex.containsMatchIn(label)
+            when {
+                num != null && hasQuality -> {
+                    val block = blockFor(num, label)
+                    val group = QualityGroup(label)
+                    groupsBelow(head, group)
+                    if (group.links.isNotEmpty()) block.groups.add(group)
+                    openSeason = null
+                }
+                num != null -> openSeason = blockFor(num, label)
+                hasQuality -> {
+                    val group = QualityGroup(label)
+                    groupsBelow(head, group)
+                    if (group.links.isEmpty()) continue
+                    val block = openSeason
+                    if (block != null) block.groups.add(group) else movieGroups.add(group)
+                }
+            }
+        }
+        seasons.removeAll { it.groups.isEmpty() }
         if (seasons.isEmpty() && movieGroups.isEmpty()) return null
         return PostDetail(seasons, movieGroups)
     }
@@ -474,18 +480,18 @@ internal object VegaMoviesSite {
 
     private val filePressId = Regex("""/file/([a-f0-9]{16,40})""")
 
+    // the filebee api died, its ids answer on the filepress domain now
     private suspend fun filepressDirect(url: String): String? {
         val id = filePressId.find(url)?.groupValues?.get(1) ?: return null
-        val base = "https://filebee.xyz"
-
-        val share = filepressTask(id, "dotFlixDownlaod", base)
-        if (share != null && share.startsWith("http")) {
-            resolveDotFlix(share)?.let { return it }
-        }
-
-        val task = filepressTask(id, "indexDownlaod", base)
-        if (task != null && task.matches(Regex("[a-f0-9]{16,40}"))) {
-            return filepressFinal(task, base)
+        for (base in listOf("https://new4.filepress.lat", "https://filebee.xyz")) {
+            val share = filepressTask(id, "dotFlixDownlaod", base)
+            if (share != null && share.startsWith("http")) {
+                resolveDotFlix(share)?.let { return it }
+            }
+            val task = filepressTask(id, "indexDownlaod", base)
+            if (task != null && task.matches(Regex("[a-f0-9]{16,40}"))) {
+                filepressFinal(task, base)?.let { return it }
+            }
         }
         return null
     }
@@ -697,11 +703,20 @@ internal object VegaMoviesSite {
             val claimed = ConcurrentHashMap.newKeySet<String>()
             val seenUrls = ConcurrentHashMap.newKeySet<String>()
 
+            // presigned cdn links answer or the host is gone, probing them
+            // only stalls the first links
+            val trustedCdn = Regex(
+                """(?i)\.r2\.dev|\.r2\.cloudflarestorage\.com|pixeldrain\.dev/api|""" +
+                    """googleusercontent\.com"""
+            )
+
             suspend fun offer(server: Server, tier: Int, info: String, dv: Boolean) {
                 if (!seenUrls.add(server.url)) return
                 val key = "${server.name}|$tier|${if (dv) "dv" else ""}"
                 if (key in claimed) return
-                if (!PlayNet.alive(server.url, ExtractorLinkType.VIDEO)) return
+                if (!trustedCdn.containsMatchIn(server.url) &&
+                    !PlayNet.alive(server.url, ExtractorLinkType.VIDEO)
+                ) return
                 if (claimed.add(key)) {
                     callback(
                         newExtractorLink(

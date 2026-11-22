@@ -8,6 +8,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
+import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 import org.json.JSONObject
@@ -282,10 +283,19 @@ internal object HdHub4uSite {
             marker.find(el.text())?.groupValues?.get(1)?.toIntOrNull() == wanted
         } ?: return
 
+        // some posts keep the links inside quality headings that follow the
+        // episode line, so the walk keeps going through those
+        val qualityHead = Regex("(?i)\\b(480|720|1080|2160)p\\b|\\b4k\\b")
         val containers = mutableListOf<Element>()
         containers.add(head)
         var sib = head.nextElementSibling()
-        while (sib != null && sib.tagName() !in listOf("h2", "h3", "h4", "h5")) {
+        while (sib != null) {
+            val tag = sib.tagName()
+            if (tag == "h1" || tag == "h2") break
+            if (tag == "h3" || tag == "h4" || tag == "h5") {
+                if (marker.containsMatchIn(sib.text())) break
+                if (!qualityHead.containsMatchIn(sib.text())) break
+            }
             containers.add(sib)
             sib = sib.nextElementSibling()
         }
@@ -904,9 +914,10 @@ internal object MultimoviesSite {
             domainFallbacks.filter { it != remoteDomain }.forEach { add(it) }
         }
         for (candidate in candidates) {
+            // the site keeps a cloudflare wall for desktop agents, the mobile
+            // one is what the site's own player sends
             val ok = try {
-                val res = PlayNet.fetchWithCf("$candidate/")
-                res != null && res.isSuccessful && res.text.contains("poster-card")
+                MmNet.get("$candidate/")?.contains("poster-card") == true
             } catch (_: Exception) {
                 false
             }
@@ -935,8 +946,8 @@ internal object MultimoviesSite {
     }
 
     private suspend fun searchCards(domain: String, query: String): List<MmCard> = try {
-        val doc = PlayNet.fetchWithCf("$domain/search?q=${Uri.encode(query)}")?.document
-            ?: return emptyList()
+        val body = MmNet.get("$domain/search?q=${Uri.encode(query)}") ?: return emptyList()
+        val doc = Jsoup.parse(body)
         val seen = HashSet<String>()
         doc.select("article.poster-card").mapNotNull { cardOf(it, domain) }.filter { seen.add(it.url) }
     } catch (_: Exception) {
@@ -966,16 +977,16 @@ internal object MultimoviesSite {
         episode: Int?
     ): String? {
         val base = seriesUrl.substringBefore('?')
-        val first = PlayNet.fetchWithCf(base) ?: return null
+        val first = MmNet.get(base) ?: return null
         val renderedSeason = try {
-            JSONObject(extractBracedObject(first.text, "const watchConfig = ")).optInt("season", 1)
+            JSONObject(extractBracedObject(first, "const watchConfig = ")).optInt("season", 1)
         } catch (_: Exception) {
             1
         }
 
-        var doc = first.document
+        var doc = Jsoup.parse(first)
         if (season != null && season != renderedSeason) {
-            doc = PlayNet.fetchWithCf("$base?season=$season")?.document ?: return null
+            doc = Jsoup.parse(MmNet.get("$base?season=$season") ?: return null)
         }
         findEpisodeCard(doc, domain, season, episode)?.let { return it }
 
@@ -987,9 +998,9 @@ internal object MultimoviesSite {
             .filter { it <= episode }
             .maxOrNull() ?: return null
         if (target == selected) return null
-        val rangeDoc = PlayNet.fetchWithCf("$base?season=${season ?: renderedSeason}&ep_range=$target")?.document
+        val rangeDoc = MmNet.get("$base?season=${season ?: renderedSeason}&ep_range=$target")
             ?: return null
-        return findEpisodeCard(rangeDoc, domain, season, episode)
+        return findEpisodeCard(Jsoup.parse(rangeDoc), domain, season, episode)
     }
 
     private data class WatchServer(val id: String, val name: String, val url: String)
@@ -1175,16 +1186,17 @@ internal object MultimoviesSite {
         callback: (ExtractorLink) -> Unit
     ) {
         try {
-            val res = PlayNet.fetchWithCf(pageUrl) ?: return
-            val servers = parseWatchConfig(res.text)
+            val body = MmNet.get(pageUrl) ?: return
+            val servers = parseWatchConfig(body)
             if (servers.isEmpty()) return
 
+            val page = Jsoup.parse(body)
             val ids = extractIds(servers)
             val isTv = pageUrl.contains("/series/")
             val season = Regex("/season/(\\d+)/episode/").find(pageUrl)?.groupValues?.get(1)?.toIntOrNull()
             val episode = Regex("/season/\\d+/episode/(\\d+)").find(pageUrl)?.groupValues?.get(1)?.toIntOrNull()
-            val title = res.document.selectFirst("h1")?.text()?.trim().orEmpty()
-            val year = yearOf(res.document)
+            val title = page.selectFirst("h1")?.text()?.trim().orEmpty()
+            val year = yearOf(page)
 
             val (linkCb, subCb) = wrappedCallbacks(subtitleCallback, callback)
             coroutineScope {

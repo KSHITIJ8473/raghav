@@ -314,20 +314,18 @@ internal object VegaSources {
 
     private val filePressId = Regex("""/file/([a-f0-9]{16,40})""")
 
-    // api sits on the short domain
+    // the filebee api died, its ids answer on the filepress domain now
     private suspend fun filepressDirect(url: String): String? {
         val id = filePressId.find(url)?.groupValues?.get(1) ?: return null
-        val base = "https://filebee.xyz"
-
-        // dotflix survives, worker hands out expiring links
-        val share = filepressTask(id, "dotFlixDownlaod", base)
-        if (share != null && share.startsWith("http")) {
-            resolveDotFlix(share)?.let { return it }
-        }
-
-        val task = filepressTask(id, "indexDownlaod", base)
-        if (task != null && task.matches(Regex("[a-f0-9]{16,40}"))) {
-            return filepressFinal(task, base)
+        for (base in listOf("https://new4.filepress.lat", "https://filebee.xyz")) {
+            val share = filepressTask(id, "dotFlixDownlaod", base)
+            if (share != null && share.startsWith("http")) {
+                resolveDotFlix(share)?.let { return it }
+            }
+            val task = filepressTask(id, "indexDownlaod", base)
+            if (task != null && task.matches(Regex("[a-f0-9]{16,40}"))) {
+                filepressFinal(task, base)?.let { return it }
+            }
         }
         return null
     }
@@ -489,15 +487,22 @@ internal object VegaSources {
         pageCache.clear()
     }
 
-    // a ranged get that answers is a file the player can open
+    // presigned cdn links answer or the host is gone, probing them only stalls
+    // the player start, unknown hosts still get the ranged check
+    private val trustedCdn = Regex(
+        """(?i)\.r2\.dev|\.r2\.cloudflarestorage\.com|pixeldrain\.dev/api|""" +
+            """googleusercontent\.com|video-downloads\.googleusercontent"""
+    )
+
     suspend fun alive(url: String, headers: Map<String, String> = emptyMap()): Boolean {
         if (!url.startsWith("http")) return false
+        if (trustedCdn.containsMatchIn(url)) return true
         if (url in verified) return true
         val ok = try {
             val h = VegaNet.browserHeaders().toMutableMap()
             h.putAll(headers)
             h["Range"] = "bytes=0-1023"
-            app.get(url, headers = h, timeout = 10L).code in 200..399
+            app.get(url, headers = h, timeout = 8L).code in 200..399
         } catch (_: Exception) {
             false
         }

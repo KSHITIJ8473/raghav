@@ -1326,12 +1326,12 @@ internal object MmVidrift {
         labelPrefix: String,
         callback: (ExtractorLink) -> Unit,
     ): Boolean {
-        val resp = try {
-            PlayNet.fetchWithCf(embedUrl, referer = MmSite.referer)
+        // the embed host rejects desktop agents outright
+        val html = try {
+            MmNet.get(embedUrl, referer = MmSite.referer)
         } catch (_: Exception) {
             null
-        }
-        val html = resp?.takeIf { it.code == 200 }?.text ?: return false
+        } ?: return false
         val raw = extractJsonObject(html, "embedMeta") ?: return false
         val meta = try {
             JSONObject(raw)

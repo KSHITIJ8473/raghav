@@ -731,21 +731,34 @@ internal object VegaMoviesSite {
                 }
             }
 
+            fun targetsOf(page: DrivePage): List<Pair<String, String>> {
+                return if (res.episode != null) {
+                    page.episodes[res.episode] ?: page.servers.takeIf { page.episodes.isEmpty() }
+                } else {
+                    page.servers
+                }.orEmpty()
+            }
+
+            // series pages chain two drive hops before a playable url shows up,
+            // walking them one by one burns the site budget on slow networks
             suspend fun walkTargets(targets: List<Pair<String, String>>, tier: Int, info: String, dv: Boolean) {
-                for ((_btn, href) in targets) {
-                    val next = if (href.contains("nexdrive", true)) {
-                        val nested = fetchDrivePage(href) ?: continue
-                        if (res.episode != null) {
-                            nested.episodes[res.episode] ?: nested.servers.takeIf { nested.episodes.isEmpty() }
-                        } else {
-                            nested.servers
-                        }.orEmpty()
-                    } else {
-                        listOf("" to href)
-                    }
-                    for ((_btn2, href2) in next) {
-                        for (server in resolve(href2)) {
-                            offer(server, tier, info, dv)
+                coroutineScope {
+                    val gate = Semaphore(4)
+                    targets.forEach { (_btn, href) ->
+                        async(Dispatchers.IO) {
+                            gate.withPermit {
+                                val next = if (href.contains("nexdrive", true)) {
+                                    val nested = fetchDrivePage(href) ?: return@withPermit
+                                    targetsOf(nested)
+                                } else {
+                                    listOf("" to href)
+                                }
+                                for ((_btn2, href2) in next) {
+                                    for (server in resolve(href2)) {
+                                        offer(server, tier, info, dv)
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -759,14 +772,16 @@ internal object VegaMoviesSite {
                             val tier = PlayNet.getIndexQuality(group.label)
                             val info = infoFrom(group.label)
                             val dv = isDvEncode(group.label)
-                            for ((label, url) in group.links.distinctBy { it.second }) {
-                                val page = fetchDrivePage(url) ?: continue
-                                val targets = if (res.episode != null) {
-                                    page.episodes[res.episode] ?: page.servers.takeIf { page.episodes.isEmpty() }
-                                } else {
-                                    page.servers
-                                }.orEmpty()
-                                walkTargets(targets, tier, info, dv)
+                            coroutineScope {
+                                val inner = Semaphore(4)
+                                group.links.distinctBy { it.second }.forEach { (_label, url) ->
+                                    async(Dispatchers.IO) {
+                                        inner.withPermit {
+                                            val page = fetchDrivePage(url) ?: return@withPermit
+                                            walkTargets(targetsOf(page), tier, info, dv)
+                                        }
+                                    }
+                                }
                             }
                         }
                     }

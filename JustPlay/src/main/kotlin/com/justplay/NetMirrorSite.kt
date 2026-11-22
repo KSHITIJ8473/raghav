@@ -11,20 +11,16 @@ import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.getQualityFromName
 import com.lagradost.cloudstream3.utils.httpsify
 import com.lagradost.cloudstream3.utils.newExtractorLink
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
-import kotlinx.coroutines.sync.withPermit
 import okhttp3.FormBody
 import org.json.JSONArray
 import org.json.JSONObject
+import java.util.concurrent.atomic.AtomicBoolean
 
 internal object NetMirrorSite {
 
@@ -111,8 +107,6 @@ internal object NetMirrorSite {
 
     private val cookieLock = Mutex()
 
-    private val refreshScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-
     private fun apiCookies(cookie: String, ott: String): Map<String, String> =
         mapOf("t_hash_t" to cookie, "ott" to ott, "hd" to "on")
 
@@ -139,14 +133,16 @@ internal object NetMirrorSite {
 
     private fun unixTime(): Long = System.currentTimeMillis() / 1000
 
+    // the site invalidates the session well before a day, the reference
+    // client retires its cookie after eleven hours
     private fun cookieFresh(at: Long): Boolean =
-        !cookieValue.isNullOrEmpty() && System.currentTimeMillis() - at < 54_000_000L
+        !cookieValue.isNullOrEmpty() && System.currentTimeMillis() - at < 39_600_000L
 
     private fun readStoredCookie(): String? {
         return try {
             val saved = CloudStreamApp.getKey<String>(KEY_COOKIE)
             val at = CloudStreamApp.getKey<String>(KEY_COOKIE_AT)?.toLongOrNull() ?: 0L
-            if (saved.isNullOrBlank() || System.currentTimeMillis() - at >= 54_000_000L) {
+            if (saved.isNullOrBlank() || System.currentTimeMillis() - at >= 39_600_000L) {
                 null
             } else {
                 saved
@@ -188,38 +184,51 @@ internal object NetMirrorSite {
         ""
     }
 
+    // the home page hides the verify warm-up host and query in js vars,
+    // both rotate, so they have to be read from the page every solve
+    private fun adWarmUrl(html: String, addhash: String): String {
+        fun jsVar(name: String): String? =
+            Regex("var\\s+$name\\s*=\\s*\"([^\"]+)\"").find(html)?.groupValues?.get(1)
+
+        val sub = jsVar("Vsite2") ?: "userver"
+        val query = jsVar("Qury") ?: "ffr455"
+        var site: String? = null
+        Regex("var\\s+Msite\\s*=\\s*([^;]+);").find(html)?.groupValues?.get(1)?.let { raw ->
+            val built = Regex("\\s*\\+?\\s*Vsite2\\s*\\+?\\s*").replace(raw, sub)
+                .replace("\"", "").replace("'", "").trim()
+            if (built.startsWith("http")) site = built
+        }
+        if (site == null) site = "https://$sub.net52.cc/"
+        return "$site?$query=$addhash&a=y&t=${Math.random()}"
+    }
+
     private suspend fun solveCookie(): String? {
         val b = base()
         val headers = mapOf("User-Agent" to SOLVE_UA, "X-Requested-With" to XRW_APP)
-        var addhash = try {
-            addhashOf(app.get("$b/mobile/home?app=1", headers = headers, timeout = 20L))
-        } catch (_: Exception) {
-            ""
-        }
+        var home: com.lagradost.nicehttp.NiceResponse? = null
+        try {
+            home = app.get("$b/mobile/home?app=1", headers = headers, timeout = 20L)
+        } catch (_: Exception) {}
+        var addhash = home?.let { addhashOf(it) }.orEmpty()
         if (addhash.isEmpty()) {
-
-            addhash = try {
-                addhashOf(
-                    app.get(
-                        "$b/mobile/home?app=1",
-                        headers = headers,
-                        interceptor = PlayNet.killerFor("$b/mobile/home?app=1"),
-                        timeout = 60L
-                    )
+            home = try {
+                app.get(
+                    "$b/mobile/home?app=1",
+                    headers = headers,
+                    interceptor = PlayNet.killerFor("$b/mobile/home?app=1"),
+                    timeout = 60L
                 )
             } catch (_: Exception) {
-                ""
+                null
             }
+            addhash = home?.let { addhashOf(it) }.orEmpty()
         }
-        if (addhash.isEmpty()) {
+        if (addhash.isEmpty() || home == null) {
             return null
         }
 
         try {
-            app.get(
-                "https://userver.net52.cc/?hee5=$addhash&a=y&t=${Math.random()}",
-                timeout = 15L
-            ).close()
+            app.get(adWarmUrl(home.text, addhash), timeout = 15L).close()
         } catch (_: Exception) {}
 
         val form = FormBody.Builder().addEncoded("verify", addhash).build()
@@ -436,7 +445,7 @@ internal object NetMirrorSite {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         val b = base()
-        val candidates = mutableListOf<Pair<String, String>>()
+        val emitted = AtomicBoolean(false)
         for (i in 0 until arr.length()) {
             val item = arr.optJSONObject(i) ?: continue
             val tracks = item.optJSONArray("tracks")
@@ -458,57 +467,29 @@ internal object NetMirrorSite {
                 val src = sources.optJSONObject(j) ?: continue
                 val file = src.optString("file")
                 if (!file.startsWith("/")) continue
-                candidates.add(file to src.optString("label"))
-            }
-        }
-        if (candidates.isEmpty()) return false
-        val verified = kotlinx.coroutines.withTimeoutOrNull(45_000L) {
-            coroutineScope {
-                val gate = Semaphore(3)
-                candidates.map { (file, label) ->
-                    async(Dispatchers.IO) {
-                        gate.withPermit {
-                            playableFile(file, headers)?.let { it to label }
-                        }
+                // probing every playlist stalls the batch behind the shared
+                // gate; the playlist itself is the source of truth, emit as is
+                callback(
+                    newExtractorLink(
+                        "[${PlayLabels.siteName(site)}]",
+                        PlayLabels.buildLabel(site, src.optString("label"), ""),
+                        b + file,
+                        ExtractorLinkType.M3U8
+                    ) {
+                        this.referer = "$b/mobile/home?app=1"
+                        this.quality = streamQuality(file)
+                        this.headers = headers
                     }
-                }.mapNotNull { it.await() }
+                )
+                emitted.set(true)
             }
-        } ?: emptyList()
-        for ((url, label) in verified) {
-            callback(
-                newExtractorLink(
-                    "[${PlayLabels.siteName(site)}]",
-                    PlayLabels.buildLabel(site, label, ""),
-                    url,
-                    ExtractorLinkType.M3U8
-                ) {
-                    this.referer = "$b/mobile/home?app=1"
-                    this.quality = streamQuality(url)
-                    this.headers = headers
-                }
-            )
         }
-        return verified.isNotEmpty()
+        return emitted.get()
     }
 
-    private suspend fun playableFile(file: String, headers: Map<String, String>): String? {
-        val b = base()
-        val strippedFile = file
-            .replace("&hp=yes", "")
-            .replace("hp=yes&", "")
-            .replace("?hp=yes", "")
-        if (strippedFile != file) {
-            val bare = b + strippedFile
-            if (PlayNet.m3u8Alive(bare, headers)) return bare
-        }
-        val url = b + file
-        if (PlayNet.m3u8Alive(url, headers)) return url
-        return null
-    }
-
-    private fun streamQuality(url: String): Int {
+    private fun streamQuality(file: String): Int {
         val q = try {
-            Uri.parse(url).getQueryParameter("q")
+            Uri.parse(file).getQueryParameter("q")
         } catch (_: Exception) {
             null
         }
@@ -577,6 +558,23 @@ internal object NetMirrorSite {
         resolvePost(cookie, ott, spare.first, spare.second, res, subtitleCallback, callback)
     }
 
+    private suspend fun runCatalogs(
+        cookie: String,
+        res: PlayLinkData,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        tracker: (ExtractorLink) -> Unit
+    ) {
+        coroutineScope {
+            catalogs.forEach { ott ->
+                async(Dispatchers.IO) {
+                    try {
+                        resolveOtt(cookie, ott, res, subtitleCallback, tracker)
+                    } catch (_: Exception) {}
+                }
+            }
+        }
+    }
+
     suspend fun invoke(
         res: PlayLinkData,
         subtitleCallback: (SubtitleFile) -> Unit,
@@ -584,17 +582,19 @@ internal object NetMirrorSite {
     ) {
         try {
             val cookie = solvedCookie() ?: return
-            if (System.currentTimeMillis() - cookieAt > 120_000L) {
-                refreshScope.launch { runCatching { refreshCookie() } }
+            var emitted = false
+            runCatalogs(cookie, res, subtitleCallback) {
+                emitted = true
+                callback(it)
             }
-            coroutineScope {
-                catalogs.forEach { ott ->
-                    async(Dispatchers.IO) {
-                        try {
-                            resolveOtt(cookie, ott, res, subtitleCallback, callback)
-                        } catch (_: Exception) {}
-                    }
-                }
+            if (emitted) return
+            // an empty pass on a cookie that has been around for hours usually
+            // means the server retired the session, solve a new one and retry
+            if (System.currentTimeMillis() - cookieAt > 6 * 60 * 60_000L) {
+                cookieValue = null
+                cookieAt = 0L
+                val fresh = refreshCookie() ?: return
+                runCatalogs(fresh, res, subtitleCallback, callback)
             }
         } catch (_: Exception) {}
     }

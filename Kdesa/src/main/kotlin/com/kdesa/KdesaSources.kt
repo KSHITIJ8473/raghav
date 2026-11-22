@@ -5,12 +5,18 @@ import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.api.Log
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.app
+import com.lagradost.cloudstream3.network.CloudflareKiller
 import com.lagradost.cloudstream3.newSubtitleFile
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.newExtractorLink
+import com.lagradost.nicehttp.NiceResponse
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicBoolean
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 private const val TAG = "KdesaSources"
 
@@ -32,6 +38,12 @@ private fun playbackHeaders(accept: String, referer: String, extra: Map<String, 
     )
     headers.putAll(extra)
     return headers
+}
+
+private fun NiceResponse.close() {
+    try {
+        okhttpResponse.close()
+    } catch (_: Exception) {}
 }
 
 @JsonIgnoreProperties(ignoreUnknown = true)
@@ -77,7 +89,82 @@ private data class BootResp(val meta: BootMeta? = null, val shell: BootShell? = 
 @JsonIgnoreProperties(ignoreUnknown = true)
 private data class SubtitleListResp(val tracks: List<SubTrack>? = null)
 
+@JsonIgnoreProperties(ignoreUnknown = true)
+private data class ProviderStream(
+    val index: Int? = null,
+    val url: String? = null,
+    val type: String? = null,
+    val provider: String? = null,
+    val name: String? = null,
+    val direct: Boolean? = null
+)
+
+@JsonIgnoreProperties(ignoreUnknown = true)
+private data class SourceResp(
+    val success: Boolean? = null,
+    val provider: String? = null,
+    val source: String? = null,
+    @JsonProperty("maxRes") val maxRes: Int? = null,
+    val quality: String? = null,
+    val streams: List<ProviderStream>? = null,
+    val subtitles: List<SubTrack>? = null
+)
+
 class KdesaSources {
+
+    private val cfKillers = ConcurrentHashMap<String, CloudflareKiller>()
+    private val cfLocks = ConcurrentHashMap<String, Mutex>()
+
+    private fun killerFor(url: String): CloudflareKiller =
+        cfKillers.getOrPut(url.substringBefore("://")) { CloudflareKiller() }
+
+    private fun lockFor(url: String): Mutex =
+        cfLocks.getOrPut(url.substringBefore("://")) { Mutex() }
+
+    private fun isCfChallenge(res: NiceResponse): Boolean {
+        if (res.headers["cf-mitigated"] == "challenge") return true
+        val body = try {
+            res.text.lowercase()
+        } catch (_: Exception) {
+            ""
+        }
+        return (body.contains("just a moment") && body.contains("challenge-platform")) ||
+            body.contains("checking your browser")
+    }
+
+    // the embed host sits behind cloudflare and challenges whole ip ranges
+    // without warning, the webview solver is the only way through
+    private suspend fun embedGet(
+        url: String,
+        referer: String,
+        extra: Map<String, String> = emptyMap()
+    ): NiceResponse? {
+        val headers = playbackHeaders("*/*", referer, extra)
+        val plain = try {
+            app.get(url, headers = headers, timeout = 30L)
+        } catch (_: Exception) {
+            null
+        }
+        if (plain != null && !isCfChallenge(plain)) {
+            if (plain.code == 200) return plain
+            plain.close()
+            return null
+        }
+        plain?.close()
+
+        return lockFor(url).withLock {
+            val killer = killerFor(url)
+            try {
+                killer.savedCookies.remove(java.net.URI(url).host)
+            } catch (_: Exception) {}
+            val solved = try {
+                app.get(url, headers = headers, interceptor = killer, timeout = 60L)
+            } catch (_: Exception) {
+                null
+            }
+            if (solved != null && solved.code == 200 && !isCfChallenge(solved)) solved else null
+        }
+    }
 
     private fun qualityFromHeight(height: Int): Int = when {
         height >= 2160 -> Qualities.P2160.value
@@ -85,6 +172,16 @@ class KdesaSources {
         height >= 720 -> Qualities.P720.value
         height >= 480 -> Qualities.P480.value
         else -> Qualities.Unknown.value
+    }
+
+    private fun qualityFromLabel(label: String?): Int {
+        val text = label ?: return Qualities.Unknown.value
+        return when {
+            text.contains("2160", true) || text.contains("4k", true) -> Qualities.P2160.value
+            text.contains("1080", true) || text.contains("full hd", true) -> Qualities.P1080.value
+            text.contains("720", true) || text.contains("hd", true) -> Qualities.P720.value
+            else -> Qualities.Unknown.value
+        }
     }
 
     // a peek at the master playlist proves the url is live and gives the top resolution
@@ -175,6 +272,56 @@ class KdesaSources {
         }
     }
 
+    // the player cycles providers one call at a time, titan now, atlas next,
+    // orion after that; every answer holds a different set of streams
+    private suspend fun pullRotatingSources(
+        type: String,
+        tmdbId: Int,
+        season: Int,
+        episode: Int,
+        token: String,
+        seenUrls: ConcurrentHashMap<String, Boolean>,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        val path = if (type == "tv") {
+            "$EMBED/api/source/tv/$tmdbId/$season/$episode?token=$token"
+        } else {
+            "$EMBED/api/source/movie/$tmdbId?token=$token"
+        }
+        val seenProviders = mutableSetOf<String>()
+        repeat(4) {
+            val response = embedGet(path, "$EMBED/embed2/play") ?: return@repeat
+            val parsed = try {
+                parseJson<SourceResp>(response.text)
+            } catch (e: Exception) {
+                Log.d(TAG, "source rotation: ${e.message}")
+                return@repeat
+            }
+            response.close()
+            val provider = parsed.provider ?: return@repeat
+            if (!seenProviders.add(provider)) return@repeat
+            val maxRes = parsed.maxRes ?: 0
+            parsed.streams.orEmpty().forEach { stream ->
+                val url = stream.url?.takeIf { it.isNotBlank() } ?: return@forEach
+                if (!url.startsWith("http") && !url.startsWith("/")) return@forEach
+                val absolute = if (url.startsWith("http")) url else EMBED + url
+                if (seenUrls.putIfAbsent(absolute, true) != null) return@forEach
+                val label = stream.name?.takeIf { it.isNotBlank() }
+                    ?: stream.provider?.takeIf { it.isNotBlank() }
+                    ?: provider.replaceFirstChar { it.uppercase() }
+                val quality = qualityFromHeight(maxRes).takeIf { it != Qualities.Unknown.value }
+                    ?: qualityFromLabel(label)
+                if (stream.type?.equals("mp4", true) == true) {
+                    pushLink(label, absolute, quality, ExtractorLinkType.VIDEO, callback)
+                } else {
+                    // the master playlist carries the real resolution for
+                    // rotation streams that come without a maxRes hint
+                    pushHls(label, absolute, quality, callback)
+                }
+            }
+        }
+    }
+
     private suspend fun resolve(
         type: String,
         tmdbId: Int,
@@ -213,55 +360,68 @@ class KdesaSources {
             "/api/boot/movie/$tmdbId?type=movie&id=$tmdbId&source=0&shell=1&token=$token"
         }
         val boot = try {
-            val response = app.get(
-                EMBED + bootPath,
-                headers = playbackHeaders(
-                    "*/*",
-                    "$EMBED/embed2/play",
-                    mapOf("x-embed-parent" to PARENT)
-                ),
-                timeout = 30L
-            )
+            val response = embedGet(EMBED + bootPath, "$EMBED/embed2/play", mapOf("x-embed-parent" to PARENT))
+                ?: return false
             if (response.code != 200) return false
             parseJson<BootResp>(response.text)
         } catch (e: Exception) {
             Log.d(TAG, "boot: ${e.message}")
             return false
         }
-        val meta = boot.meta ?: return false
+        val meta = boot.meta
+        val seenUrls = ConcurrentHashMap<String, Boolean>()
+        val emitted = AtomicBoolean(false)
 
-        meta.bigbangUrl?.takeIf { it.isNotBlank() }?.let {
+        meta?.bigbangUrl?.takeIf { it.isNotBlank() }?.let {
             pushHls("BigBang", it, Qualities.Unknown.value, callback)
+            emitted.set(true)
         }
-        meta.vexonUrl?.takeIf { it.isNotBlank() }?.let {
+        meta?.vexonUrl?.takeIf { it.isNotBlank() }?.let {
             pushHls("Vexon", it, Qualities.Unknown.value, callback)
+            emitted.set(true)
         }
-        meta.evionUrl?.takeIf { it.isNotBlank() }?.let {
+        meta?.evionUrl?.takeIf { it.isNotBlank() }?.let {
             pushHls("Evion", it, Qualities.Unknown.value, callback)
+            emitted.set(true)
         }
-        meta.selfhostUrl?.takeIf { it.isNotBlank() }?.let { url ->
+        meta?.selfhostUrl?.takeIf { it.isNotBlank() }?.let { url ->
             val isMp4 = meta.selfhostKind?.contains("mp4", ignoreCase = true) == true
             if (isMp4) {
                 pushLink("Selfhost", url, Qualities.Unknown.value, ExtractorLinkType.VIDEO, callback)
             } else {
                 pushHls("Selfhost", url, Qualities.Unknown.value, callback)
             }
+            emitted.set(true)
         }
-        meta.orionStreams.orEmpty().forEach { stream ->
+        meta?.orionStreams.orEmpty().forEach { stream ->
             val url = stream.url?.takeIf { it.isNotBlank() } ?: return@forEach
-            val label = stream.name?.takeIf { it.isNotBlank() } ?: "Orion"
-            val height = stream.rungs.orEmpty().mapNotNull { it.height }.maxOrNull() ?: 0
-            val quality = if (height > 0) qualityFromHeight(height) else Qualities.Unknown.value
-            pushLink(label, EMBED + url, quality, ExtractorLinkType.M3U8, callback)
+            val absolute = if (url.startsWith("http")) url else EMBED + url
+            if (seenUrls.putIfAbsent(absolute, true) == null) {
+                val label = stream.name?.takeIf { it.isNotBlank() } ?: "Orion"
+                val height = stream.rungs.orEmpty().mapNotNull { it.height }.maxOrNull() ?: 0
+                val quality = if (height > 0) qualityFromHeight(height) else Qualities.Unknown.value
+                pushLink(label, absolute, quality, ExtractorLinkType.M3U8, callback)
+                emitted.set(true)
+            }
             // per stream lists only matter when the shell menu came back empty
             if (boot.shell?.subtitles.isNullOrEmpty()) {
                 pushOrionSubtitles(stream.subtitleListUrl, subtitleCallback)
             }
         }
 
-        meta.bigbangSubtitles.orEmpty().forEach { pushSubtitle(it, subtitleCallback) }
+        meta?.bigbangSubtitles.orEmpty().forEach { pushSubtitle(it, subtitleCallback) }
         boot.shell?.subtitles.orEmpty().forEach { pushSubtitle(it, subtitleCallback) }
-        return true
+
+        try {
+            pullRotatingSources(type, tmdbId, seasonNum, episodeNum, token, seenUrls) {
+                emitted.set(true)
+                callback(it)
+            }
+        } catch (e: Exception) {
+            Log.d(TAG, "rotating sources: ${e.message}")
+        }
+
+        return emitted.get()
     }
 
     suspend fun resolveMovie(

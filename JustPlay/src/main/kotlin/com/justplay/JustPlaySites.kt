@@ -229,13 +229,14 @@ internal object HdHub4uSite {
     private suspend fun emitResolved(
         url: String,
         label: String,
+        quality: Int,
         referer: String?,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
         val target = if (url.contains("id=")) PlayNet.decryptIdLink(url, referer) ?: return else url
         if (target.isBlank()) return
-        PlayNet.emitOwnLink("hdhub4u", target, label, PlayNet.getIndexQuality(label), referer, subtitleCallback, callback)
+        PlayNet.emitOwnLink("hdhub4u", target, label, quality.takeIf { it > 0 }, referer, subtitleCallback, callback)
     }
 
     private suspend fun processPost(
@@ -261,7 +262,7 @@ internal object HdHub4uSite {
                         if (!href.startsWith("http")) continue
                         async(Dispatchers.IO) {
                             semaphore.withPermit {
-                                emitResolved(href, el.text().trim(), domain, subtitleCallback, callback)
+                                emitResolved(href, el.text().trim(), PlayNet.getIndexQuality(el.text()), domain, subtitleCallback, callback)
                             }
                         }
                     }
@@ -304,6 +305,7 @@ internal object HdHub4uSite {
         coroutineScope {
             containers.forEach { box ->
                 val quality = PlayNet.getIndexQuality(box.text())
+                val qTag = if (quality > 0) " ${quality}p" else ""
                 for (a in box.select("a[href]")) {
                     val href = a.absUrl("href").ifBlank { a.attr("href") }
                     if (!href.startsWith("http")) continue
@@ -313,7 +315,7 @@ internal object HdHub4uSite {
                             async(Dispatchers.IO) {
                                 semaphore.withPermit {
                                     PlayNet.emitSiteLink(
-                                        "hdhub4u", href, "Episode $wanted Watch", null,
+                                        "hdhub4u", href, "Episode $wanted$qTag Watch", quality.takeIf { it > 0 },
                                         domain, subtitleCallback, callback
                                     )
                                 }
@@ -329,7 +331,7 @@ internal object HdHub4uSite {
                         else -> {
                             async(Dispatchers.IO) {
                                 semaphore.withPermit {
-                                    emitResolved(href, "Episode $wanted", domain, subtitleCallback, callback)
+                                    emitResolved(href, "Episode $wanted$qTag", quality, domain, subtitleCallback, callback)
                                 }
                             }
                         }
@@ -373,11 +375,18 @@ internal object HdHub4uSite {
                 val hit = hits.optJSONObject(i) ?: return@mapNotNull null
                 val name = hit.optString("file_name")
                 val link = hit.optString("url")
-                if (link.isBlank() || packText.containsMatchIn(name)) null else link
-            }.distinct().take(3)
-            driveLinks.forEach { link ->
+                if (link.isBlank() || packText.containsMatchIn(name)) null
+                // the drive entry carries the real quality in its file name,
+                // the episode heading it was found under does not
+                else name to link
+            }.distinctBy { it.second }.take(3)
+            driveLinks.forEach { (name, link) ->
+                val fileQuality = PlayNet.getIndexQuality(name).takeIf { it > Qualities.Unknown.value }
+                    ?: quality.takeIf { it > 0 }
                 PlayNet.emitOwnLink(
-                    "hdhub4u", link, "Episode $episode", quality,
+                    "hdhub4u", link,
+                    "Episode $episode${if (fileQuality != null) " ${fileQuality}p" else ""}",
+                    fileQuality,
                     url, subtitleCallback, callback
                 )
             }

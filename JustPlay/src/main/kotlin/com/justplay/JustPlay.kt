@@ -6,7 +6,6 @@ import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.AppUtils.toJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
-import com.lagradost.cloudstream3.utils.Qualities
 import com.raghav.donation.DonationManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -618,9 +617,6 @@ class JustPlay : MainAPI() {
             val emitted = sourceCounts.computeIfAbsent(link.source) { AtomicInteger() }
             if (emitted.incrementAndGet() > LINKS_PER_SOURCE) return@label
             val out = if (treatAsDownload) PlaySourceFilter.taggedDownloadOnly(link) else link
-            if (!treatAsDownload && out.type == ExtractorLinkType.VIDEO && out.quality > Qualities.P1080.value) {
-                out.quality = Qualities.Unknown.value
-            }
             synchronized(heldLock) { held.add(out) }
         }
 

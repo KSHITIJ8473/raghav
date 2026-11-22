@@ -226,8 +226,11 @@ internal object PlayNet {
 
     fun getIndexQuality(str: String?): Int {
         if (str.isNullOrBlank()) return Qualities.Unknown.value
-        Regex("""(\d{3,4})[pP]""").find(str)?.groupValues?.getOrNull(1)?.toIntOrNull()?.let { return it }
+        Regex("""(\d{3,4})\s*[pP]""").find(str)?.groupValues?.getOrNull(1)?.toIntOrNull()?.let { return it }
         val lower = str.lowercase()
+        // headings like "1080 x264" carry no p suffix, sizes must not match
+        Regex("""\b(2160|1440|1080|720|480|360)\b(?!\s*(?:mb|gb|kb|tb))""").find(lower)
+            ?.groupValues?.getOrNull(1)?.toIntOrNull()?.let { return it }
         return when {
             lower.contains("8k") -> 4320
             lower.contains("4k") || lower.contains("uhd") -> 2160
@@ -587,7 +590,8 @@ internal object PlayNet {
             link.url,
             link.type
         ) {
-            this.quality = quality ?: link.quality
+            // an unparsed label must not bury the quality the extractor itself found
+            this.quality = quality?.takeIf { it > Qualities.Unknown.value } ?: link.quality
             this.referer = link.referer
             this.headers = link.headers
             this.extractorData = link.extractorData

@@ -8,6 +8,11 @@ import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.raghav.donation.DonationManager
 import java.net.URLEncoder
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 
 private const val TAG = "Kdesa"
 
@@ -265,44 +270,50 @@ class KdesaProvider : MainAPI() {
                 .toMap()
         if (seasons.isEmpty()) return numberedEpisodes(tmdbId, title, detail.seasons.orEmpty())
 
-        val episodes = mutableListOf<Episode>()
-        for ((season, count) in seasons.toSortedMap()) {
-            val meta = try {
-                app.get(
-                    "$EMBED_URL/api/episodes/$tmdbId/$season?v=2",
-                    headers = siteHeaders("*/*", "$mainUrl/"),
-                    timeout = 30_000L
-                ).let { parseJson<EpisodesResp>(it.text).episodes }
-            } catch (e: Exception) {
-                Log.d(TAG, "season $season: ${e.message}")
-                null
-            }
-            if (meta.isNullOrEmpty()) {
-                (1..count).forEach { ep ->
-                    episodes.add(
-                        newEpisode("tv|$tmdbId|$season|$ep|$title") {
-                            this.season = season
-                            this.episode = ep
+        // shows like south park carry twenty plus seasons, fetching their
+        // titles one after another kept the load screen up for half a minute
+        val grouped = coroutineScope {
+            val gate = Semaphore(6)
+            seasons.toSortedMap().map { (season, count) ->
+                async(Dispatchers.IO) {
+                    gate.withPermit {
+                        val meta = try {
+                            app.get(
+                                "$EMBED_URL/api/episodes/$tmdbId/$season?v=2",
+                                headers = siteHeaders("*/*", "$mainUrl/"),
+                                timeout = 30_000L
+                            ).let { parseJson<EpisodesResp>(it.text).episodes }
+                        } catch (e: Exception) {
+                            Log.d(TAG, "season $season: ${e.message}")
+                            null
                         }
-                    )
-                }
-            } else {
-                meta.forEach { ep ->
-                    val number = ep.episode ?: return@forEach
-                    episodes.add(
-                        newEpisode("tv|$tmdbId|$season|$number|$title") {
-                            this.name = ep.name?.takeIf { it.isNotBlank() }
-                            this.season = season
-                            this.episode = number
-                            this.posterUrl = ep.still?.takeIf { it.isNotBlank() }
-                            this.description = ep.overview?.takeIf { it.isNotBlank() }
-                            this.runTime = ep.runtime
+                        if (meta.isNullOrEmpty()) {
+                            (1..count).map { ep ->
+                                season to newEpisode("tv|$tmdbId|$season|$ep|$title") {
+                                    this.season = season
+                                    this.episode = ep
+                                }
+                            }
+                        } else {
+                            meta.mapNotNull { ep ->
+                                val number = ep.episode ?: return@mapNotNull null
+                                val built = newEpisode("tv|$tmdbId|$season|$number|$title") {
+                                    this.name = ep.name?.takeIf { it.isNotBlank() }
+                                    this.season = season
+                                    this.episode = number
+                                    this.posterUrl = ep.still?.takeIf { it.isNotBlank() }
+                                    this.description = ep.overview?.takeIf { it.isNotBlank() }
+                                    this.runTime = ep.runtime
+                                }
+                                season to built
+                            }
                         }
-                    )
+                    }
                 }
-            }
+            }.flatMap { it.await() }
         }
-        return episodes
+        return grouped.sortedBy { (it.second.season ?: 0) * 10000 + (it.second.episode ?: 0) }
+            .map { it.second }
     }
 
     override suspend fun load(url: String): LoadResponse? {

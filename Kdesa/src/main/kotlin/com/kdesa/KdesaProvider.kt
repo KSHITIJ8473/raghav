@@ -94,6 +94,20 @@ private data class EpisodesResp(
     val episodes: List<EpisodeMeta>? = null
 )
 
+private suspend fun fetchEpisodesIndex(tmdbId: Int, season: Int): EpisodesResp? {
+    return try {
+        val response = app.get(
+            "$EMBED/api/episodes/$tmdbId/$season?v=2",
+            headers = embedHeaders(),
+            timeout = 30L
+        )
+        parseJson<EpisodesResp>(response.text)
+    } catch (e: Exception) {
+        Log.d(TAG, "episode index: ${e.message}")
+        null
+    }
+}
+
 // the detail json is embedded in the rsc flight stream, a brace scan is the
 // only way to cut it out without pulling in a full rsc parser
 private fun extractDetailJson(rsc: String): String? {
@@ -249,15 +263,9 @@ class KdesaProvider : MainAPI() {
     }
 
     private suspend fun episodesForShow(tmdbId: Int, title: String, detail: DetailJson): List<Episode> {
-        val seasonMap = try {
-            val first = VidriftClient.get("${VidriftClient.EMBED}/api/episodes/$tmdbId/1?v=2")
-            first?.let { parseJson<EpisodesResp>(it.text) }?.seasons.orEmpty()
-                .mapNotNull { s -> s.season?.let { it to (s.episodes ?: 0) } }
-                .toMap()
-        } catch (e: Exception) {
-            Log.d(TAG, "episode index: ${e.message}")
-            emptyMap()
-        }
+        val seasonMap = fetchEpisodesIndex(tmdbId, 1)?.seasons.orEmpty()
+            .mapNotNull { s -> s.season?.let { it to (s.episodes ?: 0) } }
+            .toMap()
 
         val seasons = seasonMap.filterKeys { it > 0 && (seasonMap[it] ?: 0) > 0 }
             .ifEmpty {
@@ -274,13 +282,7 @@ class KdesaProvider : MainAPI() {
             seasons.toSortedMap().map { (season, count) ->
                 async(Dispatchers.IO) {
                     gate.withPermit {
-                        val meta = try {
-                            VidriftClient.get("${VidriftClient.EMBED}/api/episodes/$tmdbId/$season?v=2")
-                                ?.let { parseJson<EpisodesResp>(it.text).episodes }
-                        } catch (e: Exception) {
-                            Log.d(TAG, "season $season: ${e.message}")
-                            null
-                        }
+                        val meta = fetchEpisodesIndex(tmdbId, season)?.episodes
                         if (meta.isNullOrEmpty()) {
                             (1..count).map { ep ->
                                 season to newEpisode("tv|$tmdbId|$season|$ep|$title") {

@@ -2,62 +2,39 @@ package com.kdesa
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties
 import com.fasterxml.jackson.annotation.JsonProperty
+import com.fasterxml.jackson.databind.JsonNode
 import com.lagradost.api.Log
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.app
-import com.lagradost.cloudstream3.network.CloudflareKiller
 import com.lagradost.cloudstream3.newSubtitleFile
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.newExtractorLink
-import com.lagradost.nicehttp.NiceResponse
 import java.util.concurrent.ConcurrentHashMap
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 
 private const val TAG = "Kdesa"
+
+internal const val EMBED = "https://embed.vidrift.net"
+internal const val EMBED_PLAY = "https://embed.vidrift.net/embed2/play"
+internal const val MEDIA_REFERER = "https://embed.vidrift.net/"
 
 private const val UA =
     "Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Mobile Safari/537.36"
 
-// the player sits on its own host behind cloudflare, all api calls go
-// through the same client so a solved challenge is shared between them
-internal object VidriftClient {
-    const val EMBED = "https://embed.vidrift.net"
-    const val API_REFERER = "https://embed.vidrift.net/embed2/play"
-    const val MEDIA_REFERER = "https://embed.vidrift.net/"
-
-    private val killer = CloudflareKiller()
-    private val warmup = Mutex()
-
-    @Volatile
-    private var ready = false
-
-    private suspend fun fetch(url: String, extra: Map<String, String>) = try {
-        val headers = mutableMapOf(
-            "Accept" to "*/*",
-            "User-Agent" to UA,
-            "Referer" to API_REFERER
-        )
-        headers.putAll(extra)
-        app.get(url, headers = headers, interceptor = killer, timeout = 30L)
-    } catch (e: Exception) {
-        Log.d(TAG, "embed request failed: ${e.message}")
-        null
-    }
-
-    // the webview solver is not safe to run from parallel requests, so the
-    // first call goes alone and later ones reuse whatever it unlocked
-    suspend fun get(url: String, extra: Map<String, String> = emptyMap()): NiceResponse? {
-        if (!ready) {
-            return warmup.withLock {
-                if (ready) fetch(url, extra) else fetch(url, extra)?.also { ready = true }
-            }
-        }
-        return fetch(url, extra)
-    }
+// cloudflare in front of the embed host hard-blocks clients that send no
+// fetch metadata, and the block page is not a solvable challenge
+internal fun embedHeaders(referer: String = EMBED_PLAY): Map<String, String> {
+    return mapOf(
+        "Accept" to "*/*",
+        "User-Agent" to UA,
+        "Accept-Language" to "en-US,en;q=0.7",
+        "Referer" to referer,
+        "sec-fetch-site" to "same-origin",
+        "sec-fetch-mode" to "cors",
+        "sec-fetch-dest" to "empty"
+    )
 }
 
 @JsonIgnoreProperties(ignoreUnknown = true)
@@ -92,7 +69,7 @@ private data class BootMeta(
     @JsonProperty("vexonUrl") val vexonUrl: String? = null,
     @JsonProperty("selfhostUrl") val selfhostUrl: String? = null,
     @JsonProperty("selfhostKind") val selfhostKind: String? = null,
-    val anime: List<String>? = null,
+    val anime: JsonNode? = null,
     @JsonProperty("orionStreams") val orionStreams: List<OrionStream>? = null
 )
 
@@ -126,7 +103,7 @@ private data class SourceResp(
 // the embed serialises missing values as the string "None"
 private fun playableUrl(raw: String?): String? {
     val url = raw?.takeIf { it.isNotBlank() && it != "None" } ?: return null
-    return if (url.startsWith("http")) url else VidriftClient.EMBED + url
+    return if (url.startsWith("http")) url else EMBED + url
 }
 
 private fun qualityFromHeight(height: Int): Int = when {
@@ -155,6 +132,14 @@ private fun qualityFromUrl(url: String): Int {
         ?: Qualities.Unknown.value
 }
 
+// the boot sends anime as a provider list for anime titles and as a plain
+// boolean false for everything else
+private fun animeProviders(meta: BootMeta): List<String> {
+    val node = meta.anime ?: return emptyList()
+    if (!node.isArray) return emptyList()
+    return node.mapNotNull { it.asText("").takeIf { s -> s.isNotBlank() && s != "None" } }
+}
+
 class KdesaSources(private val parent: String) {
 
     private val parentHost = parent.removePrefix("https://").removePrefix("http://").trimEnd('/')
@@ -169,10 +154,10 @@ class KdesaSources(private val parent: String) {
     ) {
         callback.invoke(
             newExtractorLink(source = "KDesa", name = label, url = url, type = type) {
-                this.referer = VidriftClient.MEDIA_REFERER
+                this.referer = MEDIA_REFERER
                 this.headers = mapOf(
                     "User-Agent" to UA,
-                    "Referer" to VidriftClient.MEDIA_REFERER
+                    "Referer" to MEDIA_REFERER
                 )
                 this.quality = quality
             }
@@ -189,7 +174,7 @@ class KdesaSources(private val parent: String) {
                 this.lang = track.lang?.takeIf { it.isNotBlank() } ?: "en"
                 this.headers = mapOf(
                     "User-Agent" to UA,
-                    "Referer" to VidriftClient.MEDIA_REFERER
+                    "Referer" to MEDIA_REFERER
                 )
             }
         )
@@ -200,7 +185,12 @@ class KdesaSources(private val parent: String) {
         subtitleCallback: (SubtitleFile) -> Unit
     ) {
         val url = playableUrl(listUrl) ?: return
-        val response = VidriftClient.get(url) ?: return
+        val response = try {
+            app.get(url, headers = embedHeaders())
+        } catch (e: Exception) {
+            Log.d(TAG, "orion subtitles: ${e.message}")
+            return
+        }
         try {
             parseJson<SubtitleListResp>(response.text).tracks.orEmpty().forEach {
                 pushSubtitle(it, subtitleCallback)
@@ -211,7 +201,8 @@ class KdesaSources(private val parent: String) {
     }
 
     private fun orionQuality(stream: OrionStream): Int {
-        val height = stream.rungs.orEmpty().mapNotNull { it.height }.maxOrNull() ?: return Qualities.Unknown.value
+        val height = stream.rungs.orEmpty().mapNotNull { it.height }.maxOrNull()
+            ?: return Qualities.Unknown.value
         return qualityFromHeight(height)
     }
 
@@ -248,9 +239,7 @@ class KdesaSources(private val parent: String) {
     // the site expects one call per provider, the player walks the same
     // cascade: anime mirrors first when flagged, then vela to lyra
     private fun providerCascade(meta: BootMeta): List<String> {
-        val cascade = meta.anime.orEmpty()
-            .filter { it.isNotBlank() && it != "None" }
-            .toMutableList()
+        val cascade = animeProviders(meta).toMutableList()
         if (meta.orionStreams.isNullOrEmpty()) cascade.add("orion")
         cascade.addAll(listOf("vela", "titan", "atlas", "lyra"))
         return cascade
@@ -267,7 +256,12 @@ class KdesaSources(private val parent: String) {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         val path = "${sourcePath(type, tmdbId, season, episode)}?token=$token&provider=$provider&parent=$parentHost"
-        val response = VidriftClient.get(VidriftClient.EMBED + path) ?: return false
+        val response = try {
+            app.get(EMBED + path, headers = embedHeaders(), timeout = 30L)
+        } catch (e: Exception) {
+            Log.d(TAG, "source $provider: ${e.message}")
+            return false
+        }
         if (response.code != 200) return false
         val parsed = try {
             parseJson<SourceResp>(response.text)
@@ -315,10 +309,16 @@ class KdesaSources(private val parent: String) {
         } else {
             "/api/boot/movie/$tmdbId?type=movie&id=$tmdbId&source=0&shell=1&token=$token"
         }
-        val bootResponse = VidriftClient.get(
-            VidriftClient.EMBED + bootPath,
-            mapOf("x-embed-parent" to parent)
-        ) ?: return false
+        val bootResponse = try {
+            app.get(
+                EMBED + bootPath,
+                headers = embedHeaders() + mapOf("x-embed-parent" to parent),
+                timeout = 30L
+            )
+        } catch (e: Exception) {
+            Log.d(TAG, "boot: ${e.message}")
+            return false
+        }
         if (bootResponse.code != 200) return false
         val boot = try {
             parseJson<BootResp>(bootResponse.text)

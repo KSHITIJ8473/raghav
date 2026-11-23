@@ -16,19 +16,18 @@ import kotlinx.coroutines.sync.withPermit
 
 private const val TAG = "Kdesa"
 
-private const val EMBED_URL = "https://embed.vidrift.net"
-private const val UA =
-    "Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Mobile Safari/537.36"
 private const val TMDB_IMG = "https://image.tmdb.org/t/p/w500"
 private const val TMDB_BACK = "https://image.tmdb.org/t/p/original"
 
-private fun siteHeaders(accept: String, referer: String? = null): Map<String, String> {
-    val headers = mutableMapOf(
-        "Accept" to accept,
-        "User-Agent" to UA
+private const val UA =
+    "Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Mobile Safari/537.36"
+
+private fun siteHeaders(referer: String): Map<String, String> {
+    return mapOf(
+        "Accept" to "*/*",
+        "User-Agent" to UA,
+        "Referer" to referer
     )
-    if (referer != null) headers["Referer"] = referer
-    return headers
 }
 
 @JsonIgnoreProperties(ignoreUnknown = true)
@@ -95,7 +94,8 @@ private data class EpisodesResp(
     val episodes: List<EpisodeMeta>? = null
 )
 
-// detail json is buried in the rsc stream, cut it out with a brace scan
+// the detail json is embedded in the rsc flight stream, a brace scan is the
+// only way to cut it out without pulling in a full rsc parser
 private fun extractDetailJson(rsc: String): String? {
     val key = "\"detail\":"
     val keyAt = rsc.indexOf(key)
@@ -130,7 +130,7 @@ private fun extractDetailJson(rsc: String): String? {
 }
 
 class KdesaProvider : MainAPI() {
-    override var mainUrl = "https://7movies.ac"
+    override var mainUrl = "https://7movies.ws"
     override var name = "KDesa"
     override var lang = "en"
     override val hasMainPage = true
@@ -154,7 +154,6 @@ class KdesaProvider : MainAPI() {
     private suspend fun refreshDomain() {
         FirebaseDomainHelper.getDomain("kdesa")?.takeIf { it.contains("7movies") }?.let {
             mainUrl = it.trimEnd('/')
-            PARENT = mainUrl
         }
     }
 
@@ -175,11 +174,12 @@ class KdesaProvider : MainAPI() {
         }
     }
 
-    // the prefix keeps the framework from mangling the pipe separated payload
+    // entries may arrive from sync with an older domain in front of the
+    // payload, only the segment after the last slash matters
     private fun payloadParts(raw: String): List<String> {
-        var s = raw.trim()
-        if (s.startsWith("$mainUrl/")) s = s.removePrefix("$mainUrl/")
-        return s.split("|")
+        val parts = raw.split("|")
+        if (parts.isEmpty()) return emptyList()
+        return listOf(parts[0].substringAfterLast('/')) + parts.drop(1)
     }
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
@@ -190,8 +190,8 @@ class KdesaProvider : MainAPI() {
         return try {
             val response = app.get(
                 "$mainUrl/api/discover?page=$page&type=$type$genreParam",
-                headers = siteHeaders("*/*", "$mainUrl/"),
-                timeout = 30_000L
+                headers = siteHeaders("$mainUrl/"),
+                timeout = 30L
             )
             val items = parseJson<DiscoverResp>(response.text).items.orEmpty()
             newHomePageResponse(request.name, items.mapNotNull { it.toSearch() }, items.isNotEmpty())
@@ -208,8 +208,8 @@ class KdesaProvider : MainAPI() {
             val encoded = URLEncoder.encode(query, "UTF-8")
             val response = app.get(
                 "$mainUrl/api/search?v=5&q=$encoded",
-                headers = siteHeaders("*/*", "$mainUrl/"),
-                timeout = 30_000L
+                headers = siteHeaders("$mainUrl/"),
+                timeout = 30L
             )
             parseJson<SearchResp>(response.text).results.orEmpty().mapNotNull { it.toSearch() }
         } catch (e: Exception) {
@@ -228,7 +228,7 @@ class KdesaProvider : MainAPI() {
                     "RSC" to "1",
                     "Referer" to "$mainUrl/"
                 ),
-                timeout = 30_000L
+                timeout = 30L
             )
             extractDetailJson(response.text)?.let { parseJson<DetailJson>(it) }
         } catch (e: Exception) {
@@ -248,41 +248,35 @@ class KdesaProvider : MainAPI() {
         }
     }
 
-    // names and stills live on the player's index, one call per season
     private suspend fun episodesForShow(tmdbId: Int, title: String, detail: DetailJson): List<Episode> {
         val seasonMap = try {
-            val first = app.get(
-                "$EMBED_URL/api/episodes/$tmdbId/1?v=2",
-                headers = siteHeaders("*/*", "$mainUrl/"),
-                timeout = 30_000L
-            )
-            parseJson<EpisodesResp>(first.text).seasons.orEmpty()
+            val first = VidriftClient.get("${VidriftClient.EMBED}/api/episodes/$tmdbId/1?v=2")
+            first?.let { parseJson<EpisodesResp>(it.text) }?.seasons.orEmpty()
                 .mapNotNull { s -> s.season?.let { it to (s.episodes ?: 0) } }
                 .toMap()
         } catch (e: Exception) {
             Log.d(TAG, "episode index: ${e.message}")
-            null
+            emptyMap()
         }
 
-        val seasons = seasonMap?.filterKeys { it > 0 && (seasonMap[it] ?: 0) > 0 }
-            ?: detail.seasons.orEmpty().filter { (it.seasonNumber ?: 0) > 0 && (it.episodeCount ?: 0) > 0 }
-                .mapNotNull { s -> s.seasonNumber?.let { it to (s.episodeCount ?: 0) } }
-                .toMap()
+        val seasons = seasonMap.filterKeys { it > 0 && (seasonMap[it] ?: 0) > 0 }
+            .ifEmpty {
+                detail.seasons.orEmpty().filter { (it.seasonNumber ?: 0) > 0 && (it.episodeCount ?: 0) > 0 }
+                    .mapNotNull { s -> s.seasonNumber?.let { it to (s.episodeCount ?: 0) } }
+                    .toMap()
+            }
         if (seasons.isEmpty()) return numberedEpisodes(tmdbId, title, detail.seasons.orEmpty())
 
-        // shows like south park carry twenty plus seasons, fetching their
-        // titles one after another kept the load screen up for half a minute
+        // long running shows carry dozens of seasons, fetching them one by
+        // one kept the episode list loading for half a minute
         val grouped = coroutineScope {
             val gate = Semaphore(6)
             seasons.toSortedMap().map { (season, count) ->
                 async(Dispatchers.IO) {
                     gate.withPermit {
                         val meta = try {
-                            app.get(
-                                "$EMBED_URL/api/episodes/$tmdbId/$season?v=2",
-                                headers = siteHeaders("*/*", "$mainUrl/"),
-                                timeout = 30_000L
-                            ).let { parseJson<EpisodesResp>(it.text).episodes }
+                            VidriftClient.get("${VidriftClient.EMBED}/api/episodes/$tmdbId/$season?v=2")
+                                ?.let { parseJson<EpisodesResp>(it.text).episodes }
                         } catch (e: Exception) {
                             Log.d(TAG, "season $season: ${e.message}")
                             null
@@ -372,7 +366,7 @@ class KdesaProvider : MainAPI() {
         val type = if (parts.getOrNull(0) == "tv") "tv" else "movie"
         val tmdbId = parts.getOrNull(1)?.toIntOrNull() ?: return false
 
-        val resolver = KdesaSources()
+        val resolver = KdesaSources(mainUrl)
         return if (type == "movie") {
             resolver.resolveMovie(tmdbId, subtitleCallback, callback)
         } else {

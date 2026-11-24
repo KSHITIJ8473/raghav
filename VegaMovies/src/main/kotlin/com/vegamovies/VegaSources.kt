@@ -260,7 +260,8 @@ internal object VegaSources {
         return out.distinctBy { it.url }
     }
 
-    // vegadrive answers skydrop on the json api only
+    // the gate page keeps a laravel session, the bridge needs those cookies
+    // before download-link answers
     private suspend fun vegadriveSkydrop(url: String): Server? {
         val page = try {
             app.get(url, headers = VegaNet.browserHeaders("https://nexdrive.beer/"), timeout = 20L)
@@ -271,11 +272,56 @@ internal object VegaSources {
         val token = url.substringAfter("/s/").substringBefore("?").substringBefore("#")
             .substringAfter("/d/").substringBefore("/")
         if (token.isBlank() || token == url) return null
+
+        val jar = mutableMapOf<String, String>()
+        fun collect(res: com.lagradost.nicehttp.NiceResponse) {
+            for (cookie in res.headers.values("set-cookie")) {
+                val pair = cookie.substringBefore(";").trim()
+                if (pair.contains("=")) jar[pair.substringBefore("=")] = pair
+            }
+        }
+        fun cookieHeader(): String = jar.values.joinToString("; ")
+
+        val gate = try {
+            val h = VegaNet.browserHeaders("$base/s/$token").toMutableMap()
+            if (cookieHeader().isNotBlank()) h["Cookie"] = cookieHeader()
+            app.get("$base/d/$token/skydrop", headers = h, timeout = 15L)
+        } catch (_: Exception) {
+            return null
+        }
+        if (gate.code != 200) return null
+        collect(gate)
+        val prepareUrl = Regex("""["']([^"']*__vega_bridge/prepare/[^"']+)["']""")
+            .find(gate.text)?.groupValues?.get(1)?.replace("\\/", "/")
+            ?: return null
+
+        for (attempt in 0 until 4) {
+            val res = try {
+                val h = VegaNet.browserHeaders("$base/d/$token/skydrop").toMutableMap()
+                h["Accept"] = "application/json"
+                if (cookieHeader().isNotBlank()) h["Cookie"] = cookieHeader()
+                app.get(prepareUrl, headers = h, timeout = 15L)
+            } catch (_: Exception) {
+                return null
+            }
+            collect(res)
+            val parsed = runCatching { JSONObject(res.text) }.getOrNull()
+            if (res.code == 200 && parsed?.optBoolean("ready") != true) {
+                delay((parsed?.optInt("retry_after_ms", 2500) ?: 2500).toLong().coerceAtMost(3000L))
+                continue
+            }
+            if (res.code != 200) return null
+            break
+        }
+
         for (attempt in 0 until 3) {
             val res = try {
+                val h = VegaNet.browserHeaders("$base/d/$token/skydrop").toMutableMap()
+                h["Accept"] = "application/json"
+                if (cookieHeader().isNotBlank()) h["Cookie"] = cookieHeader()
                 app.get(
                     "$base/download-link/$token/skydrop",
-                    headers = VegaNet.browserHeaders("$base/s/$token"),
+                    headers = h,
                     timeout = 15L
                 )
             } catch (_: Exception) {
@@ -314,14 +360,11 @@ internal object VegaSources {
 
     private val filePressId = Regex("""/file/([a-f0-9]{16,40})""")
 
-    // the filebee api died, its ids answer on the filepress domain now
+    // the filebee api died, its ids answer on the filepress domain now,
+    // dotflix shares moved behind a turnstile so only the index task answers
     private suspend fun filepressDirect(url: String): String? {
         val id = filePressId.find(url)?.groupValues?.get(1) ?: return null
         for (base in listOf("https://new4.filepress.lat", "https://filebee.xyz")) {
-            val share = filepressTask(id, "dotFlixDownlaod", base)
-            if (share != null && share.startsWith("http")) {
-                resolveDotFlix(share)?.let { return it }
-            }
             val task = filepressTask(id, "indexDownlaod", base)
             if (task != null && task.matches(Regex("[a-f0-9]{16,40}"))) {
                 filepressFinal(task, base)?.let { return it }
@@ -380,44 +423,6 @@ internal object VegaSources {
                     .firstNotNullOfOrNull { i -> data.optString(i).takeIf { it.startsWith("http") } }
                 else -> null
             }
-        } catch (_: Exception) {
-            null
-        }
-    }
-
-    // btoa file code, reversed base64 to the extract endpoint
-    private suspend fun resolveDotFlix(shareUrl: String): String? {
-        return try {
-            val text = app.get(
-                shareUrl,
-                headers = VegaNet.browserHeaders("https://new3.dotflix.shop/"),
-                timeout = 20L
-            ).text
-            val code = Regex("""btoa\('([^']+)'\)""").find(text)?.groupValues?.get(1) ?: return null
-            val obfuscated = java.util.Base64.getEncoder()
-                .encodeToString(code.toByteArray()).reversed()
-            val requestId = List(13) { "abcdefghijklmnopqrstuvwxyz0123456789".random() }.joinToString("")
-            val timestamp = System.currentTimeMillis().toString()
-            val res = app.post(
-                "https://dotflix.fit/api/extract-download",
-                headers = VegaNet.browserHeaders("https://new3.dotflix.shop/").toMutableMap().apply {
-                    put("Content-Type", "application/json")
-                    put("Accept", "application/json")
-                    put("X-Request-ID", requestId)
-                    put("X-Timestamp", timestamp)
-                    put("Origin", "https://new3.dotflix.shop")
-                },
-                json = JSONObject()
-                    .put("requestId", requestId)
-                    .put("timestamp", timestamp)
-                    .put("data", obfuscated)
-                    .toString(),
-                timeout = 25L
-            )
-            if (!res.isSuccessful) return null
-            val parsed = JSONObject(res.text)
-            if (!parsed.optBoolean("success")) return null
-            parsed.optString("downloadUrl").takeIf { it.startsWith("http") }
         } catch (_: Exception) {
             null
         }

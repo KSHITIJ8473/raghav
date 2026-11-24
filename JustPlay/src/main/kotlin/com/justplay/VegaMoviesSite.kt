@@ -26,15 +26,24 @@ internal object VegaMoviesSite {
     @Volatile
     private var remoteDomains: List<String>? = null
 
+    @Volatile
+    private var remoteDomainsAt = 0L
+
     private suspend fun domains(): List<String> {
-        remoteDomains?.let { return it }
+        val cached = remoteDomains
+        if (cached != null && System.currentTimeMillis() - remoteDomainsAt < 5 * 60_000L) return cached
         val overrides = mutableListOf<String>()
         FirebaseDomainHelper.getDomain("justplay_vegamovies")?.let { overrides.add(it) }
         FirebaseDomainHelper.getDomain("vegamovies")?.let { overrides.add(it) }
         FirebaseDomainHelper.getDomain("justplay_rogmovies")?.let { overrides.add(it) }
         FirebaseDomainHelper.getDomain("rogmovies")?.let { overrides.add(it) }
-        val merged = (overrides + baseDomains).distinct()
-        if (overrides.isNotEmpty()) remoteDomains = merged
+        // the retired hosts all 301 into the live pair, keeping them in the
+        // round only stacks duplicate hits on the same two sites
+        val merged = if (overrides.isNotEmpty()) overrides.distinct() else baseDomains
+        if (overrides.isNotEmpty()) {
+            remoteDomains = merged
+            remoteDomainsAt = System.currentTimeMillis()
+        }
         return merged
     }
 
@@ -67,7 +76,7 @@ internal object VegaMoviesSite {
         val url = "$domain/ts-search.php?q=${Uri.encode(query)}&page=1"
         val text = PlayNet.retry(attempts = 2, gapMs = 600L) {
             try {
-                val res = app.get(url, headers = PlayNet.browserHeaders("$domain/"), timeout = 12L)
+                val res = PlayNet.fetchWithCf(url, "$domain/", timeout = 12L) ?: return@retry null
                 if (res.code == 200) res.text else null
             } catch (_: Exception) {
                 null
@@ -89,23 +98,33 @@ internal object VegaMoviesSite {
         }
     }
 
-    private fun pickPost(posts: List<VegaDoc>, res: PlayLinkData): VegaDoc? {
-        val title = res.title ?: return null
+    private fun pickPosts(posts: List<VegaDoc>, res: PlayLinkData): List<VegaDoc> {
+        val title = res.title ?: return emptyList()
         val matched = posts.filter { PlayNet.titleMatchesFor(it.post_title, res) }
-        if (matched.isEmpty()) return null
-        return if (res.season != null) {
-            val seasonPosts = matched.filter {
-                PlayNet.seasonsOf(it.post_title ?: "")?.contains(res.season) == true &&
-                    sameShow(it.post_title ?: "", title)
-            }
-            if (seasonPosts.isNotEmpty()) {
-                seasonPosts.firstOrNull { PlayNet.yearMatches(it.post_title ?: "", res.matchYear) } ?: seasonPosts.first()
-            }
-            matched.firstOrNull { PlayNet.seasonsOf(it.post_title ?: "") == null }
-        } else {
-            matched.firstOrNull { PlayNet.yearMatches(it.post_title ?: "", res.matchYear) }
+        if (matched.isEmpty()) return emptyList()
+        if (res.season == null) {
+            return matched.sortedByDescending { PlayNet.yearMatches(it.post_title ?: "", res.matchYear) }
         }
+        val seasonPosts = matched.filter {
+            PlayNet.seasonsOf(it.post_title ?: "")?.contains(res.season) == true &&
+                sameShow(it.post_title ?: "", title)
+        }
+        val withYear = seasonPosts.filter { PlayNet.yearMatches(it.post_title ?: "", res.matchYear) }
+        val rest = seasonPosts.filter { it !in withYear }
+        // a seasonless post only helps when it is a series itself, otherwise
+        // the request lands on some movie that shares the name
+        val seasonless = matched.filter {
+            PlayNet.seasonsOf(it.post_title ?: "") == null && PlayNet.isSeriesPost(it.post_title)
+        }
+        return withYear + rest + seasonless
     }
+
+    // credits sometimes lead the name, "Netflix Bridgerton (Season 1-3)"
+    private val creditLead = Regex(
+        """^(?:netflix|amazonprime|amazon|jiocinema|jiohotstar|jio|hotstar|sonyliv|sony|zee5|zee|""" +
+            """disneyplus|disney|appletv|apple|hbo|max|paramount|peacock|hulu|voot|mxplayer|mx|""" +
+            """altbalaji|ullu|discovery|tvfplay|tvf|crunchyroll|sunnxt|aha|originals|original|webseries)+"""
+    )
 
     private fun sameShow(postTitle: String, title: String): Boolean {
         var stripped = PlayNet.normalizeTitle(postTitle)
@@ -114,18 +133,23 @@ internal object VegaMoviesSite {
         }
         val base = PlayNet.normalizeTitle(title)
         if (base.isBlank()) return false
-        // posts carry rating tags like [18+] in front of the name, drop the
-        // digits only when what follows is the show itself
         if (!stripped.startsWith(base)) {
             Regex("^\\d{1,2}").find(stripped)?.let { tag ->
                 val cut = stripped.substring(tag.value.length)
                 if (cut.startsWith(base)) stripped = cut
             }
         }
+        if (!stripped.startsWith(base)) {
+            creditLead.find(stripped)?.let { lead ->
+                val cut = stripped.substring(lead.value.length)
+                if (cut.startsWith(base)) stripped = cut
+            }
+        }
         if (!stripped.startsWith(base)) return false
         val rest = stripped.substring(base.length)
-        return rest.isEmpty() ||
-            Regex("""^(season|part|chapter|s\d|vol(ume)?|19\d\d|20\d\d)""").containsMatchIn(rest)
+        // streaming credits and release years sit between the name and the
+        // season line, a marker still has to show up close behind the name
+        return rest.isEmpty() || Regex("""season|s\d|part|chapter|vol""").containsMatchIn(rest.take(40))
     }
 
     class QualityGroup(
@@ -171,7 +195,10 @@ internal object VegaMoviesSite {
             val label = head.text().replace(Regex("""\s+"""), " ").trim()
             // title and intro lines name the whole post, not one quality
             if (label.isBlank() || skipHead.containsMatchIn(label)) continue
-            if (label.contains("Download", true)) continue
+            // a download heading that names exactly one quality is the
+            // button line itself, the rest name the whole post
+            val qualityCount = qualityRegex.findAll(label).count()
+            if (label.contains("Download", true) && qualityCount != 1) continue
             val m = seasonMark.find(label)
             val num = m?.groupValues?.let { g ->
                 g[1].toIntOrNull() ?: g[2].toIntOrNull() ?: g[3].toIntOrNull()
@@ -185,7 +212,15 @@ internal object VegaMoviesSite {
                     if (group.links.isNotEmpty()) block.groups.add(group)
                     openSeason = null
                 }
-                num != null -> openSeason = blockFor(num, label)
+                num != null -> {
+                    // some posts name the season on its own line with the
+                    // buttons right below and no quality word at all
+                    val block = blockFor(num, label)
+                    val group = QualityGroup(label)
+                    groupsBelow(head, group)
+                    if (group.links.isNotEmpty()) block.groups.add(group)
+                    openSeason = block
+                }
                 hasQuality -> {
                     val group = QualityGroup(label)
                     groupsBelow(head, group)
@@ -428,6 +463,8 @@ internal object VegaMoviesSite {
         return out.distinctBy { it.url }
     }
 
+    // vegadrive gate keeps a laravel session, the bridge needs those cookies
+    // before download-link answers
     private suspend fun vegadriveSkydrop(url: String): Server? {
         val page = try {
             app.get(url, headers = PlayNet.browserHeaders("https://nexdrive.beer/"), timeout = 20L)
@@ -438,11 +475,56 @@ internal object VegaMoviesSite {
         val token = url.substringAfter("/s/").substringBefore("?").substringBefore("#")
             .substringAfter("/d/").substringBefore("/")
         if (token.isBlank() || token == url) return null
+
+        val jar = mutableMapOf<String, String>()
+        fun collect(res: com.lagradost.nicehttp.NiceResponse) {
+            for (cookie in res.headers.values("set-cookie")) {
+                val pair = cookie.substringBefore(";").trim()
+                if (pair.contains("=")) jar[pair.substringBefore("=")] = pair
+            }
+        }
+        fun cookieHeader(): String = jar.values.joinToString("; ")
+
+        val gate = try {
+            val h = PlayNet.browserHeaders("$base/s/$token").toMutableMap()
+            if (cookieHeader().isNotBlank()) h["Cookie"] = cookieHeader()
+            app.get("$base/d/$token/skydrop", headers = h, timeout = 15L)
+        } catch (_: Exception) {
+            return null
+        }
+        if (gate.code != 200) return null
+        collect(gate)
+        val prepareUrl = Regex("""["']([^"']*__vega_bridge/prepare/[^"']+)["']""")
+            .find(gate.text)?.groupValues?.get(1)?.replace("\\/", "/")
+            ?: return null
+
+        for (attempt in 0 until 4) {
+            val res = try {
+                val h = PlayNet.browserHeaders("$base/d/$token/skydrop").toMutableMap()
+                h["Accept"] = "application/json"
+                if (cookieHeader().isNotBlank()) h["Cookie"] = cookieHeader()
+                app.get(prepareUrl, headers = h, timeout = 15L)
+            } catch (_: Exception) {
+                return null
+            }
+            collect(res)
+            val parsed = runCatching { JSONObject(res.text) }.getOrNull()
+            if (res.code == 200 && parsed?.optBoolean("ready") != true) {
+                delay((parsed?.optInt("retry_after_ms", 2500) ?: 2500).toLong().coerceAtMost(3000L))
+                continue
+            }
+            if (res.code != 200) return null
+            break
+        }
+
         for (attempt in 0 until 3) {
             val res = try {
+                val h = PlayNet.browserHeaders("$base/d/$token/skydrop").toMutableMap()
+                h["Accept"] = "application/json"
+                if (cookieHeader().isNotBlank()) h["Cookie"] = cookieHeader()
                 app.get(
                     "$base/download-link/$token/skydrop",
-                    headers = PlayNet.browserHeaders("$base/s/$token"),
+                    headers = h,
                     timeout = 15L
                 )
             } catch (_: Exception) {
@@ -480,14 +562,11 @@ internal object VegaMoviesSite {
 
     private val filePressId = Regex("""/file/([a-f0-9]{16,40})""")
 
-    // the filebee api died, its ids answer on the filepress domain now
+    // the filebee api died, its ids answer on the filepress domain now,
+    // dotflix shares moved behind a turnstile so only the index task answers
     private suspend fun filepressDirect(url: String): String? {
         val id = filePressId.find(url)?.groupValues?.get(1) ?: return null
         for (base in listOf("https://new4.filepress.lat", "https://filebee.xyz")) {
-            val share = filepressTask(id, "dotFlixDownlaod", base)
-            if (share != null && share.startsWith("http")) {
-                resolveDotFlix(share)?.let { return it }
-            }
             val task = filepressTask(id, "indexDownlaod", base)
             if (task != null && task.matches(Regex("[a-f0-9]{16,40}"))) {
                 filepressFinal(task, base)?.let { return it }
@@ -546,43 +625,6 @@ internal object VegaMoviesSite {
                     .firstNotNullOfOrNull { i -> data.optString(i).takeIf { it.startsWith("http") } }
                 else -> null
             }
-        } catch (_: Exception) {
-            null
-        }
-    }
-
-    private suspend fun resolveDotFlix(shareUrl: String): String? {
-        return try {
-            val text = app.get(
-                shareUrl,
-                headers = PlayNet.browserHeaders("https://new3.dotflix.shop/"),
-                timeout = 20L
-            ).text
-            val code = Regex("""btoa\('([^']+)'\)""").find(text)?.groupValues?.get(1) ?: return null
-            val obfuscated = java.util.Base64.getEncoder()
-                .encodeToString(code.toByteArray()).reversed()
-            val requestId = List(13) { "abcdefghijklmnopqrstuvwxyz0123456789".random() }.joinToString("")
-            val timestamp = System.currentTimeMillis().toString()
-            val res = app.post(
-                "https://dotflix.fit/api/extract-download",
-                headers = PlayNet.browserHeaders("https://new3.dotflix.shop/").toMutableMap().apply {
-                    put("Content-Type", "application/json")
-                    put("Accept", "application/json")
-                    put("X-Request-ID", requestId)
-                    put("X-Timestamp", timestamp)
-                    put("Origin", "https://new3.dotflix.shop")
-                },
-                json = JSONObject()
-                    .put("requestId", requestId)
-                    .put("timestamp", timestamp)
-                    .put("data", obfuscated)
-                    .toString(),
-                timeout = 25L
-            )
-            if (!res.isSuccessful) return null
-            val parsed = JSONObject(res.text)
-            if (!parsed.optBoolean("success")) return null
-            parsed.optString("downloadUrl").takeIf { it.startsWith("http") }
         } catch (_: Exception) {
             null
         }
@@ -665,40 +707,17 @@ internal object VegaMoviesSite {
                 }.flatMap { it.await() }
             }
 
-            var post: VegaDoc? = null
+            var ranked: List<VegaDoc> = emptyList()
             for (query in PlayNet.searchQueries(res)) {
                 val posts = searchRound(query)
                 if (posts.isEmpty()) continue
-                post = pickPost(posts, res)
-                if (post != null) break
+                ranked = pickPosts(posts, res)
+                if (ranked.isNotEmpty()) break
             }
-            val post0 = post ?: return
-            val permalink = post0.permalink?.takeIf { it.isNotBlank() } ?: return
-            val domain = post0.domain.ifBlank {
-                candidates.firstOrNull { permalink.contains(it.removePrefix("https://"), true) }
-                    ?: candidates.first()
-            }
-            val postUrl = PlayNet.absolute(permalink, domain)
-            val html = try {
-                app.get(postUrl, headers = PlayNet.browserHeaders("$domain/"), timeout = 20L).text
-            } catch (_: Exception) {
-                return
-            }
-            val detail = parsePost(html) ?: return
-
-            val groups: List<QualityGroup> = if (res.season != null) {
-                val inSeason = detail.seasons.filter { it.number == res.season }.flatMap { it.groups }
-                when {
-                    inSeason.isNotEmpty() -> inSeason
-                    detail.seasons.isNotEmpty() ->
-                        detail.seasons.filter { s -> PlayNet.seasonsOf(s.title) == null }.flatMap { it.groups }
-                    PlayNet.seasonsOf(post0.post_title ?: "")?.contains(res.season) == true -> detail.movieGroups
-                    else -> emptyList()
-                }
-            } else {
-                detail.movieGroups
-            }
-            if (groups.isEmpty()) return
+            // mirrors of the same post answer on one page, trying them twice
+            // only burns time
+            val unique = ranked.distinctBy { it.permalink?.substringAfterLast("download") ?: it.permalink }
+            if (unique.isEmpty()) return
 
             val claimed = ConcurrentHashMap.newKeySet<String>()
             val seenUrls = ConcurrentHashMap.newKeySet<String>()
@@ -764,21 +783,62 @@ internal object VegaMoviesSite {
                 }
             }
 
-            coroutineScope {
-                val gate = Semaphore(6)
-                groups.forEach { group ->
-                    async(Dispatchers.IO) {
-                        gate.withPermit {
-                            val tier = PlayNet.getIndexQuality(group.label)
-                            val info = infoFrom(group.label)
-                            val dv = isDvEncode(group.label)
-                            coroutineScope {
-                                val inner = Semaphore(4)
-                                group.links.distinctBy { it.second }.forEach { (_label, url) ->
-                                    async(Dispatchers.IO) {
-                                        inner.withPermit {
-                                            val page = fetchDrivePage(url) ?: return@withPermit
-                                            walkTargets(targetsOf(page), tier, info, dv)
+            // pages age out or their buttons move behind a join gate, the next
+            // candidate post still carries the same files
+            for (post0 in unique.take(3)) {
+                val permalink = post0.permalink?.takeIf { it.isNotBlank() } ?: continue
+                val domain = post0.domain.ifBlank {
+                    candidates.firstOrNull { permalink.contains(it.removePrefix("https://"), true) }
+                        ?: candidates.first()
+                }
+                val postUrl = PlayNet.absolute(permalink, domain)
+                val html = try {
+                    PlayNet.retry(attempts = 2, gapMs = 500L) {
+                        val res = PlayNet.fetchWithCf(postUrl, "$domain/") ?: return@retry null
+                        if (res.code == 200) res.text else null
+                    }
+                } catch (_: Exception) {
+                    null
+                } ?: continue
+                val detail = parsePost(html) ?: continue
+
+                val groups: List<QualityGroup> = if (res.season != null) {
+                    val inSeason = detail.seasons.filter { it.number == res.season }.flatMap { it.groups }
+                    when {
+                        inSeason.isNotEmpty() -> inSeason
+                        PlayNet.seasonsOf(post0.post_title ?: "")?.contains(res.season) == true -> detail.movieGroups
+                        detail.seasons.size == 1 -> detail.seasons.first().groups
+                        else -> emptyList()
+                    }
+                } else {
+                    // "Part 1" in a movie title parses as one fake season, the
+                    // post is still a movie when no series words show up
+                    if (detail.movieGroups.isEmpty() && detail.seasons.isNotEmpty() &&
+                        !PlayNet.isSeriesPost(post0.post_title ?: "")
+                    ) {
+                        detail.seasons.flatMap { it.groups }
+                    } else {
+                        detail.movieGroups
+                    }
+                }
+                if (groups.isEmpty()) continue
+
+                coroutineScope {
+                    val gate = Semaphore(6)
+                    groups.forEach { group ->
+                        async(Dispatchers.IO) {
+                            gate.withPermit {
+                                val tier = PlayNet.getIndexQuality(group.label)
+                                val info = infoFrom(group.label)
+                                val dv = isDvEncode(group.label)
+                                coroutineScope {
+                                    val inner = Semaphore(4)
+                                    group.links.distinctBy { it.second }.forEach { (_label, url) ->
+                                        async(Dispatchers.IO) {
+                                            inner.withPermit {
+                                                val page = fetchDrivePage(url) ?: return@withPermit
+                                                walkTargets(targetsOf(page), tier, info, dv)
+                                            }
                                         }
                                     }
                                 }
@@ -786,6 +846,7 @@ internal object VegaMoviesSite {
                         }
                     }
                 }
+                return
             }
         } catch (_: Exception) {}
     }

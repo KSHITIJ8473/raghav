@@ -266,17 +266,20 @@ internal object PlayNet {
 
     private val tailJunk = setOf(
         "480p", "720p", "1080p", "1440p", "2160p", "4k", "2k", "8k", "uhd", "qhd", "fhd",
-        "bluray", "web", "webdl", "webrip", "webhd", "hdrip", "hdcam", "hdtc", "hdts",
+        "bluray", "web", "webdl", "webrip", "webhd", "webseries", "hdrip", "hdcam", "hdtc", "hdts",
         "dvdscr", "predvd", "dvdrip", "brrip", "nf", "amzn", "jio", "hotstar", "zee5",
-        "sony", "disney", "hbo", "imax", "hq", "sdr", "hdr", "dv", "10bit", "8bit", "60fps",
+        "sony", "sonyliv", "disney", "hbo", "imax", "hq", "sdr", "hdr", "dv", "10bit", "8bit", "60fps",
         "x264", "x265", "h264", "h265", "hevc", "avc", "aac", "aac5", "ddp", "dd5", "dd2",
         "atmos", "truehd", "dts", "opus", "51", "20", "ch",
-        "hindi", "english", "dual", "multi", "audio", "org", "original", "dubbed", "dub",
+        "hindi", "english", "dual", "multi", "audio", "org", "original", "originals", "dubbed", "dub",
         "subbed", "subs", "esub", "esubs", "subtitle", "subtitles", "hardsub",
         "tamil", "telugu", "punjabi", "marathi", "kannada", "malayalam", "bengali",
         "gujarati", "urdu", "japanese", "korean", "chinese", "mandarin", "cantonese",
         "spanish", "french", "russian", "arabic", "turkish", "thai", "german", "italian",
         "danish", "kazakh", "vietnamese",
+        "amazon", "netflix", "prime", "video", "youtube", "apple", "paramount", "peacock",
+        "hulu", "voot", "mx", "player", "altbalaji", "ullu", "discovery", "plus", "crunchyroll",
+        "aha", "nxt", "tvf", "tvfplay", "liv", "tv", "tvshow", "shows", "serial", "all",
         "line", "clean", "uncut", "extended", "remastered", "proper", "repack", "full",
         "movie", "film", "desi", "studio", "v2", "added", "complete", "series", "season",
         "seasons", "episode", "episodes", "download", "watch", "online", "stream",
@@ -306,6 +309,11 @@ internal object PlayNet {
         }
     }
 
+    // a colon straight after the name opens a subtitle, "RRR: Rise Roar Revolt"
+    private fun colonLead(postTitle: String, query: String): Boolean =
+        Regex("""(?i)^(?:\s*(?:download|watch)\s+)?""" + Regex.escape(query) + """\s*:""")
+            .containsMatchIn(postTitle)
+
     fun titleMatches(postTitle: String?, query: String): Boolean {
         if (postTitle.isNullOrBlank()) return false
         val normQuery = normalizeTitle(query)
@@ -324,6 +332,7 @@ internal object PlayNet {
                 if (postWords.subList(start, end).joinToString("") != normQuery) continue
                 val next = postWords.getOrNull(end)
                 if (next == null || isBoundaryToken(next)) return true
+                if (colonLead(postTitle, query)) return true
             }
         }
         return false

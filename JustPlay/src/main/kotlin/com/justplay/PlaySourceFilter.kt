@@ -8,9 +8,7 @@ internal object PlaySourceFilter {
         "10gbps",
         "gdflix instant download",
         "instant download",
-        "download",
-        "g-direct",
-        "g direct"
+        "download"
     )
 
     fun isDownloadOnlyName(name: String): Boolean {

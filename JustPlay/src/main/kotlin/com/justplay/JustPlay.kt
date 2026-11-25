@@ -158,9 +158,9 @@ class JustPlay : MainAPI() {
         }
 
         fun liveSportsEnabled(): Boolean = try {
-            CloudStreamApp.getKey<Boolean>(KEY_LIVE_SPORTS) ?: true
+            CloudStreamApp.getKey<Boolean>(KEY_LIVE_SPORTS) ?: false
         } catch (_: Exception) {
-            true
+            false
         }
 
         fun liveSportsOnTop(): Boolean = try {
@@ -245,6 +245,7 @@ class JustPlay : MainAPI() {
 
     init {
         widenClient()
+        if (liveSportsEnabled()) LiveSports.prefetchEvents()
     }
 
     private val prefetchScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)

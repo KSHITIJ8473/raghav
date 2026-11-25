@@ -41,10 +41,15 @@ import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.SecretKeySpec
 import kotlin.coroutines.resume
 import kotlin.coroutines.suspendCoroutine
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -232,13 +237,35 @@ object LiveSports {
     private const val DEFAULT_BASE = "https://cfymarketscanjiostar80.top"
     private const val WEB_UA = "Mozilla/5.0 (Windows NT 10.0; Win64. x64) AppleWebKit/537.36"
 
+    // the app paints the home page only after every row has answered, so the
+    // events list is cached and refreshed in the background instead
+    private const val EVENTS_FRESH_MS = 60_000L
+    private const val EVENTS_STALE_MS = 600_000L
+    private const val EVENTS_WAIT_MS = 6_000L
+    private const val EVENTS_RETRY_MS = 60_000L
+
     var context: Context? = null
 
     private val domain = RemoteDomain()
 
+    private val eventsScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val eventsMutex = Mutex()
+
+    @Volatile
+    private var eventsCache: List<LiveEvent> = emptyList()
+
+    @Volatile
+    private var eventsCachedAt = 0L
+
+    @Volatile
+    private var eventsFailedAt = 0L
+
+    @Volatile
+    private var pendingEventLoad: Deferred<Unit>? = null
+
     private val client = OkHttpClient.Builder()
-        .connectTimeout(30, TimeUnit.SECONDS)
-        .readTimeout(30, TimeUnit.SECONDS)
+        .connectTimeout(10, TimeUnit.SECONDS)
+        .readTimeout(15, TimeUnit.SECONDS)
         .addInterceptor(StaleDomainInterceptor(domain))
         .build()
 
@@ -291,6 +318,45 @@ object LiveSports {
         } catch (_: Exception) {
             emptyList()
         }
+    }
+
+    private fun eventsFresh(): Boolean =
+        eventsCache.isNotEmpty() && System.currentTimeMillis() - eventsCachedAt < EVENTS_FRESH_MS
+
+    private fun startEventLoad(): Deferred<Unit> {
+        pendingEventLoad?.let { if (it.isActive) return it }
+        val job = eventsScope.async {
+            val fetched = eventsMutex.withLock {
+                if (eventsFresh()) eventsCache else fetchEvents()
+            }
+            if (fetched.isNotEmpty()) {
+                eventsCache = fetched
+                eventsCachedAt = System.currentTimeMillis()
+            } else if (!eventsFresh()) {
+                eventsFailedAt = System.currentTimeMillis()
+            }
+        }
+        pendingEventLoad = job
+        return job
+    }
+
+    fun prefetchEvents() {
+        if (!eventsFresh()) startEventLoad()
+    }
+
+    private suspend fun currentEvents(): List<LiveEvent> {
+        if (eventsFresh()) return eventsCache
+        val haveCache = eventsCache.isNotEmpty()
+        val age = System.currentTimeMillis() - eventsCachedAt
+        if ((haveCache && age < EVENTS_STALE_MS) ||
+            System.currentTimeMillis() - eventsFailedAt < EVENTS_RETRY_MS
+        ) {
+            startEventLoad()
+            return eventsCache
+        }
+        val load = startEventLoad()
+        withTimeoutOrNull(EVENTS_WAIT_MS) { load.await() }
+        return eventsCache
     }
 
     private suspend fun fetchStreams(slug: String): LiveStreamResponse? {
@@ -411,7 +477,7 @@ object LiveSports {
     }
 
     suspend fun homePage(api: MainAPI): HomePageResponse {
-        val events = fetchEvents()
+        val events = currentEvents()
         if (events.isEmpty()) {
             return newHomePageResponse("Live Sports", emptyList<SearchResponse>(), hasNext = false)
         }

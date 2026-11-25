@@ -468,7 +468,7 @@ internal object PlayNet {
         else -> url
     }
 
-    private fun isCfChallenge(res: NiceResponse): Boolean {
+    internal fun isCfChallenge(res: NiceResponse): Boolean {
         if (res.headers["cf-mitigated"] == "challenge") return true
         val body = try { res.text.lowercase() } catch (_: Exception) { "" }
         return (body.contains("just a moment") && body.contains("challenge-platform")) ||

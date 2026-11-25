@@ -2,14 +2,16 @@ package com.justplay
 
 import android.net.Uri
 import android.util.Base64
+import android.util.Log
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.newExtractorLink
-import com.lagradost.nicehttp.NiceResponse
 import com.lagradost.cloudstream3.network.WebViewResolver
+import com.lagradost.nicehttp.NiceResponse
+import com.lagradost.nicehttp.Requests
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
@@ -17,13 +19,22 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
+import okhttp3.Dns
+import okhttp3.Interceptor
+import okhttp3.OkHttpClient
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
+import java.net.InetAddress
+import java.net.URI
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.TimeUnit
 
 internal object MoviesLinkBdSite {
 
+    private const val TAG = "MoviesLinkBd"
+
     private const val HUB_URL = "https://movielinkbd.com"
-    private const val DEFAULT_DOMAIN = "https://drjuea.movielinkbd.at"
+    private const val DEFAULT_DOMAIN = "https://movielinkbd.tv"
 
     @Volatile
     private var workingDomain: String? = null
@@ -34,12 +45,122 @@ internal object MoviesLinkBdSite {
     @Volatile
     private var hubCheckedAt = 0L
 
+    // the hub page publishes the current content origin, subdomain mirrors are long gone
     private val mirrorRegex = Regex(
-        "https?://([a-z0-9-]+\\.movielinkbd\\.(?:at|li|tv|app|net))(?=/)",
+        """https?://((?:[a-z0-9-]+\.)?movielinkbd\.(?:tv|app|one|info|work|shop|li|net))(?![a-z0-9-])""",
         RegexOption.IGNORE_CASE
     )
 
     private val keyRegex = Regex("var K=\"([a-f0-9]{24})\"")
+
+    // some ISPs answer movielinkbd lookups with a block page or NXDOMAIN,
+    // so those hosts resolve over DoH before falling back to system DNS
+    private val dnsCache = ConcurrentHashMap<String, List<InetAddress>>()
+
+    private val dohDns = object : Dns {
+        override fun lookup(hostname: String): List<InetAddress> {
+            if (!hostname.contains("movielinkbd")) return Dns.SYSTEM.lookup(hostname)
+            dnsCache[hostname]?.let { return it }
+            val resolved = resolveDnsDoH(hostname)
+            if (resolved.isNotEmpty()) {
+                dnsCache[hostname] = resolved
+                return resolved
+            }
+            return Dns.SYSTEM.lookup(hostname)
+        }
+    }
+
+    private val dohProbe = OkHttpClient.Builder()
+        .connectTimeout(3, TimeUnit.SECONDS)
+        .readTimeout(3, TimeUnit.SECONDS)
+        .build()
+
+    private fun resolveDnsDoH(hostname: String): List<InetAddress> {
+        val endpoints = listOf(
+            "https://1.1.1.1/dns-query?name=$hostname&type=A",
+            "https://8.8.8.8/resolve?name=$hostname&type=A"
+        )
+        for (url in endpoints) {
+            try {
+                val request = okhttp3.Request.Builder()
+                    .url(url)
+                    .header("Accept", "application/dns-json")
+                    .header("User-Agent", "Mozilla/5.0")
+                    .build()
+                dohProbe.newCall(request).execute().use { response ->
+                    if (!response.isSuccessful) return@use
+                    val body = response.body?.string() ?: return@use
+                    val ips = Regex("""\"data\"\s*:\s*\"([0-9.]+)\"""")
+                        .findAll(body).map { it.groupValues[1] }.toList()
+                    if (ips.isNotEmpty()) return ips.map { InetAddress.getByName(it) }
+                }
+            } catch (_: Exception) {
+            }
+        }
+        return emptyList()
+    }
+
+    private val bdApp by lazy {
+        Requests(app.baseClient.newBuilder().dns(dohDns).build())
+    }
+
+    private val cfLocks = ConcurrentHashMap<String, Mutex>()
+
+    private fun usable(res: NiceResponse): Boolean =
+        res.code in 200..399 || res.headers["location"] != null
+
+    private suspend fun fetch(
+        url: String,
+        referer: String?,
+        cookies: Map<String, String>,
+        allowRedirects: Boolean,
+        timeout: Long,
+        client: Requests,
+        interceptor: Interceptor? = null
+    ): NiceResponse? = try {
+        client.get(
+            url,
+            headers = PlayNet.headers(referer),
+            cookies = cookies,
+            allowRedirects = allowRedirects,
+            timeout = timeout,
+            interceptor = interceptor
+        )
+    } catch (_: Exception) {
+        null
+    }
+
+    private suspend fun bdGet(
+        url: String,
+        referer: String? = null,
+        cookies: Map<String, String> = emptyMap(),
+        allowRedirects: Boolean = true,
+        timeout: Long = 20L
+    ): NiceResponse? {
+        val plain = fetch(url, referer, cookies, allowRedirects, timeout, app)
+        if (plain != null && !PlayNet.isCfChallenge(plain) && usable(plain)) return plain
+        plain?.close()
+
+        val doh = fetch(url, referer, cookies, allowRedirects, timeout, bdApp)
+        if (doh != null && !PlayNet.isCfChallenge(doh) && usable(doh)) return doh
+
+        val challenged = (plain != null && PlayNet.isCfChallenge(plain)) ||
+            (doh != null && PlayNet.isCfChallenge(doh))
+        doh?.close()
+        if (!challenged) return null
+
+        return cfLocks.getOrPut(PlayNet.hostOf(url)) { Mutex() }.withLock {
+            val killer = PlayNet.killerFor(url)
+            runCatching { killer.savedCookies.remove(URI(url).host) }
+            val solved = fetch(url, referer, cookies, allowRedirects, 60L, bdApp, killer)
+            if (solved != null && !PlayNet.isCfChallenge(solved) && usable(solved)) {
+                solved
+            } else {
+                solved?.close()
+                null
+            }
+        }
+    }
 
     private fun decodeDl(payload: String, seedHex: String, rounds: Int): String? {
         return try {
@@ -76,18 +197,19 @@ internal object MoviesLinkBdSite {
     private suspend fun hubDomain(): String? {
         if (System.currentTimeMillis() - hubCheckedAt < 10 * 60_000L) return hubDomain
         hubCheckedAt = System.currentTimeMillis()
+        val res = bdGet(HUB_URL, timeout = 15L) ?: return hubDomain
         val text = try {
-            app.get(HUB_URL, headers = PlayNet.headers(), timeout = 15L).text
+            res.text
         } catch (_: Exception) {
-            null
-        } ?: return hubDomain
+            ""
+        }
+        res.close()
         val hosts = mirrorRegex.findAll(text)
             .map { it.groupValues[1].lowercase() }
-            .filter { it != "movielinkbd.com" && it != "www.movielinkbd.com" }
             .distinct()
             .toList()
-        val pick = hosts.firstOrNull { it.endsWith(".movielinkbd.at") }
-            ?: hosts.firstOrNull { it.endsWith(".movielinkbd.li") }
+        val pick = hosts.firstOrNull { it == "movielinkbd.tv" }
+            ?: hosts.firstOrNull { it.endsWith(".movielinkbd.tv") }
             ?: hosts.firstOrNull()
         hubDomain = pick?.let { "https://$it" }
         return hubDomain
@@ -122,19 +244,13 @@ internal object MoviesLinkBdSite {
         }
     }
 
-    private suspend fun searchPosts(domain: String, query: String, session: BdSession): List<BdPost> {
-        val res = PlayNet.retry {
-            try {
-                app.get(
-                    "$domain/search?q=${Uri.encode(query)}",
-                    headers = PlayNet.headers(),
-                    cookies = session.with(),
-                    timeout = 15L
-                )
-            } catch (_: Exception) {
-                null
-            }
-        } ?: return emptyList()
+    // null means the domain itself is unreachable, empty means the search had no hits
+    private suspend fun searchPosts(domain: String, query: String, session: BdSession): List<BdPost>? {
+        val res = bdGet(
+            "$domain/search?q=${Uri.encode(query)}",
+            cookies = session.with(),
+            timeout = 15L
+        ) ?: return null
         session.absorb(res)
         val doc = try {
             res.document
@@ -230,16 +346,12 @@ internal object MoviesLinkBdSite {
         res: PlayLinkData,
         session: BdSession
     ): BdDetail? {
-        val response = try {
-            app.get(
-                postUrl,
-                headers = PlayNet.headers("$domain/"),
-                cookies = session.with(),
-                timeout = 20L
-            )
-        } catch (_: Exception) {
-            null
-        } ?: return null
+        val response = bdGet(
+            postUrl,
+            referer = "$domain/",
+            cookies = session.with(),
+            timeout = 20L
+        ) ?: return null
         session.absorb(response)
         val doc = response.document
         val pageUrl = response.url
@@ -303,21 +415,17 @@ internal object MoviesLinkBdSite {
         referer: String,
         key: String
     ): String? {
-        return try {
-            val res = app.get(
-                PlayNet.absolute(path, domain),
-                headers = PlayNet.headers(referer),
-                cookies = session.with("mlbd_gk" to key),
-                allowRedirects = false,
-                timeout = 15L
-            )
-            session.absorb(res)
-            val loc = res.headers["location"]?.trim().orEmpty()
-            res.close()
-            loc.takeIf { it.startsWith("http") }
-        } catch (_: Exception) {
-            null
-        }
+        val res = bdGet(
+            PlayNet.absolute(path, domain),
+            referer = referer,
+            cookies = session.with("mlbd_gk" to key),
+            allowRedirects = false,
+            timeout = 15L
+        ) ?: return null
+        session.absorb(res)
+        val loc = res.headers["location"]?.trim().orEmpty()
+        res.close()
+        return loc.takeIf { it.startsWith("http") }
     }
 
     private val directMedia = Regex(
@@ -377,16 +485,12 @@ internal object MoviesLinkBdSite {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        val res = try {
-            app.get(
-                PlayNet.absolute(path, domain),
-                headers = PlayNet.headers(referer),
-                cookies = session.with(),
-                timeout = 20L
-            )
-        } catch (_: Exception) {
-            null
-        } ?: return
+        val res = bdGet(
+            PlayNet.absolute(path, domain),
+            referer = referer,
+            cookies = session.with(),
+            timeout = 20L
+        ) ?: return
         session.absorb(res)
         val doc = res.document
         val pageUrl = res.url
@@ -463,16 +567,12 @@ internal object MoviesLinkBdSite {
         callback: (ExtractorLink) -> Unit
     ) {
         val fileUrl = PlayNet.absolute(file.path, domain)
-        val response = try {
-            app.get(
-                fileUrl,
-                headers = PlayNet.headers(pageUrl),
-                cookies = session.with(),
-                timeout = 20L
-            )
-        } catch (_: Exception) {
-            null
-        } ?: return
+        val response = bdGet(
+            fileUrl,
+            referer = pageUrl,
+            cookies = session.with(),
+            timeout = 20L
+        ) ?: return
         session.absorb(response)
         val text = response.text
         val key = keyRegex.find(text)?.groupValues?.get(1) ?: return
@@ -554,17 +654,19 @@ internal object MoviesLinkBdSite {
     ) {
         try {
             val page = try {
-                app.get(
+                bdGet(
                     PlayNet.absolute(watchPath, domain),
-                    headers = PlayNet.headers("$domain/"),
+                    referer = "$domain/",
                     timeout = 15L
-                ).text
+                )?.text
             } catch (_: Exception) {
-                return
-            }
+                null
+            } ?: return
             val config = pd2Json(page) ?: return
             var master = config.optString("master").takeIf { it.startsWith("http") }
             var label = "Watch"
+            // the muxed progressive file survives hls worker token expiry, keep it as fallback
+            var mp4Url: String? = null
             if (res.season != null) {
                 val episode = res.episode ?: return
                 val episodes = config.optJSONArray("episodes") ?: return
@@ -576,47 +678,70 @@ internal object MoviesLinkBdSite {
                     val to = ep.optInt("num_end", from)
                     if (episode in from..to) {
                         found = ep.optString("master").takeIf { it.startsWith("http") }
+                        mp4Url = ep.optString("mp4").takeIf { it.startsWith("http") }
                         if (found != null) break
                     }
                 }
-                master = found ?: return
+                master = found
                 label = "Episode $episode Watch"
+            } else {
+                mp4Url = config.optJSONArray("episodes")?.optJSONObject(0)
+                    ?.optString("mp4")?.takeIf { it.startsWith("http") }
             }
-            if (master == null) return
+            if (master == null && mp4Url == null) return
 
             val streamHeaders = mapOf("Origin" to domain, "Referer" to "$domain/")
-            val playlist = try {
-                app.get(master, headers = PlayNet.headers() + streamHeaders, timeout = 15L).text
-            } catch (_: Exception) {
-                return
-            }
-            if (!playlist.trimStart().startsWith("#EXTM3U")) return
-            val variants = parseVariants(playlist)
-            val best = variants.maxOfOrNull { it.height } ?: Qualities.Unknown.value
-            val name = PlayLabels.buildLabel("movielinkbd", label, "Multi Audio")
-            try {
-                callback(
-                    newExtractorLink(
-                        "[${PlayLabels.siteName("movielinkbd")}]",
-                        name,
-                        master,
-                        ExtractorLinkType.M3U8
-                    ) {
-                        this.quality = best
-                        this.headers = streamHeaders
+            var best: Int? = null
+            if (master != null) {
+                val playlist = try {
+                    app.get(master, headers = PlayNet.headers() + streamHeaders, timeout = 15L).text
+                } catch (_: Exception) {
+                    null
+                }
+                if (playlist != null && playlist.trimStart().startsWith("#EXTM3U")) {
+                    val variants = parseVariants(playlist)
+                    best = variants.maxOfOrNull { it.height } ?: Qualities.Unknown.value
+                    val name = PlayLabels.buildLabel("movielinkbd", label, "Multi Audio")
+                    try {
+                        callback(
+                            newExtractorLink(
+                                "[${PlayLabels.siteName("movielinkbd")}]",
+                                name,
+                                master,
+                                ExtractorLinkType.M3U8
+                            ) {
+                                this.quality = best
+                                this.headers = streamHeaders
+                            }
+                        )
+                    } catch (_: Exception) {}
+                    variants.sortedByDescending { it.height }.take(4).forEach { variant ->
+                        try {
+                            callback(
+                                newExtractorLink(
+                                    "[${PlayLabels.siteName("movielinkbd")}]",
+                                    PlayLabels.buildLabel("movielinkbd", "$label ${variant.height}p", ""),
+                                    variant.url,
+                                    ExtractorLinkType.M3U8
+                                ) {
+                                    this.quality = variant.height
+                                    this.headers = streamHeaders
+                                }
+                            )
+                        } catch (_: Exception) {}
                     }
-                )
-            } catch (_: Exception) {}
-            variants.sortedByDescending { it.height }.take(4).forEach { variant ->
+                }
+            }
+            mp4Url?.let { direct ->
                 try {
                     callback(
                         newExtractorLink(
                             "[${PlayLabels.siteName("movielinkbd")}]",
-                            PlayLabels.buildLabel("movielinkbd", "$label ${variant.height}p", ""),
-                            variant.url,
-                            ExtractorLinkType.M3U8
+                            PlayLabels.buildLabel("movielinkbd", "$label MP4", ""),
+                            direct,
+                            ExtractorLinkType.VIDEO
                         ) {
-                            this.quality = variant.height
+                            this.quality = best ?: Qualities.Unknown.value
                             this.headers = streamHeaders
                         }
                     )
@@ -706,7 +831,7 @@ internal object MoviesLinkBdSite {
             val session = BdSession()
             outer@ for (candidate in candidates()) {
                 for (query in PlayNet.searchQueries(res)) {
-                    val found = searchPosts(candidate, query, session)
+                    val found = searchPosts(candidate, query, session) ?: break
                     if (found.isEmpty()) continue
                     val pick = pickPost(found, res) ?: continue
                     val loaded = loadDetail(candidate, pick.url, res, session) ?: continue
@@ -716,7 +841,10 @@ internal object MoviesLinkBdSite {
                     break@outer
                 }
             }
-            if (domain == null || detail == null) return
+            if (domain == null || detail == null) {
+                Log.d(TAG, "no source found for ${res.title}")
+                return
+            }
             workingDomain = domain
 
             detail.watchPath?.let { watchPath ->
